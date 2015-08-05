@@ -20,10 +20,5 @@ _build
 *~
 /c_src/katipo
 /priv/katipo
-/pip-selfcheck.json
-/lib
-/include
-/bin
-/.Python
 .vagrant/
 local/

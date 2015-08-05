@@ -72,13 +72,13 @@ all() ->
 
 get(_) ->
     {ok, #{status := 200, body := Body}} =
-        katipo:get(<<"http://127.0.0.1:8000/get?a=%21%40%23%24%25%5E%26%2A%28%29_%2B">>),
+        katipo:get(<<"http://httpbin.org/get?a=%21%40%23%24%25%5E%26%2A%28%29_%2B">>),
     Json = jsx:decode(Body),
     [{<<"a">>, <<"!@#$%^&*()_+">>}] = proplists:get_value(<<"args">>, Json).
 
 post_data(_) ->
     {ok, #{status := 200, body := Body}} =
-        katipo:post(<<"http://127.0.0.1:8000/post">>,
+        katipo:post(<<"http://httpbin.org/post">>,
                     #{headers => [{<<"Content-Type">>, <<"application/json">>}],
                       body => <<"!@#$%^&*()">>}),
     Json = jsx:decode(Body),
@@ -87,14 +87,14 @@ post_data(_) ->
 post_qs(_) ->
     QsVals = [{<<"foo">>, <<"bar">>}, {<<"baz">>, true}],
     {ok, #{status := 200, body := Body}} =
-        katipo:post(<<"http://127.0.0.1:8000/post">>, #{body => QsVals}),
+        katipo:post(<<"http://httpbin.org/post">>, #{body => QsVals}),
     Json = jsx:decode(Body),
     [] = [{<<"baz">>,<<>>},{<<"foo">>,<<"bar">>}] -- proplists:get_value(<<"form">>, Json).
 
 put_data(_) ->
     Headers = [{<<"Content-Type">>, <<"application/json">>}],
     {ok, #{status := 200, body := Body}} =
-        katipo:put(<<"http://127.0.0.1:8000/put">>,
+        katipo:put(<<"http://httpbin.org/put">>,
                    #{headers => Headers, body => <<"!@#$%^&*()">>}),
     Json = jsx:decode(Body),
     <<"!@#$%^&*()">> = proplists:get_value(<<"data">>, Json).
@@ -102,81 +102,81 @@ put_data(_) ->
 put_qs(_) ->
     QsVals = [{<<"foo">>, <<"bar">>}, {<<"baz">>, true}],
     {ok, #{status := 200, body := Body}} =
-        katipo:put(<<"http://127.0.0.1:8000/put">>, #{body => QsVals}),
+        katipo:put(<<"http://httpbin.org/put">>, #{body => QsVals}),
     Json = jsx:decode(Body),
     [] = [{<<"baz">>,<<>>},{<<"foo">>,<<"bar">>}] -- proplists:get_value(<<"form">>, Json).
 
 delete(_) ->
-    {ok, {200, _, _, _}} = katipo:delete(<<"http://127.0.0.1:8000/delete">>).
+    {ok, {200, _, _, _}} = katipo:delete(<<"http://httpbin.org/delete">>).
 
 headers(_) ->
     Headers = [{<<"header1">>, <<"!@#$%^&*()">>}],
     {ok, #{status := 200, body := Body}} =
-        katipo:get(<<"http://127.0.0.1:8000/gzip">>, #{headers => Headers}),
+        katipo:get(<<"http://httpbin.org/gzip">>, #{headers => Headers}),
     Json = jsx:decode(Body),
     Expected =  [{<<"Accept">>,<<"*/*">>},
                  {<<"Accept-Encoding">>,<<"gzip,deflate">>},
                  {<<"Header1">>,<<"!@#$%^&*()">>},
-                 {<<"Host">>,<<"127.0.0.1:8000">>}],
+                 {<<"Host">>,<<"httpbin.org">>}],
     [] = Expected -- proplists:get_value(<<"headers">>, Json).
 
 header_remove(_) ->
     Headers = [{<<"Accept-Encoding">>, <<>>}],
     {ok, #{status := 200, body := Body}} =
-        katipo:get(<<"http://127.0.0.1:8000/get">>, #{headers => Headers}),
+        katipo:get(<<"http://httpbin.org/get">>, #{headers => Headers}),
     Json = jsx:decode(Body),
     Expected =  [{<<"Accept">>,<<"*/*">>},
-                 {<<"Host">>,<<"127.0.0.1:8000">>}],
+                 {<<"Host">>,<<"httpbin.org">>}],
     [] = Expected -- proplists:get_value(<<"headers">>, Json).
 
 gzip(_) ->
-    {ok, #{status := 200, body := Body}} = katipo:get(<<"http://127.0.0.1:8000/gzip">>),
+    {ok, #{status := 200, body := Body}} = katipo:get(<<"http://httpbin.org/gzip">>),
     Json = jsx:decode(Body),
     true = proplists:get_value(<<"gzipped">>, Json).
 
 deflate(_) ->
-    {ok, #{status := 200, body := Body}} = katipo:get(<<"http://127.0.0.1:8000/deflate">>),
+    {ok, #{status := 200, body := Body}} = katipo:get(<<"http://httpbin.org/deflate">>),
     Json = jsx:decode(Body),
     true = proplists:get_value(<<"deflated">>, Json).
 
 bytes(_) ->
-    {ok, #{status := 200, body := Body}} = katipo:get(<<"http://127.0.0.1:8000/bytes/1024?seed=9999">>),
+    {ok, #{status := 200, body := Body}} = katipo:get(<<"http://httpbin.org/bytes/1024?seed=9999">>),
     1024 = byte_size(Body),
     <<214,141,60,147,148,212,22,181,40,183,133,31,67,245,222,40>> = crypto:hash(md5, Body).
 
 stream_bytes(_) ->
-    {ok, #{status := 200, body := Body}} = katipo:get(<<"http://127.0.0.1:8000/bytes/1024?seed=9999&chunk_size=8">>),
+    {ok, #{status := 200, body := Body}} = katipo:get(<<"http://httpbin.org/bytes/1024?seed=9999&chunk_size=8">>),
     1024 = byte_size(Body),
     <<214,141,60,147,148,212,22,181,40,183,133,31,67,245,222,40>> = crypto:hash(md5, Body).
 
 utf8(_) ->
-    {ok, #{status := 200, body := Body}} = katipo:get(<<"http://127.0.0.1:8000/encoding/utf8">>),
+    {ok, #{status := 200, body := Body}} = katipo:get(<<"http://httpbin.org/encoding/utf8">>),
     case xmerl_ucs:from_utf8(Body) of
         [_|_] -> ok
     end.
 
 stream(_) ->
-    {ok, #{status := 200, body := Body}} = katipo:get(<<"http://127.0.0.1:8000/stream/20">>),
+    {ok, #{status := 200, body := Body}} = katipo:get(<<"http://httpbin.org/stream/20">>),
     20 = length(binary:split(Body, <<"\n">>, [global, trim_all])).
 
 statuses(_) ->
     [begin
          B = integer_to_binary(S),
-         Url = <<"http://127.0.0.1:8000/status/",B/binary>>,
+         Url = <<"http://httpbin.org/status/",B/binary>>,
          {ok, #{status := S}} = katipo:get(Url)
      end || S <- http_status_codes()].
 
 cookies(_) ->
-    Url = <<"http://127.0.0.1:8000/cookies/set?cname=cvalue">>,
+    Url = <<"http://httpbin.org/cookies/set?cname=cvalue">>,
     Opts = #{followlocation => true},
     {ok, #{status := 200, cookiejar := CookieJar, body := Body}} = katipo:get(Url, Opts),
     Json = jsx:decode(Body),
     [{<<"cname">>, <<"cvalue">>}] = proplists:get_value(<<"cookies">>, Json),
-    [<<"127.0.0.1\tFALSE\t/\tFALSE\t0\tcname\tcvalue">>] = CookieJar.
+    [<<"httpbin.org\tFALSE\t/\tFALSE\t0\tcname\tcvalue">>] = CookieJar.
 
 cookies_delete(_) ->
-    Url = <<"http://127.0.0.1:8000/cookies/delete?cname">>,
-    CookieJar = [<<"127.0.0.1\tFALSE\t/\tFALSE\t0\tcname\tcvalue">>],
+    Url = <<"http://httpbin.org/cookies/delete?cname">>,
+    CookieJar = [<<"httpbin.org\tFALSE\t/\tFALSE\t0\tcname\tcvalue">>],
     {ok, #{status := 200, cookiejar := [_], body := Body}} =
         katipo:get(Url, #{cookiejar => CookieJar, followlocation => true}),
     Json = jsx:decode(Body),
@@ -184,7 +184,7 @@ cookies_delete(_) ->
 
 %% TODO
 redirect_to(_) ->
-    {ok, #{status := 302}} = katipo:get(<<"http://127.0.0.1:8000/redirect-to?url=https://google.com">>).
+    {ok, #{status := 302}} = katipo:get(<<"http://httpbin.org/redirect-to?url=https://google.com">>).
 
 connecttimeout_ms(_) ->
     {error, #{code := operation_timedout}} =
@@ -192,27 +192,27 @@ connecttimeout_ms(_) ->
 
 followlocation_true(_) ->
     {ok, #{status := 200, headers := Headers}} =
-        katipo:get(<<"http://127.0.0.1:8000/redirect/6">>, #{followlocation => true}),
+        katipo:get(<<"http://httpbin.org/redirect/6">>, #{followlocation => true}),
     1 = length(proplists:get_all_values(<<"Server">>, Headers)).
 
 followlocation_false(_) ->
     {ok, #{status := 302}} =
-        katipo:get(<<"http://127.0.0.1:8000/redirect/6">>).
+        katipo:get(<<"http://httpbin.org/redirect/6">>).
 
 maxredirs(_) ->
     Opts = #{followlocation => true, maxredirs => 2},
     {error, #{code := too_many_redirects, message := <<"Maximum (2) redirects followed">>}} =
-        katipo:get(<<"http://127.0.0.1:8000/redirect/6">>, Opts).
+        katipo:get(<<"http://httpbin.org/redirect/6">>, Opts).
 
 basic_unauthorised(_) ->
     {ok, #{status := 401}} =
-        katipo:get(<<"http://127.0.0.1:8000/basic-auth/johndoe/p455w0rd">>).
+        katipo:get(<<"http://httpbin.org/basic-auth/johndoe/p455w0rd">>).
 
 basic_authorised(_) ->
     Username = <<"johndoe">>,
     Password = <<"p455w0rd">>,
     {ok, #{status := 200, body := Body}} =
-        katipo:get(<<"http://127.0.0.1:8000/basic-auth/johndoe/p455w0rd">>,
+        katipo:get(<<"http://httpbin.org/basic-auth/johndoe/p455w0rd">>,
                   #{http_auth => basic, username => Username, password => Password}),
     Json = jsx:decode(Body),
     true = proplists:get_value(<<"authenticated">>, Json),
@@ -220,13 +220,13 @@ basic_authorised(_) ->
 
 digest_unauthorised(_) ->
     {ok, #{status := 401}} =
-        katipo:get(<<"http://127.0.0.1:8000/digest-auth/auth/johndoe/p455w0rd">>).
+        katipo:get(<<"http://httpbin.org/digest-auth/auth/johndoe/p455w0rd">>).
 
 digest_authorised(_) ->
     Username = <<"johndoe">>,
     Password = <<"p455w0rd">>,
     {ok, #{status := 200, body := Body}} =
-        katipo:get(<<"http://127.0.0.1:8000/digest-auth/auth/johndoe/p455w0rd">>,
+        katipo:get(<<"http://httpbin.org/digest-auth/auth/johndoe/p455w0rd">>,
                   #{http_auth => digest, username => Username, password => Password}),
     Json = jsx:decode(Body),
     true = proplists:get_value(<<"authenticated">>, Json),
@@ -234,12 +234,12 @@ digest_authorised(_) ->
 
 badopts(_) ->
     {error, {bad_opts, L}} =
-        katipo:get(<<"http://127.0.0.1:8000/get">>, #{timeout_ms => <<"wrong">>, what => not_even_close}),
+        katipo:get(<<"http://httpbin.org/get">>, #{timeout_ms => <<"wrong">>, what => not_even_close}),
     [] = L -- [{what, not_even_close}, {timeout_ms, <<"wrong">>}].
 
 timeout_ms(_) ->
     {error, #{code := operation_timedout}} =
-        katipo:get(<<"http://127.0.0.1:8000/delay/1">>, #{timeout_ms => 500}).
+        katipo:get(<<"http://httpbin.org/delay/1">>, #{timeout_ms => 500}).
 
 couldnt_resolve_host(_) ->
     {error, #{code := couldnt_resolve_host,
@@ -261,7 +261,7 @@ worker_death(_) ->
           end,
     true = repeat_until_true(Fun),
     Fun2 = fun() ->
-                   {ok, #{status := 200}} = katipo:get(<<"http://127.0.0.1:8000/get">>),
+                   {ok, #{status := 200}} = katipo:get(<<"http://httpbin.org/get">>),
                    true
            end,
     true = repeat_until_true(Fun2).
@@ -269,7 +269,7 @@ worker_death(_) ->
 port_late_response(_) ->
     ok = meck:new(katipo, [passthrough]),
     meck:expect(katipo, get_timeout, fun(_) -> 100 end),
-    {error, #{code := operation_timedout, message := <<>>}} = katipo:get(<<"http://127.0.0.1:8000/delay/1">>),
+    {error, #{code := operation_timedout, message := <<>>}} = katipo:get(<<"http://httpbin.org/delay/1">>),
     meck:unload(katipo).
 
 repeat_until_true(Fun) ->
