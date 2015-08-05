@@ -121,8 +121,9 @@ headers(_) ->
     [] = Expected -- proplists:get_value(<<"headers">>, Json).
 
 header_remove(_) ->
+    Headers = [{<<"Accept-Encoding">>, <<>>}],
     {ok, #{status := 200, body := Body}} =
-        katipo:get(<<"http://127.0.0.1:8000/gzip">>, #{headers => Headers}),
+        katipo:get(<<"http://127.0.0.1:8000/get">>, #{headers => Headers}),
     Json = jsx:decode(Body),
     Expected =  [{<<"Accept">>,<<"*/*">>},
                  {<<"Host">>,<<"127.0.0.1:8000">>}],
