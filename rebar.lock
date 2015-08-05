@@ -1,0 +1,12 @@
+[{<<"uri">>,
+  {git,"https://github.com/heroku/uri.git",
+       {ref,"38990efaafaf9268b7ab8010e578563954988cfd"}},
+  0},
+ {<<"gproc">>,
+  {git,"https://github.com/uwiger/gproc.git",
+       {ref,"2b1b9ac870416469097af695de413afd5e78f66c"}},
+  0},
+ {<<"cowlib">>,
+  {git,"https://github.com/ninenines/cowlib.git",
+       {ref,"14e597baa42a436469f99661ed7994685e269dc2"}},
+  0}].

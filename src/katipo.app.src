@@ -1,0 +1,19 @@
+{application, 'katipo',
+ [{description, "HTTP client based on libcurl"},
+  {vsn, "0.1.0"},
+  {registered, []},
+  {mod, {'katipo_app', []}},
+  {applications,
+   [kernel,
+    stdlib,
+    cowlib,
+    gproc,
+    uri
+   ]},
+  {env,[
+        {max_pipeline_length, 100},
+        {pipelining, false},
+        {pool_type, round_robin}
+       ]},
+  {modules, []}
+ ]}.
