@@ -3,7 +3,7 @@ katipo
 
 [![Build Status][travis_ci_image]][travis_ci]
 
-An HTTP library built around libcurl-multi and libevent.
+An HTTP library for Erlang built around libcurl-multi and libevent.
 
 
 ### Usage
