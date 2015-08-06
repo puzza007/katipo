@@ -74,9 +74,6 @@ katipo:Method(URL :: binary(), Options :: map()).
 ```sh
 sudo apt-get install git libwxgtk2.8-0 libwxbase2.8-0 libevent-dev libcurl4-openssl-dev libcurl4-openssl-dev
 
-# test deps
-sudo apt-get install python-virtualenv python-pip python-dev
-
 wget http://packages.erlang-solutions.com/site/esl/esl-erlang/FLAVOUR_1_esl/esl-erlang_18.0-1~ubuntu~trusty_amd64.deb
 
 sudo dpkg -i esl-erlang_18.0-1~ubuntu~trusty_amd64.deb
@@ -87,9 +84,6 @@ sudo dpkg -i esl-erlang_18.0-1~ubuntu~trusty_amd64.deb
 ```sh
 brew install --with-c-ares --with-nghttp2 curl
 brew install libevent
-# test deps
-brew install python
-brew install pyenv
 ```
 
 ### Building

@@ -1,0 +1,19 @@
+sudo: true
+
+language: erlang
+
+otp_release:
+  - 18.0
+
+script: make test
+
+before_install:
+  - ./travis_install_curl.sh
+
+addons:
+  apt:
+    packages:
+      - libevent-dev
+  # artifacts:
+  #   paths:
+  #     - $TRAVIS_BUILD_DIR/_build/test/logs/
