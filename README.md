@@ -26,7 +26,7 @@ Opts = #{headers => ReqHeaders,
 
 ### Why
 
-We wanted a compatible and high-performance HTTP client so we took
+We wanted a compatible and high-performance HTTP client so took
 advantage of the 15+ years of development that has gone into libcurl.
 To allow large numbers of simultaneous connections libevent is used
 along with the libcurl-multi interface.
