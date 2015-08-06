@@ -1,6 +1,8 @@
 katipo
 =====
 
+[![Build Status][travis_ci_image]][travis_ci]
+
 An HTTP library built around libcurl-multi and libevent.
 
 
@@ -92,3 +94,7 @@ brew install libevent
 make
 make test
 ```
+
+[travis_ci]: https://travis-ci.org/puzza007/katipo
+[travis_ci_image]: https://travis-ci.org/puzza007/katipo.png
+
