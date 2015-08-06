@@ -34,7 +34,7 @@ end_per_group(_, Config) ->
     Config.
 
 groups() ->
-    [{http, [],
+    [{http, [parallel],
       [get,
        post_data,
        post_qs,
