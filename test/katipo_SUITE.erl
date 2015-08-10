@@ -157,7 +157,7 @@ utf8(_) ->
 
 stream(_) ->
     {ok, #{status := 200, body := Body}} = katipo:get(<<"http://httpbin.org/stream/20">>),
-    20 = length(binary:split(Body, <<"\n">>, [global, trim_all])).
+    20 = length(binary:split(Body, <<"\n">>, [global, trim])).
 
 statuses(_) ->
     [begin
