@@ -332,8 +332,8 @@ handle_call(#req{method = Method,
             {?password, Password}],
     Command = {Self, Ref, Method, Url, Headers, CookieJar, Body, Opts},
     true = port_command(Port, term_to_binary(Command)),
-    Tref = erlang:start_timer(Timeout, self(), {req_timeout, From}, []),
-    Reqs2 = Reqs#{From => Tref},
+    Tref = erlang:start_timer(Timeout, self(), {req_timeout, From}),
+    Reqs2 = maps:put(From, Tref, Reqs),
     {noreply, State#state{reqs=Reqs2}}.
 
 handle_cast(_Msg, State) ->
@@ -354,7 +354,7 @@ handle_info({Port, {data, Data}}, State=#state{port=Port, reqs=Reqs}) ->
         end,
     case maps:find(From, Reqs) of
         {ok, Tref} ->
-            _ = erlang:cancel_timer(Tref, []),
+            _ = erlang:cancel_timer(Tref),
             _ = gen_server:reply(From, {Result, Response});
         error ->
             ok

@@ -3,6 +3,7 @@ sudo: true
 language: erlang
 
 otp_release:
+  - 17.5
   - 18.0
 
 script: make test
