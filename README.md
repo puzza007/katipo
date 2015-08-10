@@ -7,7 +7,7 @@ An HTTP library for Erlang built around libcurl-multi and libevent.
 
 ### Status
 
-Alpha `0.1.0`
+Alpha `0.1.1`
 
 ### Usage
 
