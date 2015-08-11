@@ -76,7 +76,7 @@ katipo:Method(URL :: binary(), Options :: map()).
 | `pipelining`          | `boolean()`          | `false`           | HTTP pipelining                        |
 | `max_pipeline_length` | `non_neg_integer()`  | 100               |                                        |
 | `pool_size`           | `pos_integer()`      | `erlang:system_info(schedulers)`     | Typically one port executable per core |
-| `pool_type`           | `round_robin | hash` | `round_robin`     | Hash isotentially useful if pipelining |
+| `pool_type`           | `round_robin | hash` | `round_robin`     | Hash is potentially useful when pipelining |
 
 
 ### Dependencies
