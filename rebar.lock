@@ -8,5 +8,5 @@
   0},
  {<<"cowlib">>,
   {git,"https://github.com/ninenines/cowlib.git",
-       {ref,"14e597baa42a436469f99661ed7994685e269dc2"}},
+       {ref,"d544a494af4dbc810fc9c15eaf5cc050cced1501"}},
   0}].
