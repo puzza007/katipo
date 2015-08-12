@@ -19,6 +19,10 @@ init_per_group(pool, Config) ->
     application:ensure_all_started(katipo),
     application:ensure_all_started(meck),
     Config;
+init_per_group(https, Config) ->
+    application:ensure_all_started(katipo),
+    application:ensure_all_started(cowboy),
+    Config;
 init_per_group(_, Config) ->
     application:ensure_all_started(katipo),
     Config.
@@ -64,11 +68,15 @@ groups() ->
        badopts]},
      {pool, [],
       [worker_death,
-       port_late_response]}].
+       port_late_response]},
+     {https, [],
+      [verify_host_verify_peer_ok,
+       verify_host_verify_peer_error]}].
 
 all() ->
     [{group, http},
-     {group, pool}].
+     {group, pool},
+     {group, https}].
 
 get(_) ->
     {ok, #{status := 200, body := Body}} =
@@ -271,6 +279,37 @@ port_late_response(_) ->
     meck:expect(katipo, get_timeout, fun(_) -> 100 end),
     {error, #{code := operation_timedout, message := <<>>}} = katipo:get(<<"http://httpbin.org/delay/1">>),
     meck:unload(katipo).
+
+verify_host_verify_peer_ok(_) ->
+    Opts = [#{ssl_verifyhost => true, ssl_verifypeer => true},
+            #{ssl_verifyhost => false, ssl_verifypeer => true},
+            #{ssl_verifyhost => true, ssl_verifypeer => false},
+            #{ssl_verifyhost => false, ssl_verifypeer => false}],
+    [{ok, _} = katipo:get(<<"https://google.com">>, O) || O <- Opts].
+
+verify_host_verify_peer_error(Config) ->
+    Dispatch = cowboy_router:compile([{'_', [{"/", get_handler, []}]}]),
+    DataDir = ?config(data_dir, Config),
+    {ok, _} = cowboy:start_https(ct_https, 1,
+                                 [{port, 8443},
+                                  {cacertfile, filename:join(DataDir, "cowboy-ca.crt")},
+                                  {certfile, filename:join(DataDir, "server.crt")},
+                                  {keyfile, filename:join(DataDir, "server.key")}],
+                                [{env, [{dispatch, Dispatch}]}]
+                                ),
+    {error, #{code := ssl_cacert}} =
+         katipo:get(<<"https://localhost:8443">>,
+                    #{ssl_verifyhost => true, ssl_verifypeer => true}),
+    {error, #{code := ssl_cacert}} =
+         katipo:get(<<"https://localhost:8443">>,
+                    #{ssl_verifyhost => false, ssl_verifypeer => true}),
+    {ok, #{status := 200}} =
+        katipo:get(<<"https://localhost:8443">>,
+                   #{ssl_verifyhost => true, ssl_verifypeer => false}),
+    {ok, #{status := 200}} =
+        katipo:get(<<"https://localhost:8443">>,
+                   #{ssl_verifyhost => false, ssl_verifypeer => false}).
+
 
 repeat_until_true(Fun) ->
     try
