@@ -78,6 +78,17 @@ katipo:Method(URL :: binary(), Options :: map()).
 | `pool_size`           | `pos_integer()`      | `erlang:system_info(schedulers)`     | Typically one port executable per core |
 | `pool_type`           | `round_robin | hash` | `round_robin`     | Hash is potentially useful when pipelining |
 
+#### Metrics
+
+* ok
+* error
+* total_time
+* curl_time
+* namelookup_time
+* connect_time
+* appconnect_time
+* pretransfer_time
+* starttransfer_time
 
 ### Dependencies
 
