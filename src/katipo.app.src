@@ -8,7 +8,8 @@
     stdlib,
     cowlib,
     gproc,
-    uri
+    uri,
+    quintana
    ]},
   {env,[
         {max_pipeline_length, 100},

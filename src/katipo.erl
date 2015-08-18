@@ -174,16 +174,6 @@
         %% curlmopt_timerfunction |
         %% curlmopt_timerdata.
 
-%% -type metric_name() ::
-%%         total_time |
-%%         curl_time |
-%%         namelookup_time |
-%%         connect_time |
-%%         appconnect_time |
-%%         pretransfer_time |
-%%         starttransfer_time.
-%% -type metrics() :: [{metric_name(), float()}]. %% time in s
-
 -type error_msg() :: binary().
 -type status() :: pos_integer().
 -type headers() :: [{binary(), iodata()}].
@@ -286,6 +276,8 @@ req(Url, Method, Opts)
             TotalUs = timer:now_diff(os:timestamp(), Ts),
             process_metrics(Res, TotalUs);
         {error, _} = Error ->
+            ErrorMetric = metric_name(error),
+            quintana:notify_spiral(ErrorMetric, 1),
             Error
     end.
 
@@ -427,11 +419,48 @@ mopt_supported({_, _}) ->
 get_timeout(#req{connecttimeout_ms=ConnMs, timeout_ms=ReqMs}) ->
     max(ConnMs, ReqMs).
 
-%% TODO: provide pluggable metrics callback
-process_metrics({ok, {Response, _Metrics}}, _Total) ->
+-spec process_metrics({ok | error, {map(), proplists:proplist()}}, non_neg_integer()) ->
+                             response().
+process_metrics({ok, {Response, Metrics}}, Total) ->
+    #{status := Status} = Response,
+    StatusMetric = status_metric_name(Status),
+    quintana:notify_spiral(StatusMetric, 1),
+    OkMetric = metric_name(ok),
+    quintana:notify_spiral(OkMetric, 1),
+    process_metrics_1(Metrics, Total),
     {ok, Response};
-process_metrics({error, {Error, _Metrics}}, _Total) ->
+process_metrics({error, {Error, Metrics}}, Total) ->
+    ErrorMetric = metric_name(error),
+    quintana:notify_spiral(ErrorMetric, 1),
+    process_metrics_1(Metrics, Total),
     {error, Error}.
+
+metric_name(M) ->
+    B = atom_to_binary(M, latin1),
+    <<"katipo.", B/binary>>.
+
+status_metric_name(Status) when is_integer(Status) ->
+    B = integer_to_binary(Status),
+    <<"katipo.status.", B/binary>>.
+
+process_metrics_1(Metrics, Total) ->
+    %% Curl metrics are in seconds
+    Metrics1 = [{K, 1000 * V} || {K, V} <- Metrics],
+    %% now_diff is in microsecs
+    Total1 = Total / 1000.0,
+    Metrics3 =
+        case lists:keytake(total_time, 1, Metrics1) of
+            {value, {total_time, CurlTotal}, Metrics2} ->
+                [{curl_time, CurlTotal},
+                 {total_time, Total1} | Metrics2];
+            false ->
+                [{total_time, Total1} | Metrics]
+        end,
+    Notify = fun({K, V}) ->
+                     Name = metric_name(K),
+                     ok = quintana:notify_histogram(Name, V)
+             end,
+    ok = lists:foreach(Notify, Metrics3).
 
 opt(headers, Headers, {Req, Errors}) when is_list(Headers) ->
     {Req#req{headers=headers_to_binary(Headers)}, Errors};
