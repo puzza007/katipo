@@ -749,7 +749,7 @@ static void new_conn(long method, char *url, struct curl_slist *req_headers,
   }
   if (eopts.curlopt_proxy != NULL) {
     curl_easy_setopt(conn->easy, CURLOPT_PROXY,
-		     eopts.curlopt_proxy);
+                     eopts.curlopt_proxy);
   }
   curl_easy_setopt(conn->easy, CURLOPT_COOKIEFILE, "");
   nc = req_cookies;
@@ -993,10 +993,10 @@ static void erl_input(struct bufferevent *ev, void *arg) {
           }
           break;
         case K_CURLOPT_PROXY:
-	  if (erl_type == ERL_BINARY_EXT) {
-	    eopts.curlopt_proxy = eopt_binary;
-	  }
-	  break;
+          if (erl_type == ERL_BINARY_EXT) {
+            eopts.curlopt_proxy = eopt_binary;
+          }
+          break;
         default:
           errx(2, "Unknown eopt value %ld", eopt);
       }

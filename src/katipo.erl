@@ -221,7 +221,7 @@
           http_auth = undefined :: undefined | http_auth_int(),
           username = undefined :: undefined | binary(),
           password = undefined :: undefined | binary(),
-	  proxy = undefined :: undefined | binary()
+          proxy = undefined :: undefined | binary()
          }).
 
 -spec get(url()) -> response().
@@ -311,7 +311,7 @@ handle_call(#req{method = Method,
                  http_auth = HTTPAuth,
                  username = Username,
                  password = Password,
-		 proxy = Proxy},
+                 proxy = Proxy},
              From,
              State=#state{port=Port, reqs=Reqs}) ->
     {Self, Ref} = From,
@@ -325,7 +325,7 @@ handle_call(#req{method = Method,
             {?http_auth, HTTPAuth},
             {?username, Username},
             {?password, Password},
-	    {?proxy, Proxy}],
+            {?proxy, Proxy}],
     Command = {Self, Ref, Method, Url, Headers, CookieJar, Body, Opts},
     true = port_command(Port, term_to_binary(Command)),
     Tref = erlang:start_timer(Timeout, self(), {req_timeout, From}),
