@@ -30,6 +30,7 @@
 #define K_CURLOPT_HTTP_AUTH 12
 #define K_CURLOPT_USERNAME 13
 #define K_CURLOPT_PASSWORD 14
+#define K_CURLOPT_PROXY 15
 
 #define K_CURLAUTH_BASIC 100
 #define K_CURLAUTH_DIGEST 101
@@ -91,6 +92,7 @@ typedef struct _EasyOpts {
   long curlopt_http_auth;
   char *curlopt_username;
   char *curlopt_password;
+  char *curlopt_proxy;
 } EasyOpts;
 
 static const char *curl_error_code(CURLcode error) {
@@ -745,6 +747,10 @@ static void new_conn(long method, char *url, struct curl_slist *req_headers,
     curl_easy_setopt(conn->easy, CURLOPT_PASSWORD,
                      eopts.curlopt_password);
   }
+  if (eopts.curlopt_proxy != NULL) {
+    curl_easy_setopt(conn->easy, CURLOPT_PROXY,
+		     eopts.curlopt_proxy);
+  }
   curl_easy_setopt(conn->easy, CURLOPT_COOKIEFILE, "");
   nc = req_cookies;
   while (nc) {
@@ -905,6 +911,7 @@ static void erl_input(struct bufferevent *ev, void *arg) {
     eopts.curlopt_http_auth = -1;
     eopts.curlopt_username = NULL;
     eopts.curlopt_password = NULL;
+    eopts.curlopt_proxy = NULL;
 
     if (ei_decode_list_header(buf, &index, &num_eopts)) {
       errx(2, "Couldn't decode eopts length");
@@ -985,6 +992,11 @@ static void erl_input(struct bufferevent *ev, void *arg) {
             eopts.curlopt_password = eopt_binary;
           }
           break;
+        case K_CURLOPT_PROXY:
+	  if (erl_type == ERL_BINARY_EXT) {
+	    eopts.curlopt_proxy = eopt_binary;
+	  }
+	  break;
         default:
           errx(2, "Unknown eopt value %ld", eopt);
       }

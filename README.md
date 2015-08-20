@@ -24,6 +24,23 @@ Opts = #{headers => ReqHeaders,
        body := RespBody}} = katipo:post(Url, Opts).
 ```
 
+### Usage (proxy example)
+
+```erlang
+{ok, _} = application:ensure_all_started(katipo).
+Url = <<"https://example.com">>.
+ReqHeaders = [{<<"User-Agent">>, <<"katipo">>}].
+Opts = #{headers => ReqHeaders,
+         connecttimeout_ms => 5000,
+         proxy => <<"http://127.0.0.1:9000">>,
+         sslverifyhost => false,
+         sslverifypeer => false},
+{ok, #{status := 200,
+       headers := RespHeaders,
+       cookiejar := CookieJar,
+       body := RespBody}} = katipo:get(Url, Opts).
+```
+
 ### Why
 
 We wanted a compatible and high-performance HTTP client so took
@@ -57,6 +74,7 @@ katipo:Method(URL :: binary(), Options :: map()).
 | `capath`            | `binary()`                      | `undefined`       |
 | `timeout_ms`        | `pos_integer()`                 | 30000             |
 | `maxredirs`         | `non_neg_integer()`             | 9                 |
+| `proxy`             | `binary()`                      | `undefined`       |
 
 #### Responses
 
@@ -118,4 +136,3 @@ make test
 
 [travis_ci]: https://travis-ci.org/puzza007/katipo
 [travis_ci_image]: https://travis-ci.org/puzza007/katipo.png
-

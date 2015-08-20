@@ -46,6 +46,7 @@
 -define(http_auth, 12).
 -define(username, 13).
 -define(password, 14).
+-define(proxy, 15).
 
 -define(DEFAULT_REQ_TIMEOUT, 30000).
 -define(FOLLOWLOCATION_TRUE, 1).
@@ -219,7 +220,8 @@
           timeout = ?DEFAULT_REQ_TIMEOUT :: pos_integer(),
           http_auth = undefined :: undefined | http_auth_int(),
           username = undefined :: undefined | binary(),
-          password = undefined :: undefined | binary()
+          password = undefined :: undefined | binary(),
+	  proxy = undefined :: undefined | binary()
          }).
 
 -spec get(url()) -> response().
@@ -308,7 +310,8 @@ handle_call(#req{method = Method,
                  timeout = Timeout,
                  http_auth = HTTPAuth,
                  username = Username,
-                 password = Password},
+                 password = Password,
+		 proxy = Proxy},
              From,
              State=#state{port=Port, reqs=Reqs}) ->
     {Self, Ref} = From,
@@ -321,7 +324,8 @@ handle_call(#req{method = Method,
             {?maxredirs, MaxRedirs},
             {?http_auth, HTTPAuth},
             {?username, Username},
-            {?password, Password}],
+            {?password, Password},
+	    {?proxy, Proxy}],
     Command = {Self, Ref, Method, Url, Headers, CookieJar, Body, Opts},
     true = port_command(Port, term_to_binary(Command)),
     Tref = erlang:start_timer(Timeout, self(), {req_timeout, From}),
@@ -501,6 +505,8 @@ opt(username, Username, {Req, Errors}) when is_binary(Username) ->
     {Req#req{username=Username}, Errors};
 opt(password, Password, {Req, Errors}) when is_binary(Password) ->
     {Req#req{password=Password}, Errors};
+opt(proxy, Proxy, {Req, Errors}) when is_binary(Proxy) ->
+    {Req#req{proxy=Proxy}, Errors};
 opt(K, V, {Req, Errors}) ->
     {Req, [{K, V} | Errors]}.
 
