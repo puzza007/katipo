@@ -23,14 +23,27 @@ init_per_group(https, Config) ->
     application:ensure_all_started(katipo),
     application:ensure_all_started(cowboy),
     Config;
+init_per_group(proxy, Config) ->
+    application:ensure_all_started(katipo),
+    application:ensure_all_started(cowboy),
+    {ok, HttpProxyService} = http_proxy:start(3128, []),
+    [{http_proxy, HttpProxyService} | Config];
 init_per_group(_, Config) ->
     application:ensure_all_started(katipo),
+    application:ensure_all_started(http_proxy),
     Config.
 
 end_per_group(pool, Config) ->
     application:stop(meck),
     application:stop(katipo),
     application:stop(gproc),
+    Config;
+end_per_group(proxy, Config) ->
+    application:stop(katipo),
+    application:stop(gproc),
+    HttpProxyService = ?config(http_proxy, Config),
+    ok = http_proxy:stop(HttpProxyService),
+    application:stop(http_proxy),
     Config;
 end_per_group(_, Config) ->
     application:stop(katipo),
@@ -65,18 +78,23 @@ groups() ->
        basic_authorised,
        digest_unauthorised,
        digest_authorised,
-       badopts]},
+       badopts,
+       proxy_couldnt_connect]},
      {pool, [],
       [worker_death,
        port_late_response]},
      {https, [],
       [verify_host_verify_peer_ok,
-       verify_host_verify_peer_error]}].
+       verify_host_verify_peer_error]},
+     {proxy, [],
+      [proxy_get,
+       proxy_post_data]}].
 
 all() ->
     [{group, http},
      {group, pool},
-     {group, https}].
+     {group, https},
+     {group, proxy}].
 
 get(_) ->
     {ok, #{status := 200, body := Body}} =
@@ -245,6 +263,11 @@ badopts(_) ->
         katipo:get(<<"http://httpbin.org/get">>, #{timeout_ms => <<"wrong">>, what => not_even_close}),
     [] = L -- [{what, not_even_close}, {timeout_ms, <<"wrong">>}].
 
+proxy_couldnt_connect(_) ->
+    Url = <<"http://httpbin.org/get">>,
+    {error, #{code := couldnt_connect}} =
+        katipo:get(Url, #{proxy => <<"http://localhost:3128">>}).
+
 timeout_ms(_) ->
     {error, #{code := operation_timedout}} =
         katipo:get(<<"http://httpbin.org/delay/1">>, #{timeout_ms => 500}).
@@ -310,6 +333,22 @@ verify_host_verify_peer_error(Config) ->
         katipo:get(<<"https://localhost:8443">>,
                    #{ssl_verifyhost => false, ssl_verifypeer => false}).
 
+proxy_get(_) ->
+    Url = <<"http://httpbin.org/get?a=%21%40%23%24%25%5E%26%2A%28%29_%2B">>,
+    {ok, #{status := 200, body := Body}} =
+        katipo:get(Url, #{proxy => <<"http://localhost:3128">>}),
+    Json = jsx:decode(Body),
+    [{<<"a">>, <<"!@#$%^&*()_+">>}] = proplists:get_value(<<"args">>, Json).
+
+proxy_post_data(_) ->
+    Url = <<"http://httpbin.org/post">>,
+    {ok, #{status := 200, body := Body}} =
+        katipo:post(Url,
+                    #{headers => [{<<"Content-Type">>, <<"application/json">>}],
+                      body => <<"!@#$%^&*()">>,
+                      proxy => <<"http://localhost:3128">>}),
+    Json = jsx:decode(Body),
+    <<"!@#$%^&*()">> = proplists:get_value(<<"data">>, Json).
 
 repeat_until_true(Fun) ->
     try
