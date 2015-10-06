@@ -53,8 +53,12 @@ end_per_group(_, Config) ->
 groups() ->
     [{http, [parallel],
       [get,
+       get_req,
        post_data,
        post_qs,
+       post_req,
+       url_missing,
+       bad_method,
        put_data,
        put_qs,
        headers,
@@ -102,6 +106,12 @@ get(_) ->
     Json = jsx:decode(Body),
     [{<<"a">>, <<"!@#$%^&*()_+">>}] = proplists:get_value(<<"args">>, Json).
 
+get_req(_) ->
+    {ok, #{status := 200, body := Body}} =
+        katipo:req(#{url => <<"http://httpbin.org/get?a=%21%40%23%24%25%5E%26%2A%28%29_%2B">>}),
+    Json = jsx:decode(Body),
+    [{<<"a">>, <<"!@#$%^&*()_+">>}] = proplists:get_value(<<"args">>, Json).
+
 post_data(_) ->
     {ok, #{status := 200, body := Body}} =
         katipo:post(<<"http://httpbin.org/post">>,
@@ -116,6 +126,27 @@ post_qs(_) ->
         katipo:post(<<"http://httpbin.org/post">>, #{body => QsVals}),
     Json = jsx:decode(Body),
     [] = [{<<"baz">>,<<>>},{<<"foo">>,<<"bar">>}] -- proplists:get_value(<<"form">>, Json).
+
+post_req(_) ->
+    {ok, #{status := 200, body := Body}} =
+        katipo:req(#{url => <<"http://httpbin.org/post">>,
+                     method => post,
+                     headers => [{<<"Content-Type">>, <<"application/json">>}],
+                     body => <<"!@#$%^&*()">>}),
+    Json = jsx:decode(Body),
+    <<"!@#$%^&*()">> = proplists:get_value(<<"data">>, Json).
+
+url_missing(_) ->
+    {error, {bad_opts, [{url, undefined}]}} =
+        katipo:req(#{method => post,
+                     headers => [{<<"Content-Type">>, <<"application/json">>}],
+                     body => <<"!@#$%^&*()">>}).
+
+bad_method(_) ->
+    {error, {bad_opts, [{method, toast}]}} =
+        katipo:req(#{method => toast,
+                     headers => [{<<"Content-Type">>, <<"application/json">>}],
+                     body => <<"!@#$%^&*()">>}).
 
 put_data(_) ->
     Headers = [{<<"Content-Type">>, <<"application/json">>}],
