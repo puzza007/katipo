@@ -17,3 +17,6 @@ nuke: clean
 
 test:
 	@$(REBAR) ct
+
+update:
+	@$(REBAR) update

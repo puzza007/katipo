@@ -6,7 +6,7 @@ otp_release:
   - 17.5
   - 18.0
 
-script: make test
+script: make update test
 
 before_install:
   - ./travis_install_curl.sh
