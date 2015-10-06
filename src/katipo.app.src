@@ -1,6 +1,6 @@
 {application, 'katipo',
  [{description, "HTTP client based on libcurl"},
-  {vsn, "0.1.2"},
+  {vsn, "0.2.0"},
   {registered, []},
   {mod, {'katipo_app', []}},
   {applications,
@@ -16,5 +16,8 @@
         {pipelining, false},
         {pool_type, round_robin}
        ]},
-  {modules, []}
+  {modules, []},
+  {maintainers, ["Paul Oliver"]},
+  {licenses, ["MIT"]},
+  {links, [{"Github", "https://github.com/puzza007/katipo"}]}
  ]}.
