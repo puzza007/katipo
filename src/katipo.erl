@@ -13,6 +13,7 @@
 -export([terminate/2]).
 -export([code_change/3]).
 
+-export([req/1]).
 -export([get/1]).
 -export([get/2]).
 -export([post/1]).
@@ -57,6 +58,8 @@
 -define(SSL_VERIFYPEER_FALSE, 0).
 -define(CURLAUTH_BASIC, 100).
 -define(CURLAUTH_DIGEST, 101).
+
+-define(METHODS, [get, post, put, head, options]).
 
 -type method() :: get | post | put | head | options.
 -type method_int() :: ?get | ?post | ?put | ?head | ?options.
@@ -230,7 +233,7 @@ get(Url) ->
 
 -spec get(url(), map()) -> response().
 get(Url, Opts) ->
-    req(Url, get, Opts).
+    req(Opts#{url => Url, method => get}).
 
 -spec post(url()) -> response().
 post(Url) ->
@@ -238,7 +241,7 @@ post(Url) ->
 
 -spec post(url(), map()) -> response().
 post(Url, Opts) ->
-    req(Url, post, Opts).
+    req(Opts#{url => Url, method => post}).
 
 -spec put(url()) -> response().
 put(Url) ->
@@ -246,7 +249,7 @@ put(Url) ->
 
 -spec put(url(), map()) -> response().
 put(Url, Opts) ->
-    req(Url, put, Opts).
+    req(Opts#{url => Url, method => put}).
 
 -spec head(url()) -> response().
 head(Url) ->
@@ -254,7 +257,7 @@ head(Url) ->
 
 -spec head(url(), map()) -> response().
 head(Url, Opts) ->
-    req(Url, head, Opts).
+    req(Opts#{url => Url, method => head}).
 
 -spec options(url()) -> response().
 options(Url) ->
@@ -262,16 +265,17 @@ options(Url) ->
 
 -spec options(url(), map()) -> response().
 options(Url, Opts) ->
-    req(Url, options, Opts).
+    req(Opts#{url => Url, method => options}).
 
--spec req(url(), method(), map()) -> response().
-req(Url, Method, Opts)
-  when is_binary(Url) andalso is_atom(Method) andalso is_map(Opts) ->
+-spec req(map()) -> response().
+req(Opts)
+  when is_map(Opts) ->
     case process_opts(Opts) of
-        {ok, Req} ->
+        {ok, #req{url=undefined}} ->
+            {error, {bad_opts, [{url, undefined}]}};
+        {ok, Req=#req{url=Url}} ->
             Timeout = ?MODULE:get_timeout(Req),
-            MethodInt = method_to_int(Method),
-            Req2 = Req#req{url=Url, method=MethodInt, timeout=Timeout},
+            Req2 = Req#req{timeout=Timeout},
             Ts = os:timestamp(),
             Pid = get_worker(Url),
             Res = gen_server:call(Pid, Req2, infinity),
@@ -466,6 +470,15 @@ process_metrics_1(Metrics, Total) ->
              end,
     ok = lists:foreach(Notify, Metrics3).
 
+opt(url, Url, {Req, Errors}) when is_binary(Url) ->
+    {Req#req{url=Url}, Errors};
+opt(method, Method, {Req, Errors}) when is_atom(Method) ->
+    case lists:member(Method, ?METHODS) of
+        true ->
+            {Req#req{method=method_to_int(Method)}, Errors};
+        false ->
+            {Req, [{method, Method} | Errors]}
+    end;
 opt(headers, Headers, {Req, Errors}) when is_list(Headers) ->
     {Req#req{headers=headers_to_binary(Headers)}, Errors};
 opt(cookiejar, CookieJar, {Req, Errors}) when is_list(CookieJar) ->

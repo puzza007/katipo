@@ -13,24 +13,10 @@ Alpha `0.1.1`
 
 ```erlang
 {ok, _} = application:ensure_all_started(katipo).
-Url = <<"https://testurl.com">>.
-ReqHeaders = [{<<"User-Agent">>, <<"katipo">>}].
-Opts = #{headers => ReqHeaders,
-         body => <<"0d5cb3c25b0c5678d5297efa448e1938">>,
-         connecttimeout_ms => 5000},
-{ok, #{status := 200,
-       headers := RespHeaders,
-       cookiejar := CookieJar,
-       body := RespBody}} = katipo:post(Url, Opts).
-```
-
-### Usage (proxy example)
-
-```erlang
-{ok, _} = application:ensure_all_started(katipo).
 Url = <<"https://example.com">>.
 ReqHeaders = [{<<"User-Agent">>, <<"katipo">>}].
 Opts = #{headers => ReqHeaders,
+         body => <<"0d5cb3c25b0c5678d5297efa448e1938">>,
          connecttimeout_ms => 5000,
          proxy => <<"http://127.0.0.1:9000">>,
          sslverifyhost => false,
@@ -38,8 +24,28 @@ Opts = #{headers => ReqHeaders,
 {ok, #{status := 200,
        headers := RespHeaders,
        cookiejar := CookieJar,
-       body := RespBody}} = katipo:get(Url, Opts).
+       body := RespBody}} = katipo:post(Url, Opts).
 ```
+
+Or passing the entire request as a map
+
+```erlang
+{ok, _} = application:ensure_all_started(katipo).
+ReqHeaders = [{<<"User-Agent">>, <<"katipo">>}].
+Req = #{url => <<"https://example.com">>.
+        method => post,
+        headers => ReqHeaders,
+        body => <<"0d5cb3c25b0c5678d5297efa448e1938">>,
+        connecttimeout_ms => 5000,
+        proxy => <<"http://127.0.0.1:9000">>,
+        sslverifyhost => false,
+        sslverifypeer => false},
+{ok, #{status := 200,
+       headers := RespHeaders,
+       cookiejar := CookieJar,
+       body := RespBody}} = katipo:req(Req).
+```
+
 
 ### Why
 
