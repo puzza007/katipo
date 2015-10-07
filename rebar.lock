@@ -16,7 +16,4 @@
   {git,"https://github.com/puzza007/quintana.git",
        {ref,"9a7776e18103f05575b9fae0fcb1912d0649996e"}},
   0},
- {<<"uri">>,
-  {git,"https://github.com/heroku/uri.git",
-       {ref,"38990efaafaf9268b7ab8010e578563954988cfd"}},
-  0}].
+ {<<"uri">>,{pkg,<<"uri">>,<<"0.1.0">>},0}].
