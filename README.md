@@ -7,7 +7,9 @@ An HTTP library for Erlang built around libcurl-multi and libevent.
 
 ### Status
 
-Alpha `0.1.1`
+Beta `0.2.0`
+
+[Hex.pm package](https://hex.pm/packages/katipo)
 
 ### Usage
 
