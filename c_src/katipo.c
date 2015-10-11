@@ -19,6 +19,8 @@
 #define KATIPO_PUT 2
 #define KATIPO_HEAD 3
 #define KATIPO_OPTIONS 4
+#define KATIPO_PATCH 5
+#define KATIPO_DELETE 6
 
 #define K_CURLOPT_CONNECTTIMEOUT_MS 5
 #define K_CURLOPT_FOLLOWLOCATION 6
@@ -668,8 +670,16 @@ static void set_method(long method, ConnInfo *conn) {
       curl_easy_setopt(conn->easy, CURLOPT_POSTFIELDS, conn->post_data);
       curl_easy_setopt(conn->easy, CURLOPT_POSTFIELDSIZE, conn->post_data_size);
       break;
+    case KATIPO_PATCH:
+      curl_easy_setopt(conn->easy, CURLOPT_CUSTOMREQUEST, "PATCH");
+      curl_easy_setopt(conn->easy, CURLOPT_POSTFIELDS, conn->post_data);
+      curl_easy_setopt(conn->easy, CURLOPT_POSTFIELDSIZE, conn->post_data_size);
+      break;
     case KATIPO_HEAD:
       curl_easy_setopt(conn->easy, CURLOPT_CUSTOMREQUEST, "HEAD");
+      break;
+    case KATIPO_DELETE:
+      curl_easy_setopt(conn->easy, CURLOPT_CUSTOMREQUEST, "DELETE");
       break;
     case KATIPO_OPTIONS:
       curl_easy_setopt(conn->easy, CURLOPT_CUSTOMREQUEST, "OPTIONS");

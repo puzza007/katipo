@@ -61,8 +61,11 @@ groups() ->
        bad_method,
        put_data,
        put_qs,
+       patch_data,
+       patch_qs,
        headers,
        header_remove,
+       delete,
        gzip,
        deflate,
        stream,
@@ -163,8 +166,23 @@ put_qs(_) ->
     Json = jsx:decode(Body),
     [] = [{<<"baz">>,<<>>},{<<"foo">>,<<"bar">>}] -- proplists:get_value(<<"form">>, Json).
 
+patch_data(_) ->
+    Headers = [{<<"Content-Type">>, <<"application/json">>}],
+    {ok, #{status := 200, body := Body}} =
+        katipo:patch(<<"http://httpbin.org/patch">>,
+                   #{headers => Headers, body => <<"!@#$%^&*()">>}),
+    Json = jsx:decode(Body),
+    <<"!@#$%^&*()">> = proplists:get_value(<<"data">>, Json).
+
+patch_qs(_) ->
+    QsVals = [{<<"foo">>, <<"bar">>}, {<<"baz">>, true}],
+    {ok, #{status := 200, body := Body}} =
+        katipo:patch(<<"http://httpbin.org/patch">>, #{body => QsVals}),
+    Json = jsx:decode(Body),
+    [] = [{<<"baz">>,<<>>},{<<"foo">>,<<"bar">>}] -- proplists:get_value(<<"form">>, Json).
+
 delete(_) ->
-    {ok, {200, _, _, _}} = katipo:delete(<<"http://httpbin.org/delete">>).
+    {ok, #{status := 200}} = katipo:delete(<<"http://httpbin.org/delete">>).
 
 headers(_) ->
     Headers = [{<<"header1">>, <<"!@#$%^&*()">>}],
