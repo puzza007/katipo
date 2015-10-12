@@ -54,6 +54,7 @@ groups() ->
     [{http, [parallel],
       [get,
        get_req,
+       head,
        post_data,
        post_qs,
        post_req,
@@ -111,6 +112,10 @@ get_req(_) ->
         katipo:req(#{url => <<"http://httpbin.org/get?a=%21%40%23%24%25%5E%26%2A%28%29_%2B">>}),
     Json = jsx:decode(Body),
     [{<<"a">>, <<"!@#$%^&*()_+">>}] = proplists:get_value(<<"args">>, Json).
+
+head(_) ->
+    {ok, #{status := 200}} =
+        katipo:head(<<"http://httpbin.org/get">>).
 
 post_data(_) ->
     {ok, #{status := 200, body := Body}} =

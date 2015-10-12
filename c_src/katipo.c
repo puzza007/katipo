@@ -670,6 +670,7 @@ static void set_method(long method, ConnInfo *conn) {
       break;
     case KATIPO_HEAD:
       curl_easy_setopt(conn->easy, CURLOPT_CUSTOMREQUEST, "HEAD");
+      curl_easy_setopt(conn->easy, CURLOPT_NOBODY, 1);
       break;
     case KATIPO_OPTIONS:
       curl_easy_setopt(conn->easy, CURLOPT_CUSTOMREQUEST, "OPTIONS");
