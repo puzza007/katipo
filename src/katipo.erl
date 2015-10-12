@@ -24,6 +24,10 @@
 -export([head/2]).
 -export([options/1]).
 -export([options/2]).
+-export([patch/1]).
+-export([patch/2]).
+-export([delete/1]).
+-export([delete/2]).
 
 %% only for mocking during tests
 -export([get_timeout/1]).
@@ -36,6 +40,8 @@
 -define(put, 2).
 -define(head, 3).
 -define(options, 4).
+-define(patch, 5).
+-define(delete, 6).
 
 -define(connecttimeout_ms, 5).
 -define(followlocation, 6).
@@ -59,10 +65,10 @@
 -define(CURLAUTH_BASIC, 100).
 -define(CURLAUTH_DIGEST, 101).
 
--define(METHODS, [get, post, put, head, options]).
+-define(METHODS, [get, post, put, head, options, patch, delete]).
 
--type method() :: get | post | put | head | options.
--type method_int() :: ?get | ?post | ?put | ?head | ?options.
+-type method() :: get | post | put | head | options | patch | delete.
+-type method_int() :: ?get | ?post | ?put | ?head | ?options | ?patch | ?delete.
 -type url() :: binary().
 -type error_code() ::
         ok |
@@ -267,6 +273,22 @@ options(Url) ->
 options(Url, Opts) ->
     req(Opts#{url => Url, method => options}).
 
+-spec patch(url()) -> response().
+patch(Url) ->
+    patch(Url, #{}).
+
+-spec patch(url(), map()) -> response().
+patch(Url, Opts) ->
+    req(Opts#{url => Url, method => patch}).
+
+-spec delete(url()) -> response().
+delete(Url) ->
+    delete(Url, #{}).
+
+-spec delete(url(), map()) -> response().
+delete(Url, Opts) ->
+    req(Opts#{url => Url, method => delete}).
+
 -spec req(map()) -> response().
 req(Opts)
   when is_map(Opts) ->
@@ -391,7 +413,9 @@ method_to_int(get)     -> ?get;
 method_to_int(post)    -> ?post;
 method_to_int(put)     -> ?put;
 method_to_int(head)    -> ?head;
-method_to_int(options) -> ?options.
+method_to_int(options) -> ?options;
+method_to_int(patch)   -> ?patch;
+method_to_int(delete)  -> ?delete.
 
 parse_headers([_StatusLine | Lines]) ->
     [parse_header(L) || L <- Lines].
