@@ -187,7 +187,8 @@
 
 -type error_msg() :: binary().
 -type status() :: pos_integer().
--type headers() :: [{binary(), iodata()}].
+-type header() :: {binary(), iodata()}.
+-type headers() :: [header()].
 -opaque cookiejar() :: [binary()].
 -type qs_vals() :: [{binary(), binary() | true}].
 -type req_body() :: iodata() | qs_vals().
@@ -207,6 +208,7 @@
 -export_type([error_code/0]).
 -export_type([error_msg/0]).
 -export_type([status/0]).
+-export_type([header/0]).
 -export_type([headers/0]).
 -export_type([cookiejar/0]).
 -export_type([req_body/0]).
@@ -413,6 +415,7 @@ code_change(_OldVsn, State, _Extra) ->
 headers_to_binary(Headers) ->
     [iolist_to_binary([K, <<": ">>, V]) || {K, V} <- Headers].
 
+-spec method_to_int(method()) -> method_int().
 method_to_int(get)     -> ?get;
 method_to_int(post)    -> ?post;
 method_to_int(put)     -> ?put;
@@ -421,9 +424,11 @@ method_to_int(options) -> ?options;
 method_to_int(patch)   -> ?patch;
 method_to_int(delete)  -> ?delete.
 
+-spec parse_headers([binary()]) -> [header()].
 parse_headers([_StatusLine | Lines]) ->
     [parse_header(L) || L <- Lines].
 
+-spec parse_header(binary()) -> header().
 parse_header(Line) when is_binary(Line) ->
     case binary:split(Line, <<": ">>, [trim]) of
         [K] -> {K, <<>>};
