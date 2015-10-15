@@ -20,3 +20,6 @@ test:
 
 update:
 	@$(REBAR) update
+
+dialyzer:
+	@$(REBAR) dialyzer
