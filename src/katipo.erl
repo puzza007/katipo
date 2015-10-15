@@ -424,7 +424,7 @@ method_to_int(options) -> ?options;
 method_to_int(patch)   -> ?patch;
 method_to_int(delete)  -> ?delete.
 
--spec parse_headers([binary()]) -> [header()].
+-spec parse_headers([binary()]) -> headers().
 parse_headers([_StatusLine | Lines]) ->
     [parse_header(L) || L <- Lines].
 
