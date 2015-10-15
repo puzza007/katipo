@@ -54,6 +54,7 @@
 -define(username, 13).
 -define(password, 14).
 -define(proxy, 15).
+-define(cacert, 16).
 
 -define(DEFAULT_REQ_TIMEOUT, 30000).
 -define(FOLLOWLOCATION_TRUE, 1).
@@ -223,7 +224,8 @@
           followlocation = ?FOLLOWLOCATION_FALSE :: integer(),
           ssl_verifyhost = ?SSL_VERIFYHOST_TRUE :: integer(),
           ssl_verifypeer = ?SSL_VERIFYPEER_TRUE :: integer(),
-          capath = undefined :: undefined | binary(),
+          capath = undefined :: undefined | binary() | file:name_all(),
+          cacert = undefined :: undefined | binary() | file:name_all(),
           timeout_ms = ?DEFAULT_REQ_TIMEOUT :: pos_integer(),
           maxredirs = 9 :: non_neg_integer(),
           timeout = ?DEFAULT_REQ_TIMEOUT :: pos_integer(),
@@ -331,6 +333,7 @@ handle_call(#req{method = Method,
                  ssl_verifyhost = SslVerifyHost,
                  ssl_verifypeer = SslVerifyPeer,
                  capath = CAPath,
+                 cacert = CACert,
                  timeout_ms = TimeoutMs,
                  maxredirs = MaxRedirs,
                  timeout = Timeout,
@@ -346,6 +349,7 @@ handle_call(#req{method = Method,
             {?ssl_verifyhost, SslVerifyHost},
             {?ssl_verifypeer, SslVerifyPeer},
             {?capath, CAPath},
+            {?cacert, CACert},
             {?timeout_ms, TimeoutMs},
             {?maxredirs, MaxRedirs},
             {?http_auth, HTTPAuth},
@@ -530,6 +534,8 @@ opt(ssl_verifypeer, false, {Req, Errors}) ->
     {Req#req{ssl_verifypeer=?SSL_VERIFYPEER_FALSE}, Errors};
 opt(capath, CAPath, {Req, Errors}) when is_binary(CAPath) ->
     {Req#req{capath=CAPath}, Errors};
+opt(cacert, CACert, {Req, Errors}) when is_binary(CACert) ->
+    {Req#req{cacert=CACert}, Errors};
 opt(timeout_ms, Ms, {Req, Errors}) when is_integer(Ms) andalso Ms > 0 ->
     {Req#req{timeout_ms=Ms}, Errors};
 opt(maxredirs, M, {Req, Errors}) when is_integer(M) andalso M >= -1 ->

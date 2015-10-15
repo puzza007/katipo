@@ -81,6 +81,7 @@ katipo:Method(URL :: binary(), Options :: map()).
 | `ssl_verifyhost`    | `boolean()`                     | `true`            |
 | `ssl_verifypeer`    | `boolean()`                     | `true`            |
 | `capath`            | `binary()`                      | `undefined`       |
+| `cacert`            | `binary()`                      | `undefined`       |
 | `timeout_ms`        | `pos_integer()`                 | 30000             |
 | `maxredirs`         | `non_neg_integer()`             | 9                 |
 | `proxy`             | `binary()`                      | `undefined`       |

@@ -22,7 +22,16 @@ init_per_group(pool, Config) ->
 init_per_group(https, Config) ->
     application:ensure_all_started(katipo),
     application:ensure_all_started(cowboy),
-    Config;
+    Dispatch = cowboy_router:compile([{'_', [{"/", get_handler, []}]}]),
+    DataDir = ?config(data_dir, Config),
+    CACert = filename:join(DataDir, "cowboy-ca.crt"),
+    {ok, _} = cowboy:start_https(ct_https, 1,
+                                 [{port, 8443},
+                                  {cacertfile, CACert},
+                                  {certfile, filename:join(DataDir, "server.crt")},
+                                  {keyfile, filename:join(DataDir, "server.key")}],
+                                 [{env, [{dispatch, Dispatch}]}]),
+    [{cacert_file, list_to_binary(CACert)} | Config];
 init_per_group(proxy, Config) ->
     application:ensure_all_started(katipo),
     application:ensure_all_started(cowboy),
@@ -92,7 +101,8 @@ groups() ->
        port_late_response]},
      {https, [],
       [verify_host_verify_peer_ok,
-       verify_host_verify_peer_error]},
+       verify_host_verify_peer_error,
+       cacert_self_signed]},
      {proxy, [],
       [proxy_get,
        proxy_post_data]}].
@@ -359,16 +369,7 @@ verify_host_verify_peer_ok(_) ->
             #{ssl_verifyhost => false, ssl_verifypeer => false}],
     [{ok, _} = katipo:get(<<"https://google.com">>, O) || O <- Opts].
 
-verify_host_verify_peer_error(Config) ->
-    Dispatch = cowboy_router:compile([{'_', [{"/", get_handler, []}]}]),
-    DataDir = ?config(data_dir, Config),
-    {ok, _} = cowboy:start_https(ct_https, 1,
-                                 [{port, 8443},
-                                  {cacertfile, filename:join(DataDir, "cowboy-ca.crt")},
-                                  {certfile, filename:join(DataDir, "server.crt")},
-                                  {keyfile, filename:join(DataDir, "server.key")}],
-                                [{env, [{dispatch, Dispatch}]}]
-                                ),
+verify_host_verify_peer_error(_) ->
     {error, #{code := ssl_cacert}} =
          katipo:get(<<"https://localhost:8443">>,
                     #{ssl_verifyhost => true, ssl_verifypeer => true}),
@@ -381,6 +382,12 @@ verify_host_verify_peer_error(Config) ->
     {ok, #{status := 200}} =
         katipo:get(<<"https://localhost:8443">>,
                    #{ssl_verifyhost => false, ssl_verifypeer => false}).
+
+cacert_self_signed(Config) ->
+    CACert = ?config(cacert_file, Config),
+    {ok, #{status := 200}} =
+        katipo:get(<<"https://localhost:8443">>,
+                   #{ssl_verifyhost => true, ssl_verifypeer => true, cacert => CACert}).
 
 proxy_get(_) ->
     Url = <<"http://httpbin.org/get?a=%21%40%23%24%25%5E%26%2A%28%29_%2B">>,

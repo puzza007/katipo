@@ -33,6 +33,7 @@
 #define K_CURLOPT_USERNAME 13
 #define K_CURLOPT_PASSWORD 14
 #define K_CURLOPT_PROXY 15
+#define K_CURLOPT_CACERT 16
 
 #define K_CURLAUTH_BASIC 100
 #define K_CURLAUTH_DIGEST 101
@@ -89,6 +90,7 @@ typedef struct _EasyOpts {
   long curlopt_ssl_verifyhost;
   long curlopt_ssl_verifypeer;
   char *curlopt_capath;
+  char *curlopt_cacert;
   long curlopt_timeout_ms;
   long curlopt_maxredirs;
   long curlopt_http_auth;
@@ -743,6 +745,10 @@ static void new_conn(long method, char *url, struct curl_slist *req_headers,
     curl_easy_setopt(conn->easy, CURLOPT_CAPATH,
                      eopts.curlopt_capath);
   }
+  if (eopts.curlopt_cacert != NULL) {
+    curl_easy_setopt(conn->easy, CURLOPT_CAINFO,
+                     eopts.curlopt_cacert);
+  }
   curl_easy_setopt(conn->easy, CURLOPT_TIMEOUT_MS, eopts.curlopt_timeout_ms);
   curl_easy_setopt(conn->easy, CURLOPT_MAXREDIRS, eopts.curlopt_maxredirs);
   if (eopts.curlopt_http_auth != -1) {
@@ -770,6 +776,9 @@ static void new_conn(long method, char *url, struct curl_slist *req_headers,
 
   if (eopts.curlopt_capath != NULL) {
     free(eopts.curlopt_capath);
+  }
+  if (eopts.curlopt_cacert != NULL) {
+    free(eopts.curlopt_cacert);
   }
   if (eopts.curlopt_username != NULL) {
     free(eopts.curlopt_username);
@@ -916,6 +925,7 @@ static void erl_input(struct bufferevent *ev, void *arg) {
     eopts.curlopt_ssl_verifyhost = 2;
     eopts.curlopt_ssl_verifypeer = 1;
     eopts.curlopt_capath = NULL;
+    eopts.curlopt_cacert = NULL;
     eopts.curlopt_timeout_ms = 30000;
     eopts.curlopt_maxredirs = 100;
     eopts.curlopt_http_auth = -1;
@@ -976,6 +986,11 @@ static void erl_input(struct bufferevent *ev, void *arg) {
         case K_CURLOPT_CAPATH:
           if (erl_type == ERL_BINARY_EXT) {
             eopts.curlopt_capath = eopt_binary;
+          }
+          break;
+        case K_CURLOPT_CACERT:
+          if (erl_type == ERL_BINARY_EXT) {
+            eopts.curlopt_cacert = eopt_binary;
           }
           break;
         case K_CURLOPT_TIMEOUT_MS:
