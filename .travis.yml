@@ -5,6 +5,7 @@ language: erlang
 otp_release:
   - 17.5
   - 18.0
+  - 18.1
 
 script: make update test dialyzer
 
