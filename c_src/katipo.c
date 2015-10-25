@@ -34,6 +34,7 @@
 #define K_CURLOPT_PASSWORD 14
 #define K_CURLOPT_PROXY 15
 #define K_CURLOPT_CACERT 16
+#define K_CURLOPT_STREAM 17
 
 #define K_CURLAUTH_BASIC 100
 #define K_CURLAUTH_DIGEST 101
@@ -65,6 +66,8 @@ typedef struct _ConnInfo {
   int response_code;
   char *post_data;
   long post_data_size;
+  int stream;
+  int headers_sent;
   // metrics
   double total_time;
   double namelookup_time;
@@ -97,6 +100,7 @@ typedef struct _EasyOpts {
   char *curlopt_username;
   char *curlopt_password;
   char *curlopt_proxy;
+  long curlopt_stream;
 } EasyOpts;
 
 static const char *curl_error_code(CURLcode error) {
@@ -437,12 +441,12 @@ static void encode_headers(ei_x_buff *result, ConnInfo *conn) {
   }
 }
 
-static void send_ok_to_erlang(ConnInfo *conn) {
+static void send_data_to_erlang(const char *what, ConnInfo *conn) {
   ei_x_buff result;
 
   if (ei_x_new_with_version(&result) ||
       ei_x_encode_tuple_header(&result, 2) ||
-      ei_x_encode_atom(&result, "ok") ||
+      ei_x_encode_atom(&result, what) ||
       ei_x_encode_tuple_header(&result, 2) ||
 
       ei_x_encode_tuple_header(&result, 2) ||
@@ -467,6 +471,26 @@ static void send_ok_to_erlang(ConnInfo *conn) {
 
   send_to_erlang(result.buff, result.buffsz);
   ei_x_free(&result);
+}
+
+static void send_done_to_erlang(ConnInfo *conn) {
+  send_data_to_erlang("done", conn);
+}
+
+static void send_status_to_erlang(ConnInfo *conn) {
+  send_data_to_erlang("status", conn);
+}
+
+static void send_headers_to_erlang(ConnInfo *conn) {
+  send_data_to_erlang("headers", conn);
+}
+
+static void send_chunk_to_erlang(ConnInfo *conn) {
+  send_data_to_erlang("chunk", conn);
+}
+
+static void send_ok_to_erlang(ConnInfo *conn) {
+  send_data_to_erlang("ok", conn);
 }
 
 static void send_error_to_erlang(CURLcode curl_code, ConnInfo *conn) {
@@ -517,7 +541,11 @@ static void check_multi_info(GlobalInfo *global) {
       curl_easy_getinfo(easy, CURLINFO_STARTTRANSFER_TIME, &conn->starttransfer_time);
 
       if (res == CURLE_OK) {
-        send_ok_to_erlang(conn);
+        if (conn->stream) {
+          send_done_to_erlang(conn);
+        } else {
+          send_ok_to_erlang(conn);
+        }
       } else {
         send_error_to_erlang(res, conn);
       }
@@ -636,6 +664,28 @@ static size_t write_cb(void *ptr, size_t size, size_t nmemb, void *data) {
   return realsize;
 }
 
+static size_t stream_write_cb(void *ptr, size_t size, size_t nmemb, void *data) {
+
+  size_t realsize = size * nmemb;
+  ConnInfo *conn = (ConnInfo *)data;
+
+  if (conn->headers_sent == 0) {
+    send_headers_to_erlang(conn);
+    conn->headers_sent = 1;
+  }
+
+  free(conn->memory);
+  conn->memory = NULL;
+
+  conn->memory = (char *)malloc(realsize);
+  memcpy(&(conn->memory[0]), ptr, realsize);
+  conn->size = realsize;
+
+  send_chunk_to_erlang(conn);
+
+  return realsize;
+}
+
 static size_t header_cb(void *ptr, size_t size, size_t nmemb, void *data) {
   size_t realsize = size * nmemb;
   ConnInfo *conn = (ConnInfo *)data;
@@ -654,6 +704,34 @@ static size_t header_cb(void *ptr, size_t size, size_t nmemb, void *data) {
     conn->resp_headers = curl_slist_append(conn->resp_headers, header);
     free(header);
     conn->num_headers++;
+  }
+  return realsize;
+}
+
+static size_t stream_header_cb(void *ptr, size_t size, size_t nmemb, void *data) {
+  size_t realsize = size * nmemb;
+  ConnInfo *conn = (ConnInfo *)data;
+  char *header;
+
+  // the last two chars of headers are \r\n
+  if (realsize > 2) {
+    int is_status_header = 0;
+    if (conn->resp_headers && is_status_line(ptr)) {
+      curl_slist_free_all(conn->resp_headers);
+      conn->resp_headers = NULL;
+      conn->num_headers = 0;
+      is_status_header = 1;
+    }
+    header = (char *)malloc(realsize - 1);
+    strncpy(header, ptr, realsize - 2);
+    header[realsize - 2] = '\0';
+    conn->resp_headers = curl_slist_append(conn->resp_headers, header);
+    free(header);
+    conn->num_headers++;
+
+    if (is_status_header) {
+      send_status_to_erlang(conn);
+    }
   }
   return realsize;
 }
@@ -721,13 +799,23 @@ static void new_conn(long method, char *url, struct curl_slist *req_headers,
   conn->req_cookies = req_cookies;
   conn->post_data = post_data;
   conn->post_data_size = post_data_size;
+  conn->stream = eopts.curlopt_stream;
+  conn->headers_sent = 0;
 
   curl_easy_setopt(conn->easy, CURLOPT_URL, conn->url);
   curl_easy_setopt(conn->easy, CURLOPT_HTTPHEADER, conn->req_headers);
   // curl_easy_setopt(conn->easy, CURLOPT_HTTP_VERSION, CURL_HTTP_VERSION_2_0);
-  curl_easy_setopt(conn->easy, CURLOPT_WRITEFUNCTION, write_cb);
+  if (eopts.curlopt_stream == 1) {
+    curl_easy_setopt(conn->easy, CURLOPT_WRITEFUNCTION, stream_write_cb);
+  } else {
+    curl_easy_setopt(conn->easy, CURLOPT_WRITEFUNCTION, write_cb);
+  }
   curl_easy_setopt(conn->easy, CURLOPT_WRITEDATA, conn);
-  curl_easy_setopt(conn->easy, CURLOPT_HEADERFUNCTION, header_cb);
+  if (eopts.curlopt_stream == 1) {
+    curl_easy_setopt(conn->easy, CURLOPT_HEADERFUNCTION, stream_header_cb);
+  } else {
+    curl_easy_setopt(conn->easy, CURLOPT_HEADERFUNCTION, header_cb);
+  }
   curl_easy_setopt(conn->easy, CURLOPT_HEADERDATA, conn);
   // curl_easy_setopt(conn->easy, CURLOPT_VERBOSE, 1L);
   curl_easy_setopt(conn->easy, CURLOPT_ERRORBUFFER, conn->error);
@@ -933,6 +1021,7 @@ static void erl_input(struct bufferevent *ev, void *arg) {
     eopts.curlopt_username = NULL;
     eopts.curlopt_password = NULL;
     eopts.curlopt_proxy = NULL;
+    eopts.curlopt_stream = 0;
 
     if (ei_decode_list_header(buf, &index, &num_eopts)) {
       errx(2, "Couldn't decode eopts length");
@@ -1022,6 +1111,9 @@ static void erl_input(struct bufferevent *ev, void *arg) {
           if (erl_type == ERL_BINARY_EXT) {
             eopts.curlopt_proxy = eopt_binary;
           }
+          break;
+        case K_CURLOPT_STREAM:
+          eopts.curlopt_stream = eopt_long;
           break;
         default:
           errx(2, "Unknown eopt value %ld", eopt);
