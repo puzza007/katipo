@@ -35,7 +35,8 @@
 -export([get_timeout/1]).
 
 -record(state, {port :: port(),
-                reqs = #{} :: map()}).
+                reqs = #{} :: map(),
+                streams = #{} :: map()}).
 
 -define(get, 0).
 -define(post, 1).
@@ -58,6 +59,7 @@
 -define(proxy, 15).
 -define(cacert, 16).
 -define(tcp_fastopen, 17).
+-define(stream, 18).
 
 -define(DEFAULT_REQ_TIMEOUT, 30000).
 -define(FOLLOWLOCATION_TRUE, 1).
@@ -253,7 +255,8 @@
           password = undefined :: undefined | binary(),
           proxy = undefined :: undefined | binary(),
           return_metrics = false :: boolean(),
-          tcp_fastopen = ?TCP_FASTOPEN_FALSE :: ?TCP_FASTOPEN_FALSE | ?TCP_FASTOPEN_TRUE
+          tcp_fastopen = ?TCP_FASTOPEN_FALSE :: ?TCP_FASTOPEN_FALSE | ?TCP_FASTOPEN_TRUE,
+          stream_to = undefined :: undefinded | pid()
          }).
 
 -spec get(katipo_pool:name(), url()) -> response().
@@ -342,7 +345,7 @@ init([CurlOpts]) ->
     Args = get_mopts(CurlOpts),
     Prog = filename:join([code:priv_dir(katipo), "katipo"]),
     Port = open_port({spawn, Prog ++ " " ++ Args}, [{packet, 4}, binary]),
-    {ok, #state{port=Port, reqs=#{}}}.
+    {ok, #state{port=Port, reqs=#{}, streams=#{}}}.
 
 handle_call(#req{method = Method,
                  url = Url,
@@ -362,10 +365,15 @@ handle_call(#req{method = Method,
                  username = Username,
                  password = Password,
                  proxy = Proxy,
-                 tcp_fastopen = TCPFastOpen},
+                 tcp_fastopen = TCPFastOpen,
+                 stream_to = StreamTo},
              From,
-             State=#state{port=Port, reqs=Reqs}) ->
+             State=#state{port=Port, reqs=Reqs, streams=Streams}) ->
     {Self, Ref} = From,
+    Stream = if
+                 is_pid(StreamTo) -> 1;
+                 true -> 0
+             end,
     Opts = [{?connecttimeout_ms, ConnTimeoutMs},
             {?followlocation, FollowLocation},
             {?ssl_verifyhost, SslVerifyHost},
@@ -378,18 +386,20 @@ handle_call(#req{method = Method,
             {?username, Username},
             {?password, Password},
             {?proxy, Proxy},
-            {?tcp_fastopen, TCPFastOpen}],
+            {?tcp_fastopen, TCPFastOpen},
+            {?stream, Stream}],
     Command = {Self, Ref, Method, Url, Headers, CookieJar, Body, Opts},
     true = port_command(Port, term_to_binary(Command)),
     Tref = erlang:start_timer(Timeout, self(), {req_timeout, From}),
     Reqs2 = maps:put(From, Tref, Reqs),
-    {noreply, State#state{reqs=Reqs2}}.
+    Streams2 = maps:put(From, StreamTo, Streams),
+    {noreply, State#state{reqs=Reqs2, streams=Streams2}}.
 
 handle_cast(Msg, State) ->
     error_logger:error_msg("Unexpected cast: ~p", [Msg]),
     {noreply, State}.
 
-handle_info({Port, {data, Data}}, State=#state{port=Port, reqs=Reqs}) ->
+handle_info({Port, {data, Data}}, State=#state{port=Port, reqs=Reqs, streams=Streams}) ->
     {Result, {From, Response}} =
         case binary_to_term(Data) of
             {ok, {From0, {Status, Headers, CookieJar, Body, Metrics}}} ->
@@ -398,20 +408,57 @@ handle_info({Port, {data, Data}}, State=#state{port=Port, reqs=Reqs}) ->
                       cookiejar => CookieJar,
                       body => Body},
                 {ok, {From0, {R, Metrics}}};
+            {status, {From0, {Status, _, _, _, Metrics}}} ->
+                R = #{status => Status},
+                {status, {From0, {R, Metrics}}};
+            {headers, {From0, {_, Headers, _, _, Metrics}}} ->
+                R = #{headers => parse_headers(Headers)},
+                {headers, {From0, {R, Metrics}}};
+            {chunk, {From0, {_, _, _, Body, Metrics}}} ->
+                R = #{chunk => Body},
+                {chunk, {From0, {R, Metrics}}};
+            {done, {From0, {_, _, CookieJar, _, Metrics}}} ->
+                R = #{cookiejar => CookieJar},
+                {done, {From0, {R, Metrics}}};
             {error, {From0, {Code, Message, Metrics}}} ->
                 Error = #{code => Code, message => Message},
                 {error, {From0, {Error, Metrics}}}
         end,
-    case maps:find(From, Reqs) of
-        {ok, Tref} ->
-            _ = erlang:cancel_timer(Tref),
-            _ = gen_server:reply(From, {Result, Response});
-        error ->
-            ok
-    end,
-    Reqs2 = maps:remove(From, Reqs),
-    {noreply, State#state{reqs=Reqs2}};
-handle_info({timeout, Tref, {req_timeout, From}}, State=#state{reqs=Reqs}) ->
+    case maps:find(From, Streams) of
+        {ok, StreamTo} when is_pid(StreamTo) ->
+            case Result of
+                status ->
+                    StreamTo ! Response;
+                headers ->
+                    StreamTo ! Response;
+                chunk ->
+                    StreamTo ! Response;
+                done ->
+                    StreamTo ! Response,
+                    case maps:find(From, Reqs) of
+                        {ok, Tref} ->
+                            _ = erlang:cancel_timer(Tref),
+                            _ = gen_server:reply(From, {Result, Response});
+                        error ->
+                            ok
+                    end,
+                    Reqs2 = maps:remove(From, Reqs),
+                    Streams2 = maps:remove(From, Streams),
+                    {noreply, State#state{reqs=Reqs2, streams=Streams2}}
+            end;
+        _ ->
+            case maps:find(From, Reqs) of
+                {ok, Tref} ->
+                    _ = erlang:cancel_timer(Tref),
+                    _ = gen_server:reply(From, {Result, Response});
+                error ->
+                    ok
+            end,
+            Reqs2 = maps:remove(From, Reqs),
+            Streams2 = maps:remove(From, Streams),
+            {noreply, State#state{reqs=Reqs2, streams=Streams2}}
+    end;
+handle_info({timeout, Tref, {req_timeout, From}}, State=#state{reqs=Reqs, streams=Streams}) ->
     Reqs2 =
         case maps:find(From, Reqs) of
             {ok, Tref} ->
@@ -422,7 +469,8 @@ handle_info({timeout, Tref, {req_timeout, From}}, State=#state{reqs=Reqs}) ->
             error ->
                 Reqs
         end,
-    {noreply, State#state{reqs=Reqs2}};
+    Streams2 = maps:remove(From, Streams),
+    {noreply, State#state{reqs=Reqs2, streams=Streams2}};
 handle_info({'EXIT', Port, Reason}, State=#state{port=Port}) ->
     error_logger:error_msg("Port ~p died with reason: ~p", [Port, Reason]),
     {stop, port_died, State}.
