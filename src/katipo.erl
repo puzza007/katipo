@@ -193,6 +193,7 @@
 -type qs_vals() :: [{binary(), binary() | true}].
 -type req_body() :: iodata() | qs_vals().
 -type body() :: binary().
+-type request() :: map().
 %% {ok, #{status => status(),
 %%        headers => headers(),
 %%        cookiejar => cookiejar(),
@@ -214,6 +215,7 @@
 -export_type([cookiejar/0]).
 -export_type([req_body/0]).
 -export_type([body/0]).
+-export_type([request/0]).
 -export_type([response/0]).
 -export_type([http_auth/0]).
 -export_type([curlmopts/0]).
@@ -521,7 +523,7 @@ opt(proxy, Proxy, {Req, Errors}) when is_binary(Proxy) ->
 opt(K, V, {Req, Errors}) ->
     {Req, [{K, V} | Errors]}.
 
--spec process_opts(map()) -> {ok, #req{}} | {error, {bad_opts, [any()]}}. %%todo
+-spec process_opts(request()) -> {ok, #req{}} | {error, {bad_opts, [any()]}}. %%todo
 process_opts(Opts) ->
     case maps:fold(fun opt/3, {#req{}, []}, Opts) of
         {Req=#req{}, []} ->
