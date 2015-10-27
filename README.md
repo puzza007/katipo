@@ -52,6 +52,23 @@ Req = #{url => <<"https://example.com">>.
        body := RespBody}} = katipo:req(Pool, Req).
 ```
 
+Session interface. Cookies handled automatically and options merged. Inspired by [Requests sessions](http://docs.python-requests.org/en/latest/user/advanced/#session-objects).
+
+```erlang
+{ok, _} = application:ensure_all_started(katipo).
+ReqHeaders = [{<<"User-Agent">>, <<"katipo">>}].
+Session = katipo_session:new(#{url => <<"https://example.com">>.
+                               method => post,
+                               headers => ReqHeaders,
+                               connecttimeout_ms => 5000,
+                               proxy => <<"http://127.0.0.1:9000">>,
+                               sslverifyhost => false,
+                               sslverifypeer => false}.
+{{ok, #{status := 200}}, Session2} =
+    katipo_session:req(#{body => <<"some data">>}, Session).
+{{ok, #{status := 200}}, Session3} =
+    katipo_session:req(#{body => <<"different payload data">>}, Session2).
+```
 
 ### Why
 

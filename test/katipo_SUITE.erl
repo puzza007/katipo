@@ -18,6 +18,9 @@ init_per_suite(Config) ->
 end_per_suite(_Config) ->
     ok = application:stop(katipo).
 
+init_per_group(session, Config) ->
+    application:ensure_all_started(katipo),
+    Config;
 init_per_group(pool, Config) ->
     application:ensure_all_started(meck),
     Config;
@@ -117,13 +120,19 @@ groups() ->
        cacert_self_signed]},
      {proxy, [],
       [proxy_get,
-       proxy_post_data]}].
+       proxy_post_data]},
+     {session, [],
+      [session_new,
+       session_new_cookies,
+       session_new_headers,
+       session_update]}].
 
 all() ->
     [{group, http},
      {group, pool},
      {group, https},
-     {group, proxy}].
+     {group, proxy},
+     {group, session}].
 
 get(_) ->
     {ok, #{status := 200, body := Body}} =
@@ -503,6 +512,66 @@ proxy_post_data(_) ->
                       proxy => <<"http://localhost:3128">>}),
     Json = jsx:decode(Body),
     <<"!@#$%^&*()">> = proplists:get_value(<<"data">>, Json).
+
+%% session
+
+session_new(_) ->
+    Session = katipo_session:new(),
+    Url = <<"http://httpbin.org/cookies/set?cname=cvalue">>,
+    Req = #{url => Url, followlocation => true},
+    {{ok, #{status := 200, cookiejar := CookieJar, body := Body}}, Session2} =
+        katipo_session:req(Req, Session),
+    {state, #{cookiejar := CookieJar}} = Session2,
+    Json = jsx:decode(Body),
+    [{<<"cname">>, <<"cvalue">>}] = proplists:get_value(<<"cookies">>, Json),
+    [<<"httpbin.org\tFALSE\t/\tFALSE\t0\tcname\tcvalue">>] = CookieJar.
+
+session_new_cookies(_) ->
+    Url = <<"http://httpbin.org/cookies/delete?cname">>,
+    CookieJar = [<<"httpbin.org\tFALSE\t/\tFALSE\t0\tcname\tcvalue">>,
+                 <<"httpbin.org\tFALSE\t/\tFALSE\t0\tcname2\tcvalue2">>],
+    Req = #{url => Url, cookiejar => CookieJar, followlocation => true},
+    Session = katipo_session:new(Req),
+    {{ok, #{status := 200, body := Body}}, Session2} =
+        katipo_session:req(#{}, Session),
+    Json = jsx:decode(Body),
+    [{<<"cname2">>, <<"cvalue2">>}] = proplists:get_value(<<"cookies">>, Json),
+    Url2 = <<"http://httpbin.org/cookies/delete?cname2">>,
+    {{ok, #{status := 200, body := Body2}}, _} =
+        katipo_session:req(#{url => Url2}, Session2),
+    Json2 = jsx:decode(Body2),
+    [{}] = proplists:get_value(<<"cookies">>, Json2).
+
+session_new_headers(_) ->
+    Req = #{url => <<"http://httpbin.org/cookies/delete?cname">>,
+            headers => [{<<"header1">>, <<"dontcare">>}]},
+    Session = katipo_session:new(Req),
+    {{ok, #{status := 200, body := Body}}, _Session2} =
+        katipo_session:req(#{url => <<"http://httpbin.org/gzip">>,
+                             headers => [{<<"header1">>, <<"!@#$%^&*()">>}]},
+                           Session),
+    Json = jsx:decode(Body),
+    Expected =  [{<<"Accept">>,<<"*/*">>},
+                 {<<"Accept-Encoding">>,<<"gzip,deflate">>},
+                 {<<"Header1">>,<<"!@#$%^&*()">>},
+                 {<<"Host">>,<<"httpbin.org">>}],
+    [] = Expected -- proplists:get_value(<<"headers">>, Json).
+
+session_update(_) ->
+    Req = #{url => <<"http://httpbin.org/cookies/delete?cname">>,
+            headers => [{<<"header1">>, <<"dontcare">>}]},
+    Session = katipo_session:new(Req),
+    Req2 = #{url => <<"http://httpbin.org/gzip">>,
+             headers => [{<<"header1">>, <<"!@#$%^&*()">>}]},
+    Session2 = katipo_session:update(Req2, Session),
+    {{ok, #{status := 200, body := Body}}, _Session3} =
+        katipo_session:req(#{}, Session2),
+    Json = jsx:decode(Body),
+    Expected =  [{<<"Accept">>,<<"*/*">>},
+                 {<<"Accept-Encoding">>,<<"gzip,deflate">>},
+                 {<<"Header1">>,<<"!@#$%^&*()">>},
+                 {<<"Host">>,<<"httpbin.org">>}],
+    [] = Expected -- proplists:get_value(<<"headers">>, Json).
 
 repeat_until_true(Fun) ->
     try
