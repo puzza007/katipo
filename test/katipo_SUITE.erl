@@ -181,13 +181,17 @@ post_req(_) ->
     <<"!@#$%^&*()">> = proplists:get_value(<<"data">>, Json).
 
 url_missing(_) ->
-    {error, {bad_opts, [{url, undefined}]}} =
+    Message = [{url, undefined}],
+    BinaryMessage = iolist_to_binary(io_lib:format("~p", [Message])),
+    {error, #{code := bad_opts, message := BinaryMessage}} =
         katipo:req(?POOL, #{method => post,
                      headers => [{<<"Content-Type">>, <<"application/json">>}],
                      body => <<"!@#$%^&*()">>}).
 
 bad_method(_) ->
-    {error, {bad_opts, [{method, toast}]}} =
+    Message = [{method, toast}],
+    BinaryMessage = iolist_to_binary(io_lib:format("~p", [Message])),
+    {error, #{code := bad_opts, message := BinaryMessage}} =
         katipo:req(?POOL, #{method => toast,
                      headers => [{<<"Content-Type">>, <<"application/json">>}],
                      body => <<"!@#$%^&*()">>}).
@@ -367,8 +371,10 @@ digest_authorised(_) ->
     Username = proplists:get_value(<<"user">>, Json).
 
 badopts(_) ->
-    {error, {bad_opts, L}} =
+    {error, #{code := bad_opts, message := Message}} =
         katipo:get(?POOL, <<"http://httpbin.org/get">>, #{timeout_ms => <<"wrong">>, what => not_even_close}),
+    {ok, Tokens, _} = erl_scan:string(binary_to_list(Message) ++ "."),
+    {ok, L} = erl_parse:parse_term(Tokens),
     [] = L -- [{what, not_even_close}, {timeout_ms, <<"wrong">>}].
 
 proxy_couldnt_connect(_) ->
@@ -516,12 +522,12 @@ proxy_post_data(_) ->
 %% session
 
 session_new(_) ->
-    Session = katipo_session:new(),
+    Session = katipo_session:new(?POOL),
     Url = <<"http://httpbin.org/cookies/set?cname=cvalue">>,
     Req = #{url => Url, followlocation => true},
     {{ok, #{status := 200, cookiejar := CookieJar, body := Body}}, Session2} =
         katipo_session:req(Req, Session),
-    {state, #{cookiejar := CookieJar}} = Session2,
+    {state, ?POOL, #{cookiejar := CookieJar}} = Session2,
     Json = jsx:decode(Body),
     [{<<"cname">>, <<"cvalue">>}] = proplists:get_value(<<"cookies">>, Json),
     [<<"httpbin.org\tFALSE\t/\tFALSE\t0\tcname\tcvalue">>] = CookieJar.
@@ -531,7 +537,7 @@ session_new_cookies(_) ->
     CookieJar = [<<"httpbin.org\tFALSE\t/\tFALSE\t0\tcname\tcvalue">>,
                  <<"httpbin.org\tFALSE\t/\tFALSE\t0\tcname2\tcvalue2">>],
     Req = #{url => Url, cookiejar => CookieJar, followlocation => true},
-    Session = katipo_session:new(Req),
+    Session = katipo_session:new(?POOL, Req),
     {{ok, #{status := 200, body := Body}}, Session2} =
         katipo_session:req(#{}, Session),
     Json = jsx:decode(Body),
@@ -545,7 +551,7 @@ session_new_cookies(_) ->
 session_new_headers(_) ->
     Req = #{url => <<"http://httpbin.org/cookies/delete?cname">>,
             headers => [{<<"header1">>, <<"dontcare">>}]},
-    Session = katipo_session:new(Req),
+    Session = katipo_session:new(?POOL, Req),
     {{ok, #{status := 200, body := Body}}, _Session2} =
         katipo_session:req(#{url => <<"http://httpbin.org/gzip">>,
                              headers => [{<<"header1">>, <<"!@#$%^&*()">>}]},
@@ -560,7 +566,7 @@ session_new_headers(_) ->
 session_update(_) ->
     Req = #{url => <<"http://httpbin.org/cookies/delete?cname">>,
             headers => [{<<"header1">>, <<"dontcare">>}]},
-    Session = katipo_session:new(Req),
+    Session = katipo_session:new(?POOL, Req),
     Req2 = #{url => <<"http://httpbin.org/gzip">>,
              headers => [{<<"header1">>, <<"!@#$%^&*()">>}]},
     Session2 = katipo_session:update(Req2, Session),

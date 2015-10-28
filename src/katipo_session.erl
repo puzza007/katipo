@@ -1,23 +1,24 @@
 -module(katipo_session).
 
--export([new/0]).
 -export([new/1]).
+-export([new/2]).
 -export([update/2]).
 -export([req/2]).
 
--record(state, {opts = #{} :: katipo:request()}).
+-record(state, {pool_name :: katipo_pool:name(),
+                opts = #{} :: katipo:request()}).
 
 -opaque session() :: #state{}.
 
 -export_type([session/0]).
 
--spec new() -> session().
-new() ->
-    new(#{}).
+-spec new(katipo_pool:name()) -> session().
+new(PoolName) ->
+    new(PoolName, #{}).
 
--spec new(katipo:request()) -> session().
-new(Opts) when is_map(Opts) ->
-    #state{opts = Opts}.
+-spec new(katipo_pool:name(), katipo:request()) -> session().
+new(PoolName, Opts) when is_map(Opts) ->
+    #state{pool_name=PoolName, opts = Opts}.
 
 -spec update(katipo:request(), session()) -> session().
 update(Opts, State=#state{}) when is_map(Opts) ->
@@ -25,9 +26,9 @@ update(Opts, State=#state{}) when is_map(Opts) ->
     State#state{opts=Opts2}.
 
 -spec req(katipo:request(), session()) -> {katipo:response(), session()}.
-req(Req, State=#state{opts=Opts}) when is_map(Req) ->
+req(Req, State=#state{pool_name=PoolName, opts=Opts}) when is_map(Req) ->
     Req2 = merge(Opts, Req),
-    Res = katipo:req(Req2),
+    Res = katipo:req(PoolName, Req2),
     Opts2 = case Res of
                 {ok, #{cookiejar := CookieJar}} ->
                     Opts#{cookiejar => CookieJar};
