@@ -10,20 +10,33 @@
 
 -opaque session() :: #state{}.
 
--export_type([session/0]).
+-type session_result() :: {ok, session()} | {error, map()}.
 
--spec new(katipo_pool:name()) -> session().
+-export_type([session/0]).
+-export_type([session_result/0]).
+
+-spec new(katipo_pool:name()) -> session_result().
 new(PoolName) ->
     new(PoolName, #{}).
 
--spec new(katipo_pool:name(), katipo:request()) -> session().
-new(PoolName, Opts) when is_map(Opts) ->
-    #state{pool_name=PoolName, opts = Opts}.
+-spec new(katipo_pool:name(), katipo:request()) -> session_result().
+new(PoolName, Opts) when is_atom(PoolName) andalso is_map(Opts) ->
+    State = #state{pool_name=PoolName, opts = Opts},
+    check_opts(State).
 
--spec update(katipo:request(), session()) -> session().
-update(Opts, State=#state{}) when is_map(Opts) ->
+-spec update(katipo:request(), session()) -> session_result().
+update(Opts, State=#state{}) ->
     Opts2 = merge(State#state.opts, Opts),
-    State#state{opts=Opts2}.
+    State2 = State#state{opts=Opts2},
+    check_opts(State2).
+
+check_opts(State=#state{opts=Opts}) ->
+    case katipo:check_opts(Opts) of
+        ok ->
+            {ok, State};
+        {error, _} = Error ->
+            Error
+    end.
 
 -spec req(katipo:request(), session()) -> {katipo:response(), session()}.
 req(Req, State=#state{pool_name=PoolName, opts=Opts}) when is_map(Req) ->

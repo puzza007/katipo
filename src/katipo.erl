@@ -29,6 +29,8 @@
 -export([delete/2]).
 -export([delete/3]).
 
+-export([check_opts/1]).
+
 %% only for mocking during tests
 -export([get_timeout/1]).
 
@@ -530,6 +532,15 @@ process_opts(Opts) ->
             {ok, Req};
         {#req{}, Errors} ->
             {error, error_map(bad_opts, Errors)}
+    end.
+
+-spec check_opts(request()) -> ok | {error, map()}.
+check_opts(Opts) when is_map(Opts) ->
+    case process_opts(Opts) of
+        {ok, _} ->
+            ok;
+        {error, _} = Error ->
+            Error
     end.
 
 error_map(Code, Message) when is_atom(Code) andalso is_binary(Message) ->
