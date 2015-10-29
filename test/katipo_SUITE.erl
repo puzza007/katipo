@@ -137,7 +137,9 @@ groups() ->
       [max_total_connections]},
      {metrics, [],
       [metrics_true,
-       metrics_false]}].
+       metrics_false]},
+     {stream, [],
+      [stream_chunked_data]}].
 
 all() ->
     [{group, http},
@@ -146,7 +148,8 @@ all() ->
      {group, proxy},
      {group, session},
      {group, port},
-     {group, metrics}].
+     {group, metrics},
+     {group, stream}].
 
 get(_) ->
     {ok, #{status := 200, body := Body}} =
@@ -672,6 +675,40 @@ metrics_false(_) ->
     {ok, #{status := 200} = Res} =
         katipo:head(?POOL, <<"http://httpbin.org/get">>, #{return_metrics => false}),
     false = maps:is_key(metrics, Res).
+
+process_stream(Receiver) ->
+    process_stream(Receiver, orddict:new()).
+
+process_stream(Receiver, Dict0) ->
+    receive
+        {status, {_, {#{state := Status}, _}}} ->
+            error_logger:info_msg("Status"),
+            Dict1 = orddict:store(status, Status, Dict0),
+            process_stream(Receiver, Dict1);
+        {headers, {_, {#{headers := Headers}, _}}} ->
+            error_logger:info_msg("Headers"),
+            Dict1 = orddict:store(headers, Headers, Dict0),
+            process_stream(Receiver, Dict1);
+        {done, _} -> Receiver ! {ok, Dict0};
+        {chunk, {_, {#{chunk := Chunk}, _}}} ->
+            error_logger:info_msg("Chunk"),
+            Dict1 = orddict:append(body, Chunk, Dict0),
+            process_stream(Receiver, Dict1);
+        _ -> Receiver ! {error, wrong_result}
+    end.
+
+stream_chunked_data(_) ->
+    Url = <<"http://httpbin.org/bytes/1024?seed=9999&chunk_size=8">>,
+    _ = katipo:get(Url,
+                   #{stream_to => process_stream(self())}),
+    receive
+        {ok, #{status := Status, headers := Headers, body := Body}} ->
+            200 = Status,
+            _ = Headers,
+            _ = Body;
+        _ ->
+            erlang:error(bad_stream_response)
+    end.
 
 repeat_until_true(Fun) ->
     try

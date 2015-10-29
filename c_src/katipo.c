@@ -106,6 +106,18 @@ typedef struct _EasyOpts {
   long curlopt_stream;
 } EasyOpts;
 
+static void log_message(const char *text) {
+  FILE *f = fopen("log.txt", "a");
+  if (f == NULL) {
+    printf("Error opening file!\n");
+    exit(1);
+  }
+
+  fprintf(f, "%s\n", text);
+
+  fclose(f);
+}
+
 static const char *curl_error_code(CURLcode error) {
   switch (error) {
     case CURLE_OK:
@@ -677,6 +689,7 @@ static size_t stream_write_cb(void *ptr, size_t size, size_t nmemb, void *data) 
   ConnInfo *conn = (ConnInfo *)data;
 
   if (conn->headers_sent == 0) {
+    log_message("send_headers_to_erlang");
     send_headers_to_erlang(conn);
     conn->headers_sent = 1;
   }
@@ -688,6 +701,7 @@ static size_t stream_write_cb(void *ptr, size_t size, size_t nmemb, void *data) 
   memcpy(&(conn->memory[0]), ptr, realsize);
   conn->size = realsize;
 
+  log_message("send_chunk_to_erlang");
   send_chunk_to_erlang(conn);
 
   return realsize;
@@ -737,6 +751,7 @@ static size_t stream_header_cb(void *ptr, size_t size, size_t nmemb, void *data)
     conn->num_headers++;
 
     if (is_status_header) {
+      log_message("send_status_to_erlang");
       send_status_to_erlang(conn);
     }
   }
@@ -784,6 +799,8 @@ static void new_conn(long method, char *url, struct curl_slist *req_headers,
   ConnInfo *conn;
   CURLMcode rc;
   struct curl_slist *nc;
+
+  log_message("new_conn");
 
   conn = calloc(1, sizeof(ConnInfo));
   memset(conn, 0, sizeof(ConnInfo));
@@ -892,6 +909,8 @@ static void new_conn(long method, char *url, struct curl_slist *req_headers,
 }
 
 static void erl_input(struct bufferevent *ev, void *arg) {
+  log_message("erl_input");
+
   u_int32_t len;
   size_t data_read;
   char *buf;
@@ -1151,6 +1170,7 @@ static void erl_error(struct bufferevent *ev, short event, void *ud) {
 }
 
 static void erlang_init(GlobalInfo *global) {
+  log_message("erlang_init");
   from_erlang =
       bufferevent_new(STDIN_FILENO, erl_input, NULL, erl_error, global);
   if (from_erlang == NULL) {
@@ -1178,6 +1198,8 @@ int main(int argc, char **argv) {
     { "max-total-connections", required_argument, 0, 'c' },
     { 0, 0, 0, 0 }
   };
+
+  log_message("main");
 
   memset(&global, 0, sizeof(GlobalInfo));
   global.evbase = event_init();
