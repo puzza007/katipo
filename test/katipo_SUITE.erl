@@ -106,13 +106,16 @@ groups() ->
        cacert_self_signed]},
      {proxy, [],
       [proxy_get,
-       proxy_post_data]}].
+       proxy_post_data]},
+     {stream, [],
+      [stream_chunked_data]}].
 
 all() ->
     [{group, http},
      {group, pool},
      {group, https},
-     {group, proxy}].
+     {group, proxy},
+     {group, stream}].
 
 get(_) ->
     {ok, #{status := 200, body := Body}} =
@@ -410,6 +413,40 @@ proxy_post_data(_) ->
                       proxy => <<"http://localhost:3128">>}),
     Json = jsx:decode(Body),
     <<"!@#$%^&*()">> = proplists:get_value(<<"data">>, Json).
+
+process_stream(Receiver) ->
+    process_stream(Receiver, orddict:new()).
+
+process_stream(Receiver, Dict0) ->
+    receive
+        {status, {_, {#{state := Status}, _}}} ->
+            error_logger:info_msg("Status"),
+            Dict1 = orddict:store(status, Status, Dict0),
+            process_stream(Receiver, Dict1);
+        {headers, {_, {#{headers := Headers}, _}}} ->
+            error_logger:info_msg("Headers"),
+            Dict1 = orddict:store(headers, Headers, Dict0),
+            process_stream(Receiver, Dict1);
+        {done, _} -> Receiver ! {ok, Dict0};
+        {chunk, {_, {#{chunk := Chunk}, _}}} ->
+            error_logger:info_msg("Chunk"),
+            Dict1 = orddict:append(body, Chunk, Dict0),
+            process_stream(Receiver, Dict1);
+        _ -> Receiver ! {error, wrong_result}
+    end.
+
+stream_chunked_data(_) ->
+    Url = <<"http://httpbin.org/bytes/1024?seed=9999&chunk_size=8">>,
+    _ = katipo:get(Url,
+                   #{stream_to => process_stream(self())}),
+    receive
+        {ok, #{status := Status, headers := Headers, body := Body}} ->
+            200 = Status,
+            _ = Headers,
+            _ = Body;
+        _ ->
+            erlang:error(bad_stream_response)
+    end.
 
 repeat_until_true(Fun) ->
     try

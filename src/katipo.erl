@@ -381,24 +381,30 @@ handle_info({Port, {data, Data}}, State=#state{port=Port, reqs=Reqs, streams=Str
     {Result, {From, Response}} =
         case binary_to_term(Data) of
             {ok, {From0, {Status, Headers, CookieJar, Body, Metrics}}} ->
+                error_logger:info_msg("Ok0"),
                 R = #{status => Status,
                       headers => parse_headers(Headers),
                       cookiejar => CookieJar,
                       body => Body},
                 {ok, {From0, {R, Metrics}}};
             {status, {From0, {Status, _, _, _, Metrics}}} ->
+                error_logger:info_msg("Status0"),
                 R = #{status => Status},
                 {status, {From0, {R, Metrics}}};
             {headers, {From0, {_, Headers, _, _, Metrics}}} ->
+                error_logger:info_msg("Headers0"),
                 R = #{headers => parse_headers(Headers)},
                 {headers, {From0, {R, Metrics}}};
             {chunk, {From0, {_, _, _, Body, Metrics}}} ->
+                error_logger:info_msg("Chunk0"),
                 R = #{chunk => Body},
                 {chunk, {From0, {R, Metrics}}};
             {done, {From0, {_, _, CookieJar, _, Metrics}}} ->
+                error_logger:info_msg("Done0"),
                 R = #{cookiejar => CookieJar},
                 {done, {From0, {R, Metrics}}};
             {error, {From0, {Code, Message, Metrics}}} ->
+                error_logger:info_msg("Error0"),
                 Error = #{code => Code, message => Message},
                 {error, {From0, {Error, Metrics}}}
         end,
