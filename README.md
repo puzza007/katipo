@@ -1,15 +1,14 @@
 katipo
 =====
 
-[![Build Status][travis_ci_image]][travis_ci]
-
 An HTTP library for Erlang built around libcurl-multi and libevent.
 
 ### Status
 
 Beta
 
-[Hex.pm package](https://hex.pm/packages/katipo)
+[![Build Status][travis_ci_image]][travis_ci]
+[![Hex pm](http://img.shields.io/hexpm/v/katipo.svg?style=flat)](https://hex.pm/packages/katipo)
 
 ### Usage
 
