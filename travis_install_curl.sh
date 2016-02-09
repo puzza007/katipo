@@ -18,8 +18,8 @@ function travis_artifacts_install() {
 # it now rather than later
 travis_artifacts_install
 
-wget https://github.com/bagder/curl/releases/download/curl-7_46_0/curl-7.46.0.tar.gz
-tar zxf curl-7.46.0.tar.gz
-cd curl-7.46.0
+wget --no-check-certificate https://curl.haxx.se/download/curl-7.47.1.tar.gz
+tar zxf curl-7.47.1.tar.gz
+cd curl-7.47.1
 ./configure --enable-silent-rules && make && sudo make install
 
