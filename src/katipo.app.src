@@ -13,8 +13,7 @@
    ]},
   {env,[
         {max_pipeline_length, 100},
-        {pipelining, false},
-        {pool_type, round_robin}
+        {pipelining, false}
        ]},
   {modules, []},
   {maintainers, ["Paul Oliver"]},

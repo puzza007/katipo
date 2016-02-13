@@ -14,6 +14,8 @@ Beta
 
 ```erlang
 {ok, _} = application:ensure_all_started(katipo).
+Pool = api_server,
+{ok, _} = katipo_pool:start(api_server, 2, [{pipelining, true}]).
 Url = <<"https://example.com">>.
 ReqHeaders = [{<<"User-Agent">>, <<"katipo">>}].
 Opts = #{headers => ReqHeaders,
@@ -25,13 +27,15 @@ Opts = #{headers => ReqHeaders,
 {ok, #{status := 200,
        headers := RespHeaders,
        cookiejar := CookieJar,
-       body := RespBody}} = katipo:post(Url, Opts).
+       body := RespBody}} = katipo:post(Pool, Url, Opts).
 ```
 
 Or passing the entire request as a map
 
 ```erlang
 {ok, _} = application:ensure_all_started(katipo).
+Pool = api_server,
+{ok, _} = katipo_pool:start(api_server, 2, [{pipelining, true}]).
 ReqHeaders = [{<<"User-Agent">>, <<"katipo">>}].
 Req = #{url => <<"https://example.com">>.
         method => post,
@@ -44,7 +48,7 @@ Req = #{url => <<"https://example.com">>.
 {ok, #{status := 200,
        headers := RespHeaders,
        cookiejar := CookieJar,
-       body := RespBody}} = katipo:req(Req).
+       body := RespBody}} = katipo:req(Pool, Req).
 ```
 
 
@@ -61,10 +65,9 @@ along with the libcurl-multi interface.
 
 ```erlang
 -type method() :: get | post | put | head | options.
-
-katipo:req(Req :: map()).
-katipo:Method(URL :: binary()).
-katipo:Method(URL :: binary(), Options :: map()).
+katipo:req(Pool :: atom(), Req :: map()).
+katipo:Method(Pool :: atom(), URL :: binary()).
+katipo:Method(Pool :: atom(), URL :: binary(), Options :: map()).
 
 ```
 
@@ -102,8 +105,6 @@ katipo:Method(URL :: binary(), Options :: map()).
 |:----------------------|:---------------------|:----------------- |----------------------------------------|
 | `pipelining`          | `boolean()`          | `false`           | HTTP pipelining                        |
 | `max_pipeline_length` | `non_neg_integer()`  | 100               |                                        |
-| `pool_size`           | `pos_integer()`      | `erlang:system_info(schedulers)`     | Typically one port executable per core |
-| `pool_type`           | `round_robin | hash` | `round_robin`     | Hash is potentially useful when pipelining |
 
 #### Metrics
 

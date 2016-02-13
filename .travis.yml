@@ -3,7 +3,8 @@ sudo: true
 language: erlang
 
 otp_release:
-  - 17.5
+  - 18.0
+  - 18.1
   - 18.2
 
 script: make update test dialyzer
