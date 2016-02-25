@@ -35,21 +35,32 @@ init_per_group(https, Config) ->
     [{cacert_file, list_to_binary(CACert)} | Config];
 init_per_group(proxy, Config) ->
     application:ensure_all_started(http_proxy),
-    {ok, HttpProxyService} = http_proxy:start(3128, []),
-    [{http_proxy, HttpProxyService} | Config];
+    Config;
 init_per_group(_, Config) ->
-    application:ensure_all_started(http_proxy),
     Config.
 
 end_per_group(pool, Config) ->
     application:stop(meck),
     Config;
 end_per_group(proxy, Config) ->
-    HttpProxyService = ?config(http_proxy, Config),
-    ok = http_proxy:stop(HttpProxyService),
     application:stop(http_proxy),
     Config;
 end_per_group(_, Config) ->
+    Config.
+
+init_per_testcase(TestCase, Config)
+  when TestCase == proxy_get orelse TestCase == proxy_post_data ->
+    {ok, HttpProxyService} = http_proxy:start(3128, []),
+    [{http_proxy, HttpProxyService} | Config];
+init_per_testcase(_, Config) ->
+    Config.
+
+end_per_testcase(TestCase, Config)
+  when TestCase == proxy_get orelse TestCase == proxy_post_data ->
+    HttpProxyService = ?config(http_proxy, Config),
+    ok = http_proxy:stop(HttpProxyService),
+    proplists:delete(http_proxy, Config);
+end_per_testcase(_, Config) ->
     Config.
 
 groups() ->
