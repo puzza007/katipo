@@ -65,9 +65,12 @@ along with the libcurl-multi interface.
 
 ```erlang
 -type method() :: get | post | put | head | options.
+katipo_pool:start(Name :: atom(), size :: pos_integer(), PoolOptions :: proplist()).
+katipo_pool:stop(Name :: atom()).
+
 katipo:req(Pool :: atom(), Req :: map()).
 katipo:Method(Pool :: atom(), URL :: binary()).
-katipo:Method(Pool :: atom(), URL :: binary(), Options :: map()).
+katipo:Method(Pool :: atom(), URL :: binary(), ReqOptions :: map()).
 
 ```
 
@@ -99,7 +102,7 @@ katipo:Method(Pool :: atom(), URL :: binary(), Options :: map()).
 {error, #{code => atom(), message => binary()}}
 ```
 
-#### Application config
+#### Pool Options
 
 | Option                | Type                 | Default           | Note                                   |
 |:----------------------|:---------------------|:----------------- |----------------------------------------|

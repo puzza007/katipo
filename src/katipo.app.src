@@ -1,6 +1,6 @@
 {application, 'katipo',
  [{description, "HTTP client based on libcurl"},
-  {vsn, "0.2.4"},
+  {vsn, "0.3.0"},
   {registered, []},
   {mod, {'katipo_app', []}},
   {applications,
@@ -11,10 +11,7 @@
     uri,
     quintana
    ]},
-  {env,[
-        {max_pipeline_length, 100},
-        {pipelining, false}
-       ]},
+  {env,[]},
   {modules, []},
   {maintainers, ["Paul Oliver"]},
   {licenses, ["MIT"]},
