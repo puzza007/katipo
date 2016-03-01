@@ -4,7 +4,7 @@
 
 -compile({no_auto_import,[put/2]}).
 
--export([start_link/2]).
+-export([start_link/3]).
 
 -export([init/1]).
 -export([handle_call/3]).
@@ -13,21 +13,21 @@
 -export([terminate/2]).
 -export([code_change/3]).
 
--export([req/1]).
--export([get/1]).
+-export([req/2]).
 -export([get/2]).
--export([post/1]).
+-export([get/3]).
 -export([post/2]).
--export([put/1]).
+-export([post/3]).
 -export([put/2]).
--export([head/1]).
+-export([put/3]).
 -export([head/2]).
--export([options/1]).
+-export([head/3]).
 -export([options/2]).
--export([patch/1]).
+-export([options/3]).
 -export([patch/2]).
--export([delete/1]).
+-export([patch/3]).
 -export([delete/2]).
+-export([delete/3]).
 
 %% only for mocking during tests
 -export([get_timeout/1]).
@@ -68,6 +68,7 @@
 
 -define(METHODS, [get, post, put, head, options, patch, delete]).
 
+-type pool() :: atom().
 -type method() :: get | post | put | head | options | patch | delete.
 -type method_int() :: ?get | ?post | ?put | ?head | ?options | ?patch | ?delete.
 -type url() :: binary().
@@ -237,73 +238,73 @@
           proxy = undefined :: undefined | binary()
          }).
 
--spec get(url()) -> response().
-get(Url) ->
-    get(Url, #{}).
+-spec get(pool(), url()) -> response().
+get(PoolName, Url) ->
+    get(PoolName, Url, #{}).
 
--spec get(url(), map()) -> response().
-get(Url, Opts) ->
-    req(Opts#{url => Url, method => get}).
+-spec get(pool(), url(), map()) -> response().
+get(PoolName, Url, Opts) ->
+    req(PoolName, Opts#{url => Url, method => get}).
 
--spec post(url()) -> response().
-post(Url) ->
-    post(Url, #{}).
+-spec post(pool(), url()) -> response().
+post(PoolName, Url) ->
+    post(PoolName, Url, #{}).
 
--spec post(url(), map()) -> response().
-post(Url, Opts) ->
-    req(Opts#{url => Url, method => post}).
+-spec post(pool(), url(), map()) -> response().
+post(PoolName, Url, Opts) ->
+    req(PoolName, Opts#{url => Url, method => post}).
 
--spec put(url()) -> response().
-put(Url) ->
-    put(Url, #{}).
+-spec put(pool(), url()) -> response().
+put(PoolName, Url) ->
+    put(PoolName, Url, #{}).
 
--spec put(url(), map()) -> response().
-put(Url, Opts) ->
-    req(Opts#{url => Url, method => put}).
+-spec put(pool(), url(), map()) -> response().
+put(PoolName, Url, Opts) ->
+    req(PoolName, Opts#{url => Url, method => put}).
 
--spec head(url()) -> response().
-head(Url) ->
-    head(Url, #{}).
+-spec head(pool(), url()) -> response().
+head(PoolName, Url) ->
+    head(PoolName, Url, #{}).
 
--spec head(url(), map()) -> response().
-head(Url, Opts) ->
-    req(Opts#{url => Url, method => head}).
+-spec head(pool(), url(), map()) -> response().
+head(PoolName, Url, Opts) ->
+    req(PoolName, Opts#{url => Url, method => head}).
 
--spec options(url()) -> response().
-options(Url) ->
-    options(Url, #{}).
+-spec options(pool(), url()) -> response().
+options(PoolName, Url) ->
+    options(PoolName, Url, #{}).
 
--spec options(url(), map()) -> response().
-options(Url, Opts) ->
-    req(Opts#{url => Url, method => options}).
+-spec options(pool(), url(), map()) -> response().
+options(PoolName, Url, Opts) ->
+    req(PoolName, Opts#{url => Url, method => options}).
 
--spec patch(url()) -> response().
-patch(Url) ->
-    patch(Url, #{}).
+-spec patch(pool(), url()) -> response().
+patch(PoolName, Url) ->
+    patch(PoolName, Url, #{}).
 
--spec patch(url(), map()) -> response().
-patch(Url, Opts) ->
-    req(Opts#{url => Url, method => patch}).
+-spec patch(pool(), url(), map()) -> response().
+patch(PoolName, Url, Opts) ->
+    req(PoolName, Opts#{url => Url, method => patch}).
 
--spec delete(url()) -> response().
-delete(Url) ->
-    delete(Url, #{}).
+-spec delete(pool(), url()) -> response().
+delete(PoolName, Url) ->
+    delete(PoolName, Url, #{}).
 
--spec delete(url(), map()) -> response().
-delete(Url, Opts) ->
-    req(Opts#{url => Url, method => delete}).
+-spec delete(pool(), url(), map()) -> response().
+delete(PoolName, Url, Opts) ->
+    req(PoolName, Opts#{url => Url, method => delete}).
 
--spec req(map()) -> response().
-req(Opts)
+-spec req(pool(), map()) -> response().
+req(PoolName, Opts)
   when is_map(Opts) ->
     case process_opts(Opts) of
         {ok, #req{url=undefined}} ->
             {error, {bad_opts, [{url, undefined}]}};
-        {ok, Req=#req{url=Url}} ->
+        {ok, Req=#req{}} ->
             Timeout = ?MODULE:get_timeout(Req),
             Req2 = Req#req{timeout=Timeout},
             Ts = os:timestamp(),
-            Pid = get_worker(Url),
+            Pid = gproc_pool:pick_worker(PoolName),
             Res = gen_server:call(Pid, Req2, infinity),
             TotalUs = timer:now_diff(os:timestamp(), Ts),
             process_metrics(Res, TotalUs);
@@ -313,16 +314,17 @@ req(Opts)
             Error
     end.
 
-start_link(CurlOpts, WorkerId) when is_list(CurlOpts) andalso
-                                    is_atom(WorkerId) ->
-    gen_server:start_link({local, WorkerId}, ?MODULE, [CurlOpts, WorkerId], []).
+start_link(PoolName, CurlOpts, WorkerId) when is_list(CurlOpts) andalso
+                                              is_atom(WorkerId) ->
+    Args = [PoolName, CurlOpts, WorkerId],
+    gen_server:start_link(?MODULE, Args, []).
 
-init([CurlOpts, WorkerId]) ->
+init([PoolName, CurlOpts, WorkerId]) ->
     process_flag(trap_exit, true),
     Args = get_mopts(CurlOpts),
     Prog = filename:join([code:priv_dir(katipo), "katipo"]),
     Port = open_port({spawn, Prog ++ " " ++ Args}, [{packet, 4}, binary]),
-    true = gproc_pool:connect_worker(katipo, WorkerId),
+    true = gproc_pool:connect_worker(PoolName, WorkerId),
     {ok, #state{port=Port, reqs=#{}}}.
 
 handle_call(#req{method = Method,
@@ -566,22 +568,3 @@ process_opts(Opts) ->
         {#req{}, Errors} ->
             {error, {bad_opts, Errors}}
     end.
-
--spec get_worker(url()) -> pid().
-get_worker(Url) ->
-    Pid = case application:get_env(katipo, pool_type, round_robin) of
-              round_robin ->
-                  gproc_pool:pick_worker(katipo);
-              hash ->
-                  HostAndPort = host_and_port(Url),
-                  gproc_pool:pick_worker(katipo, HostAndPort)
-          end,
-    case Pid of
-        Pid when is_pid(Pid) ->
-            Pid
-    end.
-
-host_and_port(Url) when is_binary(Url) ->
-    UrlList = binary_to_list(Url),
-    {ok, {_, _, Hostname, Port, _, _}} = uri:parse(UrlList),
-    {Hostname, Port}.
