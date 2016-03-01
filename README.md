@@ -16,7 +16,7 @@ Beta
 ```erlang
 {ok, _} = application:ensure_all_started(katipo).
 Pool = api_server,
-{ok, _} = katipo_pool:start(api_server, 2, [{pipelining, true}]).
+{ok, _} = katipo_pool:start(Pool, 2, [{pipelining, true}]).
 Url = <<"https://example.com">>.
 ReqHeaders = [{<<"User-Agent">>, <<"katipo">>}].
 Opts = #{headers => ReqHeaders,
@@ -36,7 +36,7 @@ Or passing the entire request as a map
 ```erlang
 {ok, _} = application:ensure_all_started(katipo).
 Pool = api_server,
-{ok, _} = katipo_pool:start(api_server, 2, [{pipelining, true}]).
+{ok, _} = katipo_pool:start(Pool, 2, [{pipelining, true}]).
 ReqHeaders = [{<<"User-Agent">>, <<"katipo">>}].
 Req = #{url => <<"https://example.com">>.
         method => post,
@@ -56,6 +56,8 @@ Session interface. Cookies handled automatically and options merged. Inspired by
 
 ```erlang
 {ok, _} = application:ensure_all_started(katipo).
+Pool = api_server,
+{ok, _} = katipo_pool:start(Pool, 2, [{pipelining, true}]).
 ReqHeaders = [{<<"User-Agent">>, <<"katipo">>}].
 Opts = #{url => <<"https://example.com">>.
          method => post,
@@ -64,7 +66,7 @@ Opts = #{url => <<"https://example.com">>.
          proxy => <<"http://127.0.0.1:9000">>,
          sslverifyhost => false,
          sslverifypeer => false}.
-{ok, Session} = katipo_session:new(Opts).
+{ok, Session} = katipo_session:new(Pool, Opts).
 {{ok, #{status := 200}}, Session2} =
     katipo_session:req(#{body => <<"some data">>}, Session).
 {{ok, #{status := 200}}, Session3} =
