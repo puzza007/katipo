@@ -1,6 +1,6 @@
 {application, 'katipo',
  [{description, "HTTP client based on libcurl"},
-  {vsn, "0.3.0"},
+  {vsn, "0.3.1"},
   {registered, []},
   {mod, {'katipo_app', []}},
   {applications,
@@ -8,7 +8,6 @@
     stdlib,
     cowlib,
     gproc,
-    uri,
     quintana
    ]},
   {env,[]},
