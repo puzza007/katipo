@@ -105,6 +105,7 @@ groups() ->
       [pool_start_stop,
        pool_death,
        worker_death,
+       port_death,
        port_late_response]},
      {https, [],
       [verify_host_verify_peer_ok,
@@ -293,7 +294,7 @@ followlocation_true(_) ->
 
 followlocation_false(_) ->
     {ok, #{status := 302}} =
-        katipo:get(?POOL, <<"http://httpbin.org/redirect/6">>).
+        katipo:get(?POOL, <<"http://httpbin.org/redirect/6">>, #{followlocation => false}).
 
 maxredirs(_) ->
     Opts = #{followlocation => true, maxredirs => 2},
@@ -407,6 +408,22 @@ worker_death(_) ->
                    true
            end,
     true = repeat_until_true(Fun3).
+
+port_death(_) ->
+    PoolName = this_process_will_be_killed,
+    PoolSize = 1,
+    {ok, _} = katipo_pool:start(PoolName, PoolSize, []),
+    {state, Port, _} = sys:get_state(gproc_pool:pick_worker(PoolName)),
+    true = port_command(Port, <<"hdfjkshkjsdfgjsgafdjgsdjgfj">>),
+    Fun = fun() ->
+                  case sys:get_state(gproc_pool:pick_worker(PoolName)) of
+                      {state, Port2, _} when Port =/= Port2 ->
+                          {ok, #{status := 200}} =
+                              katipo:get(PoolName, <<"http://httpbin.org/get">>),
+                          true
+                  end
+          end,
+    true = repeat_until_true(Fun).
 
 port_late_response(_) ->
     ok = meck:new(katipo, [passthrough]),

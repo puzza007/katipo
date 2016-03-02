@@ -366,7 +366,8 @@ handle_call(#req{method = Method,
     Reqs2 = maps:put(From, Tref, Reqs),
     {noreply, State#state{reqs=Reqs2}}.
 
-handle_cast(_Msg, State) ->
+handle_cast(Msg, State) ->
+    error_logger:error_msg("Unexpected cast: ~p", [Msg]),
     {noreply, State}.
 
 handle_info({Port, {data, Data}}, State=#state{port=Port, reqs=Reqs}) ->
@@ -404,7 +405,8 @@ handle_info({timeout, Tref, {req_timeout, From}}, State=#state{reqs=Reqs}) ->
         end,
     {noreply, State#state{reqs=Reqs2}};
 handle_info({'EXIT', Port, Reason}, State=#state{port=Port}) ->
-    {stop, Reason, State}.
+    error_logger:error_msg("Port ~p died with reason: ~p", [Port, Reason]),
+    {stop, port_died, State}.
 
 terminate(_Reason, #state{port=Port}) ->
     true = port_close(Port),
