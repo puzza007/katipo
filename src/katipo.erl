@@ -68,7 +68,6 @@
 
 -define(METHODS, [get, post, put, head, options, patch, delete]).
 
--type pool() :: atom().
 -type method() :: get | post | put | head | options | patch | delete.
 -type method_int() :: ?get | ?post | ?put | ?head | ?options | ?patch | ?delete.
 -type url() :: binary().
@@ -203,6 +202,7 @@
 -type response() :: {ok, map()} | {error, map()}.
 -type http_auth() :: basic | digest.
 -type http_auth_int() :: ?CURLAUTH_BASIC | ?CURLAUTH_DIGEST.
+-type curlmopts() :: [{max_pipeline_length, non_neg_integer()} | {pipelining, boolean()}].
 
 -export_type([method/0]).
 -export_type([url/0]).
@@ -216,6 +216,7 @@
 -export_type([body/0]).
 -export_type([response/0]).
 -export_type([http_auth/0]).
+-export_type([curlmopts/0]).
 
 -record(req, {
           method = ?get :: method_int(),
@@ -238,63 +239,63 @@
           proxy = undefined :: undefined | binary()
          }).
 
--spec get(pool(), url()) -> response().
+-spec get(katipo_pool:name(), url()) -> response().
 get(PoolName, Url) ->
     get(PoolName, Url, #{}).
 
--spec get(pool(), url(), map()) -> response().
+-spec get(katipo_pool:name(), url(), map()) -> response().
 get(PoolName, Url, Opts) ->
     req(PoolName, Opts#{url => Url, method => get}).
 
--spec post(pool(), url()) -> response().
+-spec post(katipo_pool:name(), url()) -> response().
 post(PoolName, Url) ->
     post(PoolName, Url, #{}).
 
--spec post(pool(), url(), map()) -> response().
+-spec post(katipo_pool:name(), url(), map()) -> response().
 post(PoolName, Url, Opts) ->
     req(PoolName, Opts#{url => Url, method => post}).
 
--spec put(pool(), url()) -> response().
+-spec put(katipo_pool:name(), url()) -> response().
 put(PoolName, Url) ->
     put(PoolName, Url, #{}).
 
--spec put(pool(), url(), map()) -> response().
+-spec put(katipo_pool:name(), url(), map()) -> response().
 put(PoolName, Url, Opts) ->
     req(PoolName, Opts#{url => Url, method => put}).
 
--spec head(pool(), url()) -> response().
+-spec head(katipo_pool:name(), url()) -> response().
 head(PoolName, Url) ->
     head(PoolName, Url, #{}).
 
--spec head(pool(), url(), map()) -> response().
+-spec head(katipo_pool:name(), url(), map()) -> response().
 head(PoolName, Url, Opts) ->
     req(PoolName, Opts#{url => Url, method => head}).
 
--spec options(pool(), url()) -> response().
+-spec options(katipo_pool:name(), url()) -> response().
 options(PoolName, Url) ->
     options(PoolName, Url, #{}).
 
--spec options(pool(), url(), map()) -> response().
+-spec options(katipo_pool:name(), url(), map()) -> response().
 options(PoolName, Url, Opts) ->
     req(PoolName, Opts#{url => Url, method => options}).
 
--spec patch(pool(), url()) -> response().
+-spec patch(katipo_pool:name(), url()) -> response().
 patch(PoolName, Url) ->
     patch(PoolName, Url, #{}).
 
--spec patch(pool(), url(), map()) -> response().
+-spec patch(katipo_pool:name(), url(), map()) -> response().
 patch(PoolName, Url, Opts) ->
     req(PoolName, Opts#{url => Url, method => patch}).
 
--spec delete(pool(), url()) -> response().
+-spec delete(katipo_pool:name(), url()) -> response().
 delete(PoolName, Url) ->
     delete(PoolName, Url, #{}).
 
--spec delete(pool(), url(), map()) -> response().
+-spec delete(katipo_pool:name(), url(), map()) -> response().
 delete(PoolName, Url, Opts) ->
     req(PoolName, Opts#{url => Url, method => delete}).
 
--spec req(pool(), map()) -> response().
+-spec req(katipo_pool:name(), map()) -> response().
 req(PoolName, Opts)
   when is_map(Opts) ->
     case process_opts(Opts) of
