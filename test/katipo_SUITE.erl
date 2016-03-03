@@ -86,6 +86,7 @@ groups() ->
        statuses,
        cookies,
        cookies_delete,
+       cookies_bad_cookie_jar,
        bytes,
        stream_bytes,
        utf8,
@@ -278,6 +279,12 @@ cookies_delete(_) ->
         katipo:get(?POOL, Url, #{cookiejar => CookieJar, followlocation => true}),
     Json = jsx:decode(Body),
     [{}] = proplists:get_value(<<"cookies">>, Json).
+
+cookies_bad_cookie_jar(_) ->
+    Url = <<"http://httpbin.org/cookies/delete?cname">>,
+    CookieJar = ["has to be a binary"],
+    {error, {bad_opts, [{cookiejar, ["has to be a binary"]}]}} =
+        katipo:get(?POOL, Url, #{cookiejar => CookieJar}).
 
 %% TODO
 redirect_to(_) ->
