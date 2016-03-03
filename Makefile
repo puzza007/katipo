@@ -1,4 +1,4 @@
-REBAR?=./rebar3
+REBAR?=rebar3
 
 .PHONY: \
 	all \
@@ -23,3 +23,6 @@ update:
 
 dialyzer:
 	@$(REBAR) dialyzer
+
+coveralls:
+	@${REBAR} coveralls send
