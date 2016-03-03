@@ -76,6 +76,7 @@ groups() ->
        put_data,
        put_qs,
        patch_data,
+       patch_arity_2,
        patch_qs,
        headers,
        header_remove,
@@ -195,6 +196,12 @@ patch_data(_) ->
                    #{headers => Headers, body => <<"!@#$%^&*()">>}),
     Json = jsx:decode(Body),
     <<"!@#$%^&*()">> = proplists:get_value(<<"data">>, Json).
+
+patch_arity_2(_) ->
+    {ok, #{status := 200, body := Body}} =
+        katipo:patch(?POOL, <<"http://httpbin.org/patch">>),
+    Json = jsx:decode(Body),
+    <<>> = proplists:get_value(<<"data">>, Json).
 
 patch_qs(_) ->
     QsVals = [{<<"foo">>, <<"bar">>}, {<<"baz">>, true}],
