@@ -69,11 +69,13 @@ groups() ->
        get_req,
        head,
        post_data,
+       post_arity_2,
        post_qs,
        post_req,
        url_missing,
        bad_method,
        put_data,
+       put_arity_2,
        put_qs,
        patch_data,
        patch_qs,
@@ -145,6 +147,12 @@ post_data(_) ->
     Json = jsx:decode(Body),
     <<"!@#$%^&*()">> = proplists:get_value(<<"data">>, Json).
 
+post_arity_2(_) ->
+    {ok, #{status := 200, body := Body}} =
+        katipo:post(?POOL, <<"http://httpbin.org/post">>),
+    Json = jsx:decode(Body),
+    undefined = proplists:get_value(<<>>, Json).
+
 post_qs(_) ->
     QsVals = [{<<"foo">>, <<"bar">>}, {<<"baz">>, true}],
     {ok, #{status := 200, body := Body}} =
@@ -180,6 +188,12 @@ put_data(_) ->
                    #{headers => Headers, body => <<"!@#$%^&*()">>}),
     Json = jsx:decode(Body),
     <<"!@#$%^&*()">> = proplists:get_value(<<"data">>, Json).
+
+put_arity_2(_) ->
+    {ok, #{status := 200, body := Body}} =
+        katipo:put(?POOL, <<"http://httpbin.org/put">>),
+    Json = jsx:decode(Body),
+    undefined = proplists:get_value(<<>>, Json).
 
 put_qs(_) ->
     QsVals = [{<<"foo">>, <<"bar">>}, {<<"baz">>, true}],
