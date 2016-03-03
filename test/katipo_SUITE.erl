@@ -16,7 +16,7 @@ init_per_suite(Config) ->
     Config.
 
 end_per_suite(_Config) ->
-    ok.
+    ok = application:stop(katipo).
 
 init_per_group(pool, Config) ->
     application:ensure_all_started(meck),
