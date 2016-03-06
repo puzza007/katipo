@@ -306,12 +306,13 @@ req(PoolName, Opts)
             Req2 = Req#req{timeout=Timeout},
             Ts = os:timestamp(),
             Pid = gproc_pool:pick_worker(PoolName),
-            Res = gen_server:call(Pid, Req2, infinity),
+            {Result, {Response, Metrics}} = gen_server:call(Pid, Req2, infinity),
             TotalUs = timer:now_diff(os:timestamp(), Ts),
-            process_metrics(Res, TotalUs);
+            Ret = {Result, Response},
+            ok = katipo_metrics:notify(Ret, Metrics, TotalUs),
+            Ret;
         {error, _} = Error ->
-            ErrorMetric = metric_name(error),
-            quintana:notify_spiral(ErrorMetric, 1),
+            ok = katipo_metrics:notify_error(),
             Error
     end.
 
@@ -464,49 +465,6 @@ mopt_supported({_, _}) ->
 -spec get_timeout(#req{}) -> pos_integer().
 get_timeout(#req{connecttimeout_ms=ConnMs, timeout_ms=ReqMs}) ->
     max(ConnMs, ReqMs).
-
--spec process_metrics({ok | error, {map(), proplists:proplist()}}, non_neg_integer()) ->
-                             response().
-process_metrics({ok, {Response, Metrics}}, Total) ->
-    #{status := Status} = Response,
-    StatusMetric = status_metric_name(Status),
-    quintana:notify_spiral(StatusMetric, 1),
-    OkMetric = metric_name(ok),
-    quintana:notify_spiral(OkMetric, 1),
-    process_metrics_1(Metrics, Total),
-    {ok, Response};
-process_metrics({error, {Error, Metrics}}, Total) ->
-    ErrorMetric = metric_name(error),
-    quintana:notify_spiral(ErrorMetric, 1),
-    process_metrics_1(Metrics, Total),
-    {error, Error}.
-
-metric_name(M) ->
-    B = atom_to_binary(M, latin1),
-    <<"katipo.", B/binary>>.
-
-status_metric_name(Status) when is_integer(Status) ->
-    B = integer_to_binary(Status),
-    <<"katipo.status.", B/binary>>.
-
-process_metrics_1(Metrics, Total) ->
-    %% Curl metrics are in seconds
-    Metrics1 = [{K, 1000 * V} || {K, V} <- Metrics],
-    %% now_diff is in microsecs
-    Total1 = Total / 1000.0,
-    Metrics3 =
-        case lists:keytake(total_time, 1, Metrics1) of
-            {value, {total_time, CurlTotal}, Metrics2} ->
-                [{curl_time, CurlTotal},
-                 {total_time, Total1} | Metrics2];
-            false ->
-                [{total_time, Total1} | Metrics]
-        end,
-    Notify = fun({K, V}) ->
-                     Name = metric_name(K),
-                     ok = quintana:notify_histogram(Name, V)
-             end,
-    ok = lists:foreach(Notify, Metrics3).
 
 opt(url, Url, {Req, Errors}) when is_binary(Url) ->
     {Req#req{url=Url}, Errors};

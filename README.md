@@ -75,6 +75,11 @@ katipo:Method(Pool :: atom(), URL :: binary(), ReqOptions :: map()).
 
 ```
 
+#### Application Config
+| Option | Values | Default | Notes |
+|:-------|:-------|:--------|:------|
+| `mod_metrics` | `folsom | exometer | dummy` | `dummy` | see [erlang-metrics](https://github.com/benoitc/erlang-metrics) |
+
 #### Request options
 
 | Option              | Type                            | Default           |
