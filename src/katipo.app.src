@@ -8,9 +8,9 @@
     stdlib,
     cowlib,
     gproc,
-    quintana
+    metrics
    ]},
-  {env,[]},
+  {env, [{mod_metrics, dummy}]},
   {modules, []},
   {maintainers, ["Paul Oliver"]},
   {licenses, ["MIT"]},
