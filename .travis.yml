@@ -11,7 +11,7 @@ otp_release:
 
 script: PATH=.:$PATH make update test dialyzer coveralls
 
-install: wget https://s3.amazonaws.com/rebar3/rebar3 && chmod 755 rebar3
+install: wget https://github.com/erlang/rebar3/releases/download/3.1.0/rebar3 && chmod 755 rebar3
 
 cache:
   directories:
