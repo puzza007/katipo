@@ -319,7 +319,8 @@ cookies_delete(_) ->
 cookies_bad_cookie_jar(_) ->
     Url = <<"http://httpbin.org/cookies/delete?cname">>,
     CookieJar = ["has to be a binary"],
-    {error, {bad_opts, [{cookiejar, ["has to be a binary"]}]}} =
+    Message = <<"[{cookiejar,[\"has to be a binary\"]}]">>,
+    {error, #{code := bad_opts, message := Message}} =
         katipo:get(?POOL, Url, #{cookiejar => CookieJar}).
 
 %% TODO
