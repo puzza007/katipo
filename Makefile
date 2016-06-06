@@ -4,7 +4,10 @@ REBAR?=rebar3
 	all \
 	clean \
 	nuke \
-	test
+	test \
+	update \
+	dialyzer \
+	coveralls
 
 all:
 	@$(REBAR) compile
