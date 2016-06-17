@@ -18,6 +18,9 @@ init_per_suite(Config) ->
 end_per_suite(_Config) ->
     ok = application:stop(katipo).
 
+init_per_group(session, Config) ->
+    application:ensure_all_started(katipo),
+    Config;
 init_per_group(pool, Config) ->
     application:ensure_all_started(meck),
     Config;
@@ -117,13 +120,21 @@ groups() ->
        cacert_self_signed]},
      {proxy, [],
       [proxy_get,
-       proxy_post_data]}].
+       proxy_post_data]},
+     {session, [parallel],
+      [session_new,
+       session_new_bad_opts,
+       session_new_cookies,
+       session_new_headers,
+       session_update,
+       session_update_bad_opts]}].
 
 all() ->
     [{group, http},
      {group, pool},
      {group, https},
-     {group, proxy}].
+     {group, proxy},
+     {group, session}].
 
 get(_) ->
     {ok, #{status := 200, body := Body}} =
@@ -172,13 +183,17 @@ post_req(_) ->
     <<"!@#$%^&*()">> = proplists:get_value(<<"data">>, Json).
 
 url_missing(_) ->
-    {error, {bad_opts, [{url, undefined}]}} =
+    Message = [{url, undefined}],
+    BinaryMessage = iolist_to_binary(io_lib:format("~p", [Message])),
+    {error, #{code := bad_opts, message := BinaryMessage}} =
         katipo:req(?POOL, #{method => post,
                      headers => [{<<"Content-Type">>, <<"application/json">>}],
                      body => <<"!@#$%^&*()">>}).
 
 bad_method(_) ->
-    {error, {bad_opts, [{method, toast}]}} =
+    Message = [{method, toast}],
+    BinaryMessage = iolist_to_binary(io_lib:format("~p", [Message])),
+    {error, #{code := bad_opts, message := BinaryMessage}} =
         katipo:req(?POOL, #{method => toast,
                      headers => [{<<"Content-Type">>, <<"application/json">>}],
                      body => <<"!@#$%^&*()">>}).
@@ -304,7 +319,8 @@ cookies_delete(_) ->
 cookies_bad_cookie_jar(_) ->
     Url = <<"http://httpbin.org/cookies/delete?cname">>,
     CookieJar = ["has to be a binary"],
-    {error, {bad_opts, [{cookiejar, ["has to be a binary"]}]}} =
+    Message = <<"[{cookiejar,[\"has to be a binary\"]}]">>,
+    {error, #{code := bad_opts, message := Message}} =
         katipo:get(?POOL, Url, #{cookiejar => CookieJar}).
 
 %% TODO
@@ -358,8 +374,10 @@ digest_authorised(_) ->
     Username = proplists:get_value(<<"user">>, Json).
 
 badopts(_) ->
-    {error, {bad_opts, L}} =
+    {error, #{code := bad_opts, message := Message}} =
         katipo:get(?POOL, <<"http://httpbin.org/get">>, #{timeout_ms => <<"wrong">>, what => not_even_close}),
+    {ok, Tokens, _} = erl_scan:string(binary_to_list(Message) ++ "."),
+    {ok, L} = erl_parse:parse_term(Tokens),
     [] = L -- [{what, not_even_close}, {timeout_ms, <<"wrong">>}].
 
 proxy_couldnt_connect(_) ->
@@ -503,6 +521,75 @@ proxy_post_data(_) ->
                       proxy => <<"http://localhost:3128">>}),
     Json = jsx:decode(Body),
     <<"!@#$%^&*()">> = proplists:get_value(<<"data">>, Json).
+
+%% session
+
+session_new(_) ->
+    {ok, Session} = katipo_session:new(?POOL),
+    Url = <<"http://httpbin.org/cookies/set?cname=cvalue">>,
+    Req = #{url => Url, followlocation => true},
+    {{ok, #{status := 200, cookiejar := CookieJar, body := Body}}, Session2} =
+        katipo_session:req(Req, Session),
+    {state, ?POOL, #{cookiejar := CookieJar}} = Session2,
+    Json = jsx:decode(Body),
+    [{<<"cname">>, <<"cvalue">>}] = proplists:get_value(<<"cookies">>, Json),
+    [<<"httpbin.org\tFALSE\t/\tFALSE\t0\tcname\tcvalue">>] = CookieJar.
+
+session_new_bad_opts(_) ->
+    {error, #{code := bad_opts}} =
+        katipo_session:new(?POOL, #{timeout_ms => <<"wrong">>, what => not_even_close}).
+
+session_new_cookies(_) ->
+    Url = <<"http://httpbin.org/cookies/delete?cname">>,
+    CookieJar = [<<"httpbin.org\tFALSE\t/\tFALSE\t0\tcname\tcvalue">>,
+                 <<"httpbin.org\tFALSE\t/\tFALSE\t0\tcname2\tcvalue2">>],
+    Req = #{url => Url, cookiejar => CookieJar, followlocation => true},
+    {ok, Session} = katipo_session:new(?POOL, Req),
+    {{ok, #{status := 200, body := Body}}, Session2} =
+        katipo_session:req(#{}, Session),
+    Json = jsx:decode(Body),
+    [{<<"cname2">>, <<"cvalue2">>}] = proplists:get_value(<<"cookies">>, Json),
+    Url2 = <<"http://httpbin.org/cookies/delete?cname2">>,
+    {{ok, #{status := 200, body := Body2}}, _} =
+        katipo_session:req(#{url => Url2}, Session2),
+    Json2 = jsx:decode(Body2),
+    [{}] = proplists:get_value(<<"cookies">>, Json2).
+
+session_new_headers(_) ->
+    Req = #{url => <<"http://httpbin.org/cookies/delete?cname">>,
+            headers => [{<<"header1">>, <<"dontcare">>}]},
+    {ok, Session} = katipo_session:new(?POOL, Req),
+    {{ok, #{status := 200, body := Body}}, _Session2} =
+        katipo_session:req(#{url => <<"http://httpbin.org/gzip">>,
+                             headers => [{<<"header1">>, <<"!@#$%^&*()">>}]},
+                           Session),
+    Json = jsx:decode(Body),
+    Expected =  [{<<"Accept">>,<<"*/*">>},
+                 {<<"Accept-Encoding">>,<<"gzip,deflate">>},
+                 {<<"Header1">>,<<"!@#$%^&*()">>},
+                 {<<"Host">>,<<"httpbin.org">>}],
+    [] = Expected -- proplists:get_value(<<"headers">>, Json).
+
+session_update(_) ->
+    Req = #{url => <<"http://httpbin.org/cookies/delete?cname">>,
+            headers => [{<<"header1">>, <<"dontcare">>}]},
+    {ok, Session} = katipo_session:new(?POOL, Req),
+    Req2 = #{url => <<"http://httpbin.org/gzip">>,
+             headers => [{<<"header1">>, <<"!@#$%^&*()">>}]},
+    {ok, Session2} = katipo_session:update(Req2, Session),
+    {{ok, #{status := 200, body := Body}}, _Session3} =
+        katipo_session:req(#{}, Session2),
+    Json = jsx:decode(Body),
+    Expected =  [{<<"Accept">>,<<"*/*">>},
+                 {<<"Accept-Encoding">>,<<"gzip,deflate">>},
+                 {<<"Header1">>,<<"!@#$%^&*()">>},
+                 {<<"Host">>,<<"httpbin.org">>}],
+    [] = Expected -- proplists:get_value(<<"headers">>, Json).
+
+session_update_bad_opts(_) ->
+    {ok, Session} = katipo_session:new(?POOL),
+    {error, #{code := bad_opts}} =
+        katipo_session:update(#{timeout_ms => <<"wrong">>, what => not_even_close}, Session).
 
 repeat_until_true(Fun) ->
     try

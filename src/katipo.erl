@@ -29,6 +29,8 @@
 -export([delete/2]).
 -export([delete/3]).
 
+-export([check_opts/1]).
+
 %% only for mocking during tests
 -export([get_timeout/1]).
 
@@ -193,6 +195,7 @@
 -type qs_vals() :: [{binary(), binary() | true}].
 -type req_body() :: iodata() | qs_vals().
 -type body() :: binary().
+-type request() :: map().
 %% {ok, #{status => status(),
 %%        headers => headers(),
 %%        cookiejar => cookiejar(),
@@ -214,6 +217,7 @@
 -export_type([cookiejar/0]).
 -export_type([req_body/0]).
 -export_type([body/0]).
+-export_type([request/0]).
 -export_type([response/0]).
 -export_type([http_auth/0]).
 -export_type([curlmopts/0]).
@@ -243,7 +247,7 @@
 get(PoolName, Url) ->
     get(PoolName, Url, #{}).
 
--spec get(katipo_pool:name(), url(), map()) -> response().
+-spec get(katipo_pool:name(), url(), request()) -> response().
 get(PoolName, Url, Opts) ->
     req(PoolName, Opts#{url => Url, method => get}).
 
@@ -251,7 +255,7 @@ get(PoolName, Url, Opts) ->
 post(PoolName, Url) ->
     post(PoolName, Url, #{}).
 
--spec post(katipo_pool:name(), url(), map()) -> response().
+-spec post(katipo_pool:name(), url(), request()) -> response().
 post(PoolName, Url, Opts) ->
     req(PoolName, Opts#{url => Url, method => post}).
 
@@ -259,7 +263,7 @@ post(PoolName, Url, Opts) ->
 put(PoolName, Url) ->
     put(PoolName, Url, #{}).
 
--spec put(katipo_pool:name(), url(), map()) -> response().
+-spec put(katipo_pool:name(), url(), request()) -> response().
 put(PoolName, Url, Opts) ->
     req(PoolName, Opts#{url => Url, method => put}).
 
@@ -267,7 +271,7 @@ put(PoolName, Url, Opts) ->
 head(PoolName, Url) ->
     head(PoolName, Url, #{}).
 
--spec head(katipo_pool:name(), url(), map()) -> response().
+-spec head(katipo_pool:name(), url(), request()) -> response().
 head(PoolName, Url, Opts) ->
     req(PoolName, Opts#{url => Url, method => head}).
 
@@ -275,7 +279,7 @@ head(PoolName, Url, Opts) ->
 options(PoolName, Url) ->
     options(PoolName, Url, #{}).
 
--spec options(katipo_pool:name(), url(), map()) -> response().
+-spec options(katipo_pool:name(), url(), request()) -> response().
 options(PoolName, Url, Opts) ->
     req(PoolName, Opts#{url => Url, method => options}).
 
@@ -283,7 +287,7 @@ options(PoolName, Url, Opts) ->
 patch(PoolName, Url) ->
     patch(PoolName, Url, #{}).
 
--spec patch(katipo_pool:name(), url(), map()) -> response().
+-spec patch(katipo_pool:name(), url(), request()) -> response().
 patch(PoolName, Url, Opts) ->
     req(PoolName, Opts#{url => Url, method => patch}).
 
@@ -291,17 +295,17 @@ patch(PoolName, Url, Opts) ->
 delete(PoolName, Url) ->
     delete(PoolName, Url, #{}).
 
--spec delete(katipo_pool:name(), url(), map()) -> response().
+-spec delete(katipo_pool:name(), url(), request()) -> response().
 delete(PoolName, Url, Opts) ->
     req(PoolName, Opts#{url => Url, method => delete}).
 
--spec req(katipo_pool:name(), map()) -> response().
+-spec req(katipo_pool:name(), request()) -> response().
 req(PoolName, Opts)
   when is_map(Opts) ->
     case process_opts(Opts) of
         {ok, #req{url=undefined}} ->
-            {error, {bad_opts, [{url, undefined}]}};
-        {ok, Req=#req{}} ->
+            {error, error_map(bad_opts, <<"[{url,undefined}]">>)};
+        {ok, Req} ->
             Timeout = ?MODULE:get_timeout(Req),
             Req2 = Req#req{timeout=Timeout},
             Ts = os:timestamp(),
@@ -521,11 +525,26 @@ opt(proxy, Proxy, {Req, Errors}) when is_binary(Proxy) ->
 opt(K, V, {Req, Errors}) ->
     {Req, [{K, V} | Errors]}.
 
--spec process_opts(map()) -> {ok, #req{}} | {error, {bad_opts, [any()]}}. %%todo
+-spec process_opts(request()) -> {ok, #req{}} | {error, map()}.
 process_opts(Opts) ->
     case maps:fold(fun opt/3, {#req{}, []}, Opts) of
         {Req=#req{}, []} ->
             {ok, Req};
         {#req{}, Errors} ->
-            {error, {bad_opts, Errors}}
+            {error, error_map(bad_opts, Errors)}
     end.
+
+-spec check_opts(request()) -> ok | {error, map()}.
+check_opts(Opts) when is_map(Opts) ->
+    case process_opts(Opts) of
+        {ok, _} ->
+            ok;
+        {error, _} = Error ->
+            Error
+    end.
+
+error_map(Code, Message) when is_atom(Code) andalso is_binary(Message) ->
+    #{code => Code, message => Message};
+error_map(Code, Message) when is_atom(Code) ->
+    BinaryMessage = iolist_to_binary(io_lib:format("~p", [Message])),
+    error_map(Code, BinaryMessage).

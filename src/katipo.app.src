@@ -1,6 +1,6 @@
 {application, 'katipo',
  [{description, "HTTP client based on libcurl"},
-  {vsn, "0.3.4"},
+  {vsn, "0.4.0"},
   {registered, []},
   {mod, {'katipo_app', []}},
   {applications,
@@ -15,17 +15,16 @@
   {maintainers, ["Paul Oliver"]},
   {licenses, ["MIT"]},
   {links, [{"Github", "https://github.com/puzza007/katipo"}]},
-  {files, ["src/katipo.app.src",
+  {files, ["c_src/Makefile",
+           "c_src/katipo.c",
+           "rebar.config",
+           "rebar.lock",
+           "src/katipo.app.src",
            "src/katipo.erl",
            "src/katipo_app.erl",
            "src/katipo_metrics.erl",
            "src/katipo_pool.erl",
            "src/katipo_pool_sup.erl",
-           "src/katipo_sup.erl",
-           "c_src/Makefile",
-           "c_src/katipo.c",
-           "rebar.config",
-           "rebar.lock",
-           "README.md",
-           "LICENSE"]}
-  ]}.
+           "src/katipo_session.erl",
+           "src/katipo_sup.erl"]}
+ ]}.
