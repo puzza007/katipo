@@ -8,6 +8,7 @@ otp_release:
   - 18.0
   - 18.1
   - 18.2
+  - 19.0
 
 script: PATH=.:$PATH make update test dialyzer coveralls
 
