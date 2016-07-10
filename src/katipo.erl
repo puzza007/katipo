@@ -224,7 +224,7 @@
 
 -record(req, {
           method = ?get :: method_int(),
-          url :: binary(),
+          url :: undefined | binary(),
           headers = [] :: headers(),
           cookiejar = [] :: cookiejar(),
           body = <<>> :: body(),
