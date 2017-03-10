@@ -175,7 +175,7 @@
         %% curlmopt_content_length_penalty_size |
         %% curlmopt_max_host_connections |
         max_pipeline_length |
-        %% curlmopt_max_total_connections |
+        curlmopt_max_total_connections |
         %% curlmopt_maxconnects |
         pipelining.
         %% curlmopt_pipelining_site_bl |
@@ -205,7 +205,9 @@
 -type response() :: {ok, map()} | {error, map()}.
 -type http_auth() :: basic | digest.
 -type http_auth_int() :: ?CURLAUTH_BASIC | ?CURLAUTH_DIGEST.
--type curlmopts() :: [{max_pipeline_length, non_neg_integer()} | {pipelining, boolean()}].
+-type curlmopts() :: [{max_pipeline_length, non_neg_integer()} |
+                      {pipelining, boolean()} |
+                      {max_total_connections, non_neg_integer()}].
 
 -export_type([method/0]).
 -export_type([url/0]).
@@ -463,6 +465,9 @@ mopt_supported({max_pipeline_length, Val})
     {true, "--max-pipeline-length " ++ integer_to_list(Val)};
 mopt_supported({pipelining, true}) ->
     {true, "--pipelining"};
+mopt_supported({max_total_connections, Val})
+  when is_integer(Val) andalso Val >= 0 ->
+    {true, "--max-total-connections " ++ integer_to_list(Val)};
 mopt_supported({_, _}) ->
     false.
 
