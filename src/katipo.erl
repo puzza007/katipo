@@ -4,7 +4,7 @@
 
 -compile({no_auto_import,[put/2]}).
 
--export([start_link/3]).
+-export([start_link/1]).
 
 -export([init/1]).
 -export([handle_call/3]).
@@ -316,8 +316,8 @@ req(PoolName, Opts)
             Timeout = ?MODULE:get_timeout(Req),
             Req2 = Req#req{timeout=Timeout},
             Ts = os:timestamp(),
-            Pid = gproc_pool:pick_worker(PoolName),
-            {Result, {Response, Metrics}} = gen_server:call(Pid, Req2, infinity),
+            {Result, {Response, Metrics}} =
+                wpool:call(PoolName, Req2, best_worker, infinity),
             TotalUs = timer:now_diff(os:timestamp(), Ts),
             Response2 = maybe_return_metrics(Req2, Metrics, Response),
             Ret = {Result, Response2},
@@ -328,17 +328,15 @@ req(PoolName, Opts)
             Error
     end.
 
-start_link(PoolName, CurlOpts, WorkerId) when is_list(CurlOpts) andalso
-                                              is_atom(WorkerId) ->
-    Args = [PoolName, CurlOpts, WorkerId],
+start_link(CurlOpts) when is_list(CurlOpts) ->
+    Args = [CurlOpts],
     gen_server:start_link(?MODULE, Args, []).
 
-init([PoolName, CurlOpts, WorkerId]) ->
+init([CurlOpts]) ->
     process_flag(trap_exit, true),
     Args = get_mopts(CurlOpts),
     Prog = filename:join([code:priv_dir(katipo), "katipo"]),
     Port = open_port({spawn, Prog ++ " " ++ Args}, [{packet, 4}, binary]),
-    true = gproc_pool:connect_worker(PoolName, WorkerId),
     {ok, #state{port=Port, reqs=#{}}}.
 
 handle_call(#req{method = Method,
