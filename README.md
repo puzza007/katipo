@@ -130,10 +130,11 @@ katipo:Method(Pool :: atom(), URL :: binary(), ReqOptions :: map()).
 
 #### Pool Options
 
-| Option                | Type                 | Default           | Note                                   |
-|:----------------------|:---------------------|:----------------- |----------------------------------------|
-| `pipelining`          | `boolean()`          | `false`           | HTTP pipelining                        |
-| `max_pipeline_length` | `non_neg_integer()`  | 100               |                                        |
+| Option                  | Type                 | Default           | Note                                   |
+|:------------------------|:---------------------|:----------------- |----------------------------------------|
+| `pipelining`            | `boolean()`          | `false`           | HTTP pipelining                        |
+| `max_pipeline_length`   | `non_neg_integer()`  | 100               |                                        |
+| `max_total_connections` | `non_neg_integer()`  | 0 (no limit)      |                                        |
 
 #### Metrics
 

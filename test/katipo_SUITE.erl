@@ -127,14 +127,17 @@ groups() ->
        session_new_cookies,
        session_new_headers,
        session_update,
-       session_update_bad_opts]}].
+       session_update_bad_opts]},
+     {port, [],
+      [max_total_connections]}].
 
 all() ->
     [{group, http},
      {group, pool},
      {group, https},
      {group, proxy},
-     {group, session}].
+     {group, session},
+     {group, port}].
 
 get(_) ->
     {ok, #{status := 200, body := Body}} =
@@ -590,6 +593,22 @@ session_update_bad_opts(_) ->
     {ok, Session} = katipo_session:new(?POOL),
     {error, #{code := bad_opts}} =
         katipo_session:update(#{timeout_ms => <<"wrong">>, what => not_even_close}, Session).
+
+max_total_connections(_) ->
+    PoolName = max_total_connections,
+    {ok, _} = katipo_pool:start(PoolName, 1, [{max_total_connections, 1}]),
+    Self = self(),
+    Fun = fun() ->
+                  {ok, #{status := 200}} =
+                      katipo:get(PoolName, <<"http://httpbin.org/delay/5">>),
+                  Self ! ok
+          end,
+    spawn(Fun),
+    spawn(Fun),
+    Start = erlang:system_time(seconds),
+    [receive ok -> ok end || _ <- [1, 2]],
+    Diff = erlang:system_time(seconds) - Start,
+    true = Diff >= 10.
 
 repeat_until_true(Fun) ->
     try

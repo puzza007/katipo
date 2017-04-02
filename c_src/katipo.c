@@ -1068,6 +1068,7 @@ int main(int argc, char **argv) {
   struct option long_options[] = {
     { "pipelining", no_argument, &pipelining_flag, 1 },
     { "max-pipeline-length", required_argument, 0, 'a' },
+    { "max-total-connections", required_argument, 0, 'c' },
     { 0, 0, 0, 0 }
   };
 
@@ -1090,7 +1091,7 @@ int main(int argc, char **argv) {
   curl_multi_setopt(global.multi, CURLMOPT_TIMERDATA, &global);
 
   while (1) {
-    c = getopt_long(argc, argv, "a:", long_options, &option_index);
+    c = getopt_long(argc, argv, "ac:", long_options, &option_index);
     if (c == -1)
       break;
     switch (c) {
@@ -1098,6 +1099,10 @@ int main(int argc, char **argv) {
         break;
       case 'a':
         curl_multi_setopt(global.multi, CURLMOPT_MAX_PIPELINE_LENGTH,
+                          atoi(optarg));
+        break;
+      case 'c':
+        curl_multi_setopt(global.multi, CURLMOPT_MAX_TOTAL_CONNECTIONS,
                           atoi(optarg));
         break;
       default:
