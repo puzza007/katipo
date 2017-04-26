@@ -242,7 +242,8 @@
           http_auth = undefined :: undefined | http_auth_int(),
           username = undefined :: undefined | binary(),
           password = undefined :: undefined | binary(),
-          proxy = undefined :: undefined | binary()
+          proxy = undefined :: undefined | binary(),
+          return_metrics = false :: boolean()
          }).
 
 -spec get(katipo_pool:name(), url()) -> response().
@@ -314,7 +315,8 @@ req(PoolName, Opts)
             Pid = gproc_pool:pick_worker(PoolName),
             {Result, {Response, Metrics}} = gen_server:call(Pid, Req2, infinity),
             TotalUs = timer:now_diff(os:timestamp(), Ts),
-            Ret = {Result, Response},
+            Response2 = maybe_return_metrics(Req2, Metrics, Response),
+            Ret = {Result, Response2},
             ok = katipo_metrics:notify(Ret, Metrics, TotalUs),
             Ret;
         {error, _} = Error ->
@@ -527,6 +529,8 @@ opt(password, Password, {Req, Errors}) when is_binary(Password) ->
     {Req#req{password=Password}, Errors};
 opt(proxy, Proxy, {Req, Errors}) when is_binary(Proxy) ->
     {Req#req{proxy=Proxy}, Errors};
+opt(return_metrics, Flag, {Req, Errors}) when is_boolean(Flag) ->
+    {Req#req{return_metrics=Flag}, Errors};
 opt(K, V, {Req, Errors}) ->
     {Req, [{K, V} | Errors]}.
 
@@ -547,6 +551,11 @@ check_opts(Opts) when is_map(Opts) ->
         {error, _} = Error ->
             Error
     end.
+
+maybe_return_metrics(#req{return_metrics = true}, Metrics, Response) ->
+    maps:put(metrics, Metrics, Response);
+maybe_return_metrics(_Req, _Metrics, Response) ->
+    Response.
 
 error_map(Code, Message) when is_atom(Code) andalso is_binary(Message) ->
     #{code => Code, message => Message};
