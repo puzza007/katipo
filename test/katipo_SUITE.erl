@@ -129,7 +129,10 @@ groups() ->
        session_update,
        session_update_bad_opts]},
      {port, [],
-      [max_total_connections]}].
+      [max_total_connections]},
+     {metrics, [],
+      [metrics_true,
+       metrics_false]}].
 
 all() ->
     [{group, http},
@@ -137,7 +140,8 @@ all() ->
      {group, https},
      {group, proxy},
      {group, session},
-     {group, port}].
+     {group, port},
+     {group, metrics}].
 
 get(_) ->
     {ok, #{status := 200, body := Body}} =
@@ -609,6 +613,15 @@ max_total_connections(_) ->
     [receive ok -> ok end || _ <- [1, 2]],
     Diff = erlang:system_time(seconds) - Start,
     true = Diff >= 10.
+
+metrics_true(_) ->
+    {ok, #{status := 200, metrics := [_|_]}} =
+        katipo:head(?POOL, <<"http://httpbin.org/get">>, #{return_metrics => true}).
+
+metrics_false(_) ->
+    {ok, #{status := 200} = Res} =
+        katipo:head(?POOL, <<"http://httpbin.org/get">>, #{return_metrics => false}),
+    false = maps:is_key(metrics, Res).
 
 repeat_until_true(Fun) ->
     try
