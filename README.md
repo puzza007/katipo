@@ -116,16 +116,18 @@ katipo:Method(Pool :: atom(), URL :: binary(), ReqOptions :: map()).
 | `timeout_ms`        | `pos_integer()`                 | 30000             |
 | `maxredirs`         | `non_neg_integer()`             | 9                 |
 | `proxy`             | `binary()`                      | `undefined`       |
+| `return_metrics`    | `boolean()`                     | `false`           |
 
 #### Responses
 
 ```erlang
-{ok, #{status => pos_integer(),
-       headers => headers(),
-       cookiejar => cookiejar(),
-       body => body()}}
+{ok, #{status := pos_integer(),
+       headers := headers(),
+       cookiejar := cookiejar(),
+       body := body(),
+       metrics => proplist()}}
 
-{error, #{code => atom(), message => binary()}}
+{error, #{code := atom(), message := binary()}}
 ```
 
 #### Pool Options
