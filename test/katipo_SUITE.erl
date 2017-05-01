@@ -5,6 +5,7 @@
 -include_lib("common_test/include/ct.hrl").
 
 -define(POOL, katipo_test_pool).
+-define(POOL_SIZE, 2).
 
 suite() ->
     [{timetrap, {seconds, 30}}].
@@ -12,7 +13,7 @@ suite() ->
 init_per_suite(Config) ->
     application:ensure_all_started(katipo),
     application:ensure_all_started(meck),
-    {ok, _} = katipo_pool:start(?POOL, 2, []),
+    {ok, _} = katipo_pool:start(?POOL, ?POOL_SIZE),
     Config.
 
 end_per_suite(_Config) ->
@@ -110,7 +111,6 @@ groups() ->
        proxy_couldnt_connect]},
      {pool, [],
       [pool_start_stop,
-       pool_death,
        worker_death,
        port_death,
        port_late_response]},
@@ -413,47 +413,32 @@ pool_start_stop(_) ->
     PoolSize = 2,
     {ok, Pid} = katipo_pool:start(PoolName, PoolSize, []),
     ok = katipo_pool:stop(PoolName),
+    receive
+    after 2500 ->
+            ok
+    end,
     {ok, Pid2} = katipo_pool:start(PoolName, PoolSize, []),
     ok = katipo_pool:stop(PoolName),
     true = Pid =/= Pid2.
 
-pool_death(_) ->
-    PoolName = die_pool,
-    PoolSize = 2,
-    {ok, Pid} = katipo_pool:start(PoolName, PoolSize, []),
-
-    Active = gproc_pool:active_workers(PoolName),
-    exit(Pid, kill),
-    Fun = fun() ->
-                  whereis(PoolName) =/= Pid andalso
-                      whereis(PoolName) =/= undefined
-          end,
-    true = repeat_until_true(Fun),
-    Fun2 = fun() ->
-                  Active2 = gproc_pool:active_workers(?POOL),
-                  [] == Active2 -- (Active2 -- Active)
-          end,
-    true = repeat_until_true(Fun2),
-    Fun3 = fun() ->
-                  length(Active) == length(gproc_pool:active_workers(PoolName))
-          end,
-    true = repeat_until_true(Fun3),
-    Fun4 = fun() ->
-                   {ok, #{status := 200}} = katipo:get(PoolName, <<"http://httpbin.org/get">>),
-                   true
-           end,
-    true = repeat_until_true(Fun4).
+active_workers() ->
+    Pids = [begin
+                Name = lists:flatten(io_lib:format("wpool_pool-~s-~B", [?POOL, N])),
+                NameAtom = list_to_existing_atom(Name),
+                whereis(NameAtom)
+            end || N <- lists:seq(1, ?POOL_SIZE)],
+    [P || P <- Pids, P /= undefined].
 
 worker_death(_) ->
-    Active = gproc_pool:active_workers(?POOL),
-    _ = [exit(W, kill) || {_, W} <- Active],
+    Active = active_workers(),
+    _ = [exit(W, kill) || W <- Active],
     Fun = fun() ->
-                  Active2 = gproc_pool:active_workers(?POOL),
+                  Active2 = active_workers(),
                   [] == Active2 -- (Active2 -- Active)
           end,
     true = repeat_until_true(Fun),
     Fun2 = fun() ->
-                  length(Active) == length(gproc_pool:active_workers(?POOL))
+                  length(Active) == length(active_workers())
           end,
     true = repeat_until_true(Fun2),
     Fun3 = fun() ->
@@ -465,12 +450,16 @@ worker_death(_) ->
 port_death(_) ->
     PoolName = this_process_will_be_killed,
     PoolSize = 1,
-    {ok, _} = katipo_pool:start(PoolName, PoolSize, []),
-    {state, Port, _} = sys:get_state(gproc_pool:pick_worker(PoolName)),
+    {ok, _} = katipo_pool:start(PoolName, PoolSize),
+    WorkerName = wpool_pool:best_worker(PoolName),
+    WorkerPid = whereis(WorkerName),
+    {state, _, katipo, {state, Port, _}, _} = sys:get_state(WorkerPid),
     true = port_command(Port, <<"hdfjkshkjsdfgjsgafdjgsdjgfj">>),
     Fun = fun() ->
-                  case sys:get_state(gproc_pool:pick_worker(PoolName)) of
-                      {state, Port2, _} when Port =/= Port2 ->
+                  WorkerName2 = wpool_pool:best_worker(PoolName),
+                  WorkerPid2 = whereis(WorkerName2),
+                  case sys:get_state(WorkerPid2) of
+                      {state, _, katipo, {state, Port2, _}, _} when Port =/= Port2 ->
                           {ok, #{status := 200}} =
                               katipo:get(PoolName, <<"http://httpbin.org/get">>),
                           true

@@ -1,13 +1,13 @@
 {application, 'katipo',
  [{description, "HTTP client based on libcurl"},
-  {vsn, "0.4.0"},
+  {vsn, "0.5.0"},
   {registered, []},
   {mod, {'katipo_app', []}},
   {applications,
    [kernel,
     stdlib,
     cowlib,
-    gproc,
+    worker_pool,
     metrics
    ]},
   {env, [{mod_metrics, dummy}]},
@@ -24,7 +24,6 @@
            "src/katipo_app.erl",
            "src/katipo_metrics.erl",
            "src/katipo_pool.erl",
-           "src/katipo_pool_sup.erl",
            "src/katipo_session.erl",
            "src/katipo_sup.erl"]}
  ]}.
