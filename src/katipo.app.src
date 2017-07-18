@@ -1,6 +1,6 @@
 {application, 'katipo',
  [{description, "HTTP client based on libcurl"},
-  {vsn, "0.5.0"},
+  {vsn, "0.5.1"},
   {registered, []},
   {mod, {'katipo_app', []}},
   {applications,
