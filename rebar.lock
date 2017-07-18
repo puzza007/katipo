@@ -1,10 +1,12 @@
 {"1.1.0",
 [{<<"cowlib">>,{pkg,<<"cowlib">>,<<"1.0.0">>},0},
  {<<"metrics">>,{pkg,<<"metrics">>,<<"1.1.0">>},0},
- {<<"worker_pool">>,{pkg,<<"worker_pool">>,<<"2.2.3">>},0}]}.
+ {<<"worker_pool">>,
+  {git,"https://github.com/inaka/worker_pool.git",
+       {ref,"afdd3448bfe91c8295cc11af35008e1c016ef24d"}},
+  0}]}.
 [
 {pkg_hash,[
  {<<"cowlib">>, <<"397D890D669E56D486B0B5329973AD1A07012412BC110D34A737698DD6941741">>},
- {<<"metrics">>, <<"41450DFFBA18B1206BF44FA1AD4E29324D1E561617C2DAF4EF32E3CE50DF08F3">>},
- {<<"worker_pool">>, <<"2CD7B2C289B900940297D283922D7E119C540CB8F29B5254639ABB9BFB100CAE">>}]}
+ {<<"metrics">>, <<"41450DFFBA18B1206BF44FA1AD4E29324D1E561617C2DAF4EF32E3CE50DF08F3">>}]}
 ].
