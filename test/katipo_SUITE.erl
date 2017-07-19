@@ -301,11 +301,14 @@ stream(_) ->
     20 = length(binary:split(Body, <<"\n">>, [global, trim])).
 
 statuses(_) ->
-    [begin
-         B = integer_to_binary(S),
-         Url = <<"http://httpbin.org/status/",B/binary>>,
-         {ok, #{status := S}} = katipo:get(?POOL, Url)
-     end || S <- http_status_codes()].
+    MFAs = [begin
+                B = integer_to_binary(S),
+                Url = <<"http://httpbin.org/status/",B/binary>>,
+                {katipo, get, [?POOL, Url]}
+            end || S <- http_status_codes()],
+    Results = rpc:parallel_eval(MFAs),
+    Results2 = [S || {ok, #{status := S}} <- Results],
+    Results2 = http_status_codes().
 
 cookies(_) ->
     Url = <<"http://httpbin.org/cookies/set?cname=cvalue">>,
