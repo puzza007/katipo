@@ -148,6 +148,7 @@ katipo:Method(Pool :: atom(), URL :: binary(), ReqOptions :: map()).
 * connect_time
 * appconnect_time
 * pretransfer_time
+* redirect_time
 * starttransfer_time
 
 ### Dependencies

@@ -71,6 +71,7 @@ typedef struct _ConnInfo {
   double connect_time;
   double appconnect_time;
   double pretransfer_time;
+  double redirect_time;
   double starttransfer_time;
 } ConnInfo;
 
@@ -363,7 +364,7 @@ static int is_status_line(const char *header) {
 }
 
 static void encode_metrics(ei_x_buff *result, ConnInfo *conn) {
-  if (ei_x_encode_list_header(result, 6)) {
+  if (ei_x_encode_list_header(result, 7)) {
     errx(2, "Failed to encode stats list header");
   }
   if (ei_x_encode_tuple_header(result, 2) ||
@@ -381,6 +382,9 @@ static void encode_metrics(ei_x_buff *result, ConnInfo *conn) {
       ei_x_encode_tuple_header(result, 2) ||
       ei_x_encode_atom(result, "pretransfer_time") ||
       ei_x_encode_double(result, conn->pretransfer_time) ||
+      ei_x_encode_tuple_header(result, 2) ||
+      ei_x_encode_atom(result, "redirect_time") ||
+      ei_x_encode_double(result, conn->redirect_time) ||
       ei_x_encode_tuple_header(result, 2) ||
       ei_x_encode_atom(result, "starttransfer_time") ||
       ei_x_encode_double(result, conn->starttransfer_time) ||
@@ -514,6 +518,7 @@ static void check_multi_info(GlobalInfo *global) {
       curl_easy_getinfo(easy, CURLINFO_CONNECT_TIME, &conn->connect_time);
       curl_easy_getinfo(easy, CURLINFO_APPCONNECT_TIME, &conn->appconnect_time);
       curl_easy_getinfo(easy, CURLINFO_PRETRANSFER_TIME, &conn->pretransfer_time);
+      curl_easy_getinfo(easy, CURLINFO_REDIRECT_TIME, &conn->redirect_time);
       curl_easy_getinfo(easy, CURLINFO_STARTTRANSFER_TIME, &conn->starttransfer_time);
 
       if (res == CURLE_OK) {
