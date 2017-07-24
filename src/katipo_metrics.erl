@@ -48,7 +48,7 @@ notify_metrics(MetricsEngine, Metrics, TotalUs) ->
                 [{curl_time, CurlTotal},
                  {total_time, Total} | Metrics2];
             false ->
-                [{total_time, Total} | Metrics]
+                [{total_time, Total} | Metrics1]
         end,
     Notify = fun({K, V}) ->
                      Name = name(K),

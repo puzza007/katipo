@@ -607,8 +607,22 @@ max_total_connections(_) ->
     true = Diff >= 10.
 
 metrics_true(_) ->
+    ok = meck:new(metrics, [passthrough]),
+    ok = meck:expect(metrics, update_histogram,
+                     fun(_, X, _) when X =:= <<"katipo.total_time">> orelse
+                                       X =:= <<"katipo.curl_time">> orelse
+                                       X =:= <<"katipo.namelookup_time">> orelse
+                                       X =:= <<"katipo.connect_time">> orelse
+                                       X =:= <<"katipo.appconnect_time">> orelse
+                                       X =:= <<"katipo.pretransfer_time">> orelse
+                                       X =:= <<"katipo.redirect_time">> orelse
+                                       X =:= <<"katipo.starttransfer_time">> ->
+                             ok
+                     end),
     {ok, #{status := 200, metrics := [_|_]}} =
-        katipo:head(?POOL, <<"http://httpbin.org/get">>, #{return_metrics => true}).
+        katipo:head(?POOL, <<"http://httpbin.org/get">>, #{return_metrics => true}),
+    8 = meck:num_calls(metrics, update_histogram, 3),
+    meck:unload(metrics).
 
 metrics_false(_) ->
     {ok, #{status := 200} = Res} =

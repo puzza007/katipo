@@ -142,6 +142,7 @@ katipo:Method(Pool :: atom(), URL :: binary(), ReqOptions :: map()).
 
 * ok
 * error
+* status.XXX
 * total_time
 * curl_time
 * namelookup_time
