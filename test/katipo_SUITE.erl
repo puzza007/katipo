@@ -84,6 +84,7 @@ groups() ->
        patch_data,
        patch_arity_2,
        patch_qs,
+       options,
        headers,
        header_remove,
        delete,
@@ -246,6 +247,11 @@ patch_qs(_) ->
         katipo:patch(?POOL, <<"http://httpbin.org/patch">>, #{body => QsVals}),
     Json = jsx:decode(Body),
     [] = [{<<"baz">>,<<>>},{<<"foo">>,<<"bar">>}] -- proplists:get_value(<<"form">>, Json).
+
+options(_) ->
+    {ok, #{status := 200, headers := Headers}} = katipo:options(?POOL, <<"http://httpbin.org">>),
+    <<"GET, POST, PUT, DELETE, PATCH, OPTIONS">> =
+        proplists:get_value(<<"Access-Control-Allow-Methods">>, Headers).
 
 delete(_) ->
     {ok, #{status := 200}} = katipo:delete(?POOL, <<"http://httpbin.org/delete">>).
