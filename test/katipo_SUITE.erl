@@ -114,7 +114,8 @@ groups() ->
       [pool_start_stop,
        worker_death,
        port_death,
-       port_late_response]},
+       port_late_response,
+       pool_opts]},
      {https, [],
       [verify_host_verify_peer_ok,
        verify_host_verify_peer_error,
@@ -482,6 +483,15 @@ port_late_response(_) ->
     {error, #{code := operation_timedout, message := <<>>}} =
         katipo:get(?POOL, <<"http://httpbin.org/delay/1">>),
     meck:unload(katipo).
+
+pool_opts(_) ->
+    PoolName = pool_opts,
+    PoolSize = 1,
+    PoolOpts = [{pipelining, true},
+                {max_pipeline_length, 5},
+                {max_total_connections, 10}],
+    {ok, _} = katipo_pool:start(PoolName, PoolSize, PoolOpts),
+    ok = katipo_pool:stop(PoolName).
 
 verify_host_verify_peer_ok(_) ->
     Opts = [#{ssl_verifyhost => true, ssl_verifypeer => true},
