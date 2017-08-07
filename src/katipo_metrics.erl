@@ -4,8 +4,7 @@
 -export([notify/3]).
 -export([notify_error/0]).
 
--spec notify(katipo:response(), proplists:proplist(),
-             number()) -> ok.
+-spec notify(katipo:response(), katipo:metrics(), number()) -> katipo:metrics().
 notify({_, _} = Ret, Metrics, TotalUs) ->
     MetricsEngine = application:get_env(katipo, metrics_engine, metrics_dummy),
     notify(MetricsEngine, Ret, Metrics, TotalUs).
@@ -16,10 +15,10 @@ notify(MetricsEngine, {ok, Response}, Metrics, TotalUs) ->
     ok = metrics:increment_spiral(MetricsEngine, StatusMetric),
     OkMetric = name(ok),
     ok = metrics:increment_spiral(MetricsEngine, OkMetric),
-    ok = notify_metrics(MetricsEngine, Metrics, TotalUs);
+    notify_metrics(MetricsEngine, Metrics, TotalUs);
 notify(MetricsEngine, {error, _Error}, Metrics, TotalUs) ->
     ok = notify_error(MetricsEngine),
-    ok = notify_metrics(MetricsEngine, Metrics, TotalUs).
+    notify_metrics(MetricsEngine, Metrics, TotalUs).
 
 notify_error() ->
     MetricsEngine = application:get_env(katipo, metrics_engine, metrics_dummy),
@@ -54,7 +53,8 @@ notify_metrics(MetricsEngine, Metrics, TotalUs) ->
                      Name = name(K),
                      ok = metrics:update_histogram(MetricsEngine, Name, V)
              end,
-    ok = lists:foreach(Notify, Metrics3).
+    ok = lists:foreach(Notify, Metrics3),
+    Metrics3.
 
 -spec init() -> ok.
 init() ->
