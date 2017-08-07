@@ -619,9 +619,14 @@ metrics_true(_) ->
                                        X =:= <<"katipo.starttransfer_time">> ->
                              ok
                      end),
-    {ok, #{status := 200, metrics := [_|_]}} =
+    {ok, #{status := 200, metrics := Metrics}} =
         katipo:head(?POOL, <<"http://httpbin.org/get">>, #{return_metrics => true}),
     8 = meck:num_calls(metrics, update_histogram, 3),
+    MetricKeys = [K || {K, _} <- Metrics],
+    ExpectedMetricKeys = [curl_time,total_time,namelookup_time,connect_time,
+                          appconnect_time,pretransfer_time,redirect_time,
+                          starttransfer_time],
+    true = lists:sort(MetricKeys) == lists:sort(ExpectedMetricKeys),
     meck:unload(metrics).
 
 metrics_false(_) ->

@@ -196,6 +196,7 @@
 -type req_body() :: iodata() | qs_vals().
 -type body() :: binary().
 -type request() :: map().
+-type metrics() :: proplists:proplist().
 -ifdef(OTP_RELEASE).
 -type response() :: {ok, #{status := status(),
                            headers := headers(),
@@ -224,6 +225,7 @@
 -export_type([req_body/0]).
 -export_type([body/0]).
 -export_type([request/0]).
+-export_type([metrics/0]).
 -export_type([response/0]).
 -export_type([http_auth/0]).
 -export_type([curlmopts/0]).
@@ -319,10 +321,9 @@ req(PoolName, Opts)
             {Result, {Response, Metrics}} =
                 wpool:call(PoolName, Req2, best_worker, infinity),
             TotalUs = timer:now_diff(os:timestamp(), Ts),
-            Response2 = maybe_return_metrics(Req2, Metrics, Response),
-            Ret = {Result, Response2},
-            ok = katipo_metrics:notify(Ret, Metrics, TotalUs),
-            Ret;
+            Metrics2 = katipo_metrics:notify({Result, Response}, Metrics, TotalUs),
+            Response2 = maybe_return_metrics(Req2, Metrics2, Response),
+            {Result, Response2};
         {error, _} = Error ->
             ok = katipo_metrics:notify_error(),
             Error
