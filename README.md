@@ -102,21 +102,22 @@ katipo:Method(Pool :: atom(), URL :: binary(), ReqOptions :: map()).
 
 #### Request options
 
-| Option              | Type                            | Default           |
-|:--------------------|:------------------------------- |:----------------- |
-| `headers`           | `[{binary(), iodata()}]`        | `[]`              |
-| `cookiejar`         | opaque (returned in response)   | `[]`              |
-| `body`              | `iodata()`                      | `<<>>`            |
-| `connecttimeout_ms` | `pos_integer()`                 | 30000             |
-| `followlocation`    | `boolean()`                     | `false`           |
-| `ssl_verifyhost`    | `boolean()`                     | `true`            |
-| `ssl_verifypeer`    | `boolean()`                     | `true`            |
-| `capath`            | `binary()`                      | `undefined`       |
-| `cacert`            | `binary()`                      | `undefined`       |
-| `timeout_ms`        | `pos_integer()`                 | 30000             |
-| `maxredirs`         | `non_neg_integer()`             | 9                 |
-| `proxy`             | `binary()`                      | `undefined`       |
-| `return_metrics`    | `boolean()`                     | `false`           |
+| Option              | Type                            | Default           | Notes             |
+|:--------------------|:------------------------------- |:----------------- |:----------------- |
+| `headers`           | `[{binary(), iodata()}]`        | `[]`              |                   |
+| `cookiejar`         | opaque (returned in response)   | `[]`              |                   |
+| `body`              | `iodata()`                      | `<<>>`            |                   |
+| `connecttimeout_ms` | `pos_integer()`                 | 30000             |                   |
+| `followlocation`    | `boolean()`                     | `false`           |                   |
+| `ssl_verifyhost`    | `boolean()`                     | `true`            |                   |
+| `ssl_verifypeer`    | `boolean()`                     | `true`            |                   |
+| `capath`            | `binary()`                      | `undefined`       |                   |
+| `cacert`            | `binary()`                      | `undefined`       |                   |
+| `timeout_ms`        | `pos_integer()`                 | 30000             |                   |
+| `maxredirs`         | `non_neg_integer()`             | 9                 |                   |
+| `proxy`             | `binary()`                      | `undefined`       |                   |
+| `return_metrics`    | `boolean()`                     | `false`           |                   |
+| `tcp_fastopen`      | `boolean()`                     | `false`           | curl >= 7.49.0    |
 
 #### Responses
 

@@ -101,6 +101,8 @@ groups() ->
        connecttimeout_ms,
        followlocation_true,
        followlocation_false,
+       tcp_fastopen_true,
+       tcp_fastopen_false,
        timeout_ms,
        maxredirs,
        basic_unauthorised,
@@ -349,6 +351,14 @@ followlocation_true(_) ->
 followlocation_false(_) ->
     {ok, #{status := 302}} =
         katipo:get(?POOL, <<"http://httpbin.org/redirect/6">>, #{followlocation => false}).
+
+tcp_fastopen_true(_) ->
+    {ok, #{}} =
+        katipo:get(?POOL, <<"http://httpbin.org/get">>, #{tcp_fastopen => true}).
+
+tcp_fastopen_false(_) ->
+    {ok, #{}} =
+        katipo:get(?POOL, <<"http://httpbin.org/get">>, #{tcp_fastopen => false}).
 
 maxredirs(_) ->
     Opts = #{followlocation => true, maxredirs => 2},

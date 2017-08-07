@@ -57,6 +57,7 @@
 -define(password, 14).
 -define(proxy, 15).
 -define(cacert, 16).
+-define(tcp_fastopen, 17).
 
 -define(DEFAULT_REQ_TIMEOUT, 30000).
 -define(FOLLOWLOCATION_TRUE, 1).
@@ -67,6 +68,8 @@
 -define(SSL_VERIFYPEER_FALSE, 0).
 -define(CURLAUTH_BASIC, 100).
 -define(CURLAUTH_DIGEST, 101).
+-define(TCP_FASTOPEN_FALSE, 0).
+-define(TCP_FASTOPEN_TRUE, 1).
 
 -define(METHODS, [get, post, put, head, options, patch, delete]).
 
@@ -249,7 +252,8 @@
           username = undefined :: undefined | binary(),
           password = undefined :: undefined | binary(),
           proxy = undefined :: undefined | binary(),
-          return_metrics = false :: boolean()
+          return_metrics = false :: boolean(),
+          tcp_fastopen = ?TCP_FASTOPEN_FALSE :: ?TCP_FASTOPEN_FALSE | ?TCP_FASTOPEN_TRUE
          }).
 
 -spec get(katipo_pool:name(), url()) -> response().
@@ -357,7 +361,8 @@ handle_call(#req{method = Method,
                  http_auth = HTTPAuth,
                  username = Username,
                  password = Password,
-                 proxy = Proxy},
+                 proxy = Proxy,
+                 tcp_fastopen = TCPFastOpen},
              From,
              State=#state{port=Port, reqs=Reqs}) ->
     {Self, Ref} = From,
@@ -372,7 +377,8 @@ handle_call(#req{method = Method,
             {?http_auth, HTTPAuth},
             {?username, Username},
             {?password, Password},
-            {?proxy, Proxy}],
+            {?proxy, Proxy},
+            {?tcp_fastopen, TCPFastOpen}],
     Command = {Self, Ref, Method, Url, Headers, CookieJar, Body, Opts},
     true = port_command(Port, term_to_binary(Command)),
     Tref = erlang:start_timer(Timeout, self(), {req_timeout, From}),
@@ -534,6 +540,10 @@ opt(proxy, Proxy, {Req, Errors}) when is_binary(Proxy) ->
     {Req#req{proxy=Proxy}, Errors};
 opt(return_metrics, Flag, {Req, Errors}) when is_boolean(Flag) ->
     {Req#req{return_metrics=Flag}, Errors};
+opt(tcp_fastopen, true, {Req, Errors}) ->
+    {Req#req{tcp_fastopen=?TCP_FASTOPEN_TRUE}, Errors};
+opt(tcp_fastopen, false, {Req, Errors}) ->
+    {Req#req{tcp_fastopen=?TCP_FASTOPEN_FALSE}, Errors};
 opt(K, V, {Req, Errors}) ->
     {Req, [{K, V} | Errors]}.
 
