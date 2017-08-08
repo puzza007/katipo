@@ -73,6 +73,7 @@ groups() ->
        get_req,
        head,
        post_data,
+       post_iodata,
        post_arity_2,
        post_qs,
        post_req,
@@ -168,6 +169,14 @@ post_data(_) ->
         katipo:post(?POOL, <<"http://httpbin.org/post">>,
                     #{headers => [{<<"Content-Type">>, <<"application/json">>}],
                       body => <<"!@#$%^&*()">>}),
+    Json = jsx:decode(Body),
+    <<"!@#$%^&*()">> = proplists:get_value(<<"data">>, Json).
+
+post_iodata(_) ->
+    {ok, #{status := 200, body := Body}} =
+        katipo:post(?POOL, <<"http://httpbin.org/post">>,
+                    #{headers => [{<<"Content-Type">>, <<"application/json">>}],
+                      body => [<<"!@#$%">>, <<"^&*()">>]}),
     Json = jsx:decode(Body),
     <<"!@#$%^&*()">> = proplists:get_value(<<"data">>, Json).
 
