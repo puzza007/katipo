@@ -499,7 +499,8 @@ pool_opts(_) ->
     PoolSize = 1,
     PoolOpts = [{pipelining, true},
                 {max_pipeline_length, 5},
-                {max_total_connections, 10}],
+                {max_total_connections, 10},
+                {ignore_junk_opt, hithere}],
     {ok, _} = katipo_pool:start(PoolName, PoolSize, PoolOpts),
     ok = katipo_pool:stop(PoolName).
 
