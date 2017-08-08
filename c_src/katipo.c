@@ -775,7 +775,9 @@ static void new_conn(long method, char *url, struct curl_slist *req_headers,
     curl_easy_setopt(conn->easy, CURLOPT_PROXY,
                      eopts.curlopt_proxy);
   }
+  #if LIBCURL_VERSION_NUM >= 0x073100 /* Available since 7.49.0 */
   curl_easy_setopt(conn->easy, CURLOPT_TCP_FASTOPEN, eopts.curlopt_tcp_fastopen);
+  #endif
   curl_easy_setopt(conn->easy, CURLOPT_COOKIEFILE, "");
   nc = req_cookies;
   while (nc) {
