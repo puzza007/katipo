@@ -5,38 +5,30 @@
 -export([notify_error/0]).
 
 -spec notify(katipo:response(), katipo:metrics(), number()) -> katipo:metrics().
-notify({_, _} = Ret, Metrics, TotalUs) ->
-    MetricsEngine = application:get_env(katipo, metrics_engine, metrics_dummy),
-    notify(MetricsEngine, Ret, Metrics, TotalUs).
-
-notify(MetricsEngine, {ok, Response}, Metrics, TotalUs) ->
+notify({ok, Response}, Metrics, TotalUs) ->
     #{status := Status} = Response,
     StatusMetric = status_metric_name(Status),
-    ok = metrics:increment_spiral(MetricsEngine, StatusMetric),
+    ok = metrics:update_or_create(StatusMetric, {c, 1}, spiral),
     OkMetric = name(ok),
-    ok = metrics:increment_spiral(MetricsEngine, OkMetric),
-    notify_metrics(MetricsEngine, Metrics, TotalUs);
-notify(MetricsEngine, {error, _Error}, Metrics, TotalUs) ->
-    ok = notify_error(MetricsEngine),
-    notify_metrics(MetricsEngine, Metrics, TotalUs).
+    ok = metrics:update_or_create(OkMetric, {c, 1}, spiral),
+    notify_metrics(Metrics, TotalUs);
+notify({error, _Error}, Metrics, TotalUs) ->
+    ok = notify_error(),
+    notify_metrics(Metrics, TotalUs).
 
 notify_error() ->
-    MetricsEngine = application:get_env(katipo, metrics_engine, metrics_dummy),
-    notify_error(MetricsEngine).
-
-notify_error(MetricsEngine) ->
     ErrorMetric = name(error),
-    ok = metrics:increment_spiral(MetricsEngine, ErrorMetric).
-    
+    ok = metrics:update_or_create(ErrorMetric, {c, 1}, spiral).
+
 name(M) ->
-    B = atom_to_binary(M, latin1),
-    <<"katipo.", B/binary>>.
+    L = atom_to_list(M),
+    "katipo." ++ L.
 
 status_metric_name(Status) when is_integer(Status) ->
-    B = integer_to_binary(Status),
-    <<"katipo.status.", B/binary>>.
+    L = integer_to_list(Status),
+    "katipo.status." ++ L.
 
-notify_metrics(MetricsEngine, Metrics, TotalUs) ->
+notify_metrics(Metrics, TotalUs) ->
     %% Curl metrics are in seconds
     Metrics1 = [{K, 1000 * V} || {K, V} <- Metrics],
     %% now_diff is in microsecs
@@ -51,7 +43,7 @@ notify_metrics(MetricsEngine, Metrics, TotalUs) ->
         end,
     Notify = fun({K, V}) ->
                      Name = name(K),
-                     ok = metrics:update_histogram(MetricsEngine, Name, V)
+                     ok = metrics:update_or_create(Name, {c, V}, histogram)
              end,
     ok = lists:foreach(Notify, Metrics3),
     Metrics3.
@@ -59,13 +51,12 @@ notify_metrics(MetricsEngine, Metrics, TotalUs) ->
 -spec init() -> ok.
 init() ->
     Mod = mod_metrics(),
-    MetricsEngine = metrics:init(Mod),
-    ok = application:set_env(katipo, metrics_engine, MetricsEngine).
+    ok = metrics:backend(Mod).
 
 mod_metrics() ->
-    case application:get_env(katipo, mod_metrics, metrics_dummy) of
+    case application:get_env(katipo, mod_metrics, noop) of
         folsom -> metrics_folsom;
-        exometer -> metrics_exometers;
-        dummy -> metrics_dummy;
+        exometer -> metrics_exometer;
+        noop -> metrics_noop;
         Mod -> Mod
     end.

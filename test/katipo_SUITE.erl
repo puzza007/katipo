@@ -644,20 +644,23 @@ max_total_connections(_) ->
 
 metrics_true(_) ->
     ok = meck:new(metrics, [passthrough]),
-    ok = meck:expect(metrics, update_histogram,
-                     fun(_, X, _) when X =:= <<"katipo.total_time">> orelse
-                                       X =:= <<"katipo.curl_time">> orelse
-                                       X =:= <<"katipo.namelookup_time">> orelse
-                                       X =:= <<"katipo.connect_time">> orelse
-                                       X =:= <<"katipo.appconnect_time">> orelse
-                                       X =:= <<"katipo.pretransfer_time">> orelse
-                                       X =:= <<"katipo.redirect_time">> orelse
-                                       X =:= <<"katipo.starttransfer_time">> ->
+    ok = meck:expect(metrics, update_or_create,
+                     fun(X, _, spiral) when X =:= "katipo.status.200" orelse
+                                            X =:= "katipo.ok" ->
+                             ok;
+                        (X, _, histogram) when X =:= "katipo.curl_time" orelse
+                                               X =:= "katipo.total_time" orelse
+                                               X =:= "katipo.namelookup_time" orelse
+                                               X =:= "katipo.connect_time" orelse
+                                               X =:= "katipo.appconnect_time" orelse
+                                               X =:= "katipo.pretransfer_time" orelse
+                                               X =:= "katipo.redirect_time" orelse
+                                               X =:= "katipo.starttransfer_time" ->
                              ok
                      end),
     {ok, #{status := 200, metrics := Metrics}} =
         katipo:head(?POOL, <<"http://httpbin.org/get">>, #{return_metrics => true}),
-    8 = meck:num_calls(metrics, update_histogram, 3),
+    10 = meck:num_calls(metrics, update_or_create, 3),
     MetricKeys = [K || {K, _} <- Metrics],
     ExpectedMetricKeys = [curl_time,total_time,namelookup_time,connect_time,
                           appconnect_time,pretransfer_time,redirect_time,

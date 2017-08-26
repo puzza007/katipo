@@ -1,6 +1,6 @@
 {application, 'katipo',
  [{description, "HTTP client based on libcurl"},
-  {vsn, "0.5.3"},
+  {vsn, "0.6.0"},
   {registered, []},
   {mod, {'katipo_app', []}},
   {applications,
@@ -10,7 +10,7 @@
     worker_pool,
     metrics
    ]},
-  {env, [{mod_metrics, dummy}]},
+  {env, [{mod_metrics, noop}]},
   {modules, []},
   {maintainers, ["Paul Oliver"]},
   {licenses, ["MIT"]},
