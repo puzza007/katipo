@@ -98,7 +98,7 @@ katipo:Method(Pool :: atom(), URL :: binary(), ReqOptions :: map()).
 #### Application Config
 | Option | Values | Default | Notes |
 |:-------|:-------|:--------|:------|
-| `mod_metrics` | <code>folsom &#124; exometer &#124; dummy</code> | `dummy` | see [erlang-metrics](https://github.com/benoitc/erlang-metrics) |
+| `mod_metrics` | <code>folsom &#124; exometer &#124; noop</code> | `noop` | see [erlang-metrics](https://github.com/benoitc/erlang-metrics) |
 
 #### Request options
 
