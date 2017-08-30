@@ -1,7 +1,7 @@
 katipo
 =====
 
-An HTTP library for Erlang built around libcurl-multi and libevent.
+An HTTP client library for Erlang built around libcurl-multi and libevent.
 
 ### Status
 
