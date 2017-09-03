@@ -136,8 +136,10 @@ static const char *curl_error_code(CURLcode error) {
       return "ftp_weird_227_format";
     case CURLE_FTP_CANT_GET_HOST:
       return "ftp_cant_get_host";
-    /* case CURLE_HTTP2: */
-    /*   return "http2"; */
+    #if LIBCURL_VERSION_NUM >= 0x072600 /* Available since 7.38.0 */
+    case CURLE_HTTP2:
+      return "http2";
+    #endif
     case CURLE_FTP_COULDNT_SET_TYPE:
       return "ftp_couldnt_set_type";
     case CURLE_PARTIAL_FILE:
@@ -284,8 +286,10 @@ static const char *curl_error_code(CURLcode error) {
       return "chunk_failed";
     case CURLE_NO_CONNECTION_AVAILABLE:
       return "no_connection_available";
+    #if LIBCURL_VERSION_NUM < 0x072600 /* Gone since 7.38.0 */
     case CURLE_OBSOLETE16:
       return "obsolete16";
+    #endif
     /* case CURLE_SSL_PINNEDPUBKEYNOTMATCH: */
     /*   return "ssl_pinnedpubkeynotmatch"; */
     /* case CURLE_SSL_INVALIDCERTSTATUS: */

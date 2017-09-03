@@ -93,6 +93,7 @@
         ftp_weird_pasv_reply |
         ftp_weird_227_format |
         ftp_cant_get_host |
+        http2 |
         ftp_couldnt_set_type |
         partial_file |
         ftp_couldnt_retr_file |
