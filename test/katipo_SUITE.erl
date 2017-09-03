@@ -119,7 +119,7 @@ groups() ->
        port_death,
        port_late_response,
        pool_opts]},
-     {https, [],
+     {https, [parallel],
       [verify_host_verify_peer_ok,
        verify_host_verify_peer_error,
        cacert_self_signed,
