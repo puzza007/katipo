@@ -119,10 +119,11 @@ groups() ->
        port_death,
        port_late_response,
        pool_opts]},
-     {https, [],
+     {https, [parallel],
       [verify_host_verify_peer_ok,
        verify_host_verify_peer_error,
-       cacert_self_signed]},
+       cacert_self_signed,
+       badssl]},
      {proxy, [],
       [proxy_get,
        proxy_post_data]},
@@ -539,6 +540,16 @@ cacert_self_signed(Config) ->
     {ok, #{status := 200}} =
         katipo:get(?POOL, <<"https://localhost:8443">>,
                    #{ssl_verifyhost => true, ssl_verifypeer => true, cacert => CACert}).
+
+badssl(_) ->
+    {error, _} =
+        katipo:get(?POOL, <<"https://expired.badssl.com/">>),
+    {error, _} =
+        katipo:get(?POOL, <<"https://wrong.host.badssl.com/">>),
+    {error, _} =
+        katipo:get(?POOL, <<"https://self-signed.badssl.com/">>),
+    {error, _} =
+        katipo:get(?POOL, <<"https://untrusted-root.badssl.com/">>).
 
 proxy_get(_) ->
     Url = <<"http://httpbin.org/get?a=%21%40%23%24%25%5E%26%2A%28%29_%2B">>,
