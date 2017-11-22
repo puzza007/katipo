@@ -1,0 +1,16 @@
+FROM ubuntu:18.04
+
+MAINTAINER Paul Oliver
+
+RUN apt-get -qq update \
+    && apt-get -qq -y install \
+               libevent-dev \
+               libcurl4-openssl-dev \
+               erlang \
+               make \
+               curl \
+               libssl-dev \
+               gcc \
+    && rm -rf /var/lib/apt/lists/* \
+    && curl --location https://github.com/erlang/rebar3/releases/download/3.4.2/rebar3 > /usr/local/bin/rebar3 \
+    && chmod 755 /usr/local/bin/rebar3
