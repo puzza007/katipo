@@ -118,6 +118,7 @@ katipo:Method(Pool :: atom(), URL :: binary(), ReqOptions :: map()).
 | `proxy`             | `binary()`                      | `undefined`       |                   |
 | `return_metrics`    | `boolean()`                     | `false`           |                   |
 | `tcp_fastopen`      | `boolean()`                     | `false`           | curl >= 7.49.0    |
+| `interface`         | `binary()`                      | `undefined`       |                   |
 
 #### Responses
 

@@ -105,6 +105,8 @@ groups() ->
        followlocation_false,
        tcp_fastopen_true,
        tcp_fastopen_false,
+       interface,
+       interface_unknown,
        timeout_ms,
        maxredirs,
        basic_unauthorised,
@@ -376,6 +378,22 @@ tcp_fastopen_true(_) ->
 tcp_fastopen_false(_) ->
     {ok, #{}} =
         katipo:get(?POOL, <<"http://httpbin.org/get">>, #{tcp_fastopen => false}).
+
+interface(_) ->
+    Interface = case os:type() of
+                    {unix, darwin} ->
+                        <<"en0">>;
+                    {unix, _} ->
+                        <<"eth0">>;
+                    _ ->
+                        erlang:error({unknown_operating_system, fixme})
+                end,
+    {ok, #{}} =
+        katipo:get(?POOL, <<"http://httpbin.org/get">>, #{interface => Interface}).
+
+interface_unknown(_) ->
+    {error, #{code := interface_failed}} =
+        katipo:get(?POOL, <<"http://httpbin.org/get">>, #{interface => <<"cannot_be_an_interface">>}).
 
 maxredirs(_) ->
     Opts = #{followlocation => true, maxredirs => 2},
