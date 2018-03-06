@@ -35,6 +35,7 @@
 #define K_CURLOPT_PROXY 15
 #define K_CURLOPT_CACERT 16
 #define K_CURLOPT_TCP_FASTOPEN 17
+#define K_CURLOPT_INTERFACE 18
 
 #define K_CURLAUTH_BASIC 100
 #define K_CURLAUTH_DIGEST 101
@@ -100,6 +101,7 @@ typedef struct _EasyOpts {
   char *curlopt_password;
   char *curlopt_proxy;
   long curlopt_tcp_fastopen;
+  char *curlopt_interface;
 } EasyOpts;
 
 static const char *curl_error_code(CURLcode error) {
@@ -779,6 +781,10 @@ static void new_conn(long method, char *url, struct curl_slist *req_headers,
     curl_easy_setopt(conn->easy, CURLOPT_PROXY,
                      eopts.curlopt_proxy);
   }
+  if (eopts.curlopt_interface != NULL) {
+    curl_easy_setopt(conn->easy, CURLOPT_INTERFACE,
+                     eopts.curlopt_interface);
+  }
   #if LIBCURL_VERSION_NUM >= 0x073100 /* Available since 7.49.0 */
   curl_easy_setopt(conn->easy, CURLOPT_TCP_FASTOPEN, eopts.curlopt_tcp_fastopen);
   #endif
@@ -800,6 +806,12 @@ static void new_conn(long method, char *url, struct curl_slist *req_headers,
   }
   if (eopts.curlopt_password != NULL) {
     free(eopts.curlopt_password);
+  }
+  if (eopts.curlopt_proxy != NULL) {
+    free(eopts.curlopt_proxy);
+  }
+  if (eopts.curlopt_interface != NULL) {
+    free(eopts.curlopt_interface);
   }
 
   set_method(method, conn);
@@ -948,6 +960,7 @@ static void erl_input(struct bufferevent *ev, void *arg) {
     eopts.curlopt_password = NULL;
     eopts.curlopt_proxy = NULL;
     eopts.curlopt_tcp_fastopen = 0;
+    eopts.curlopt_interface = NULL;
 
     if (ei_decode_list_header(buf, &index, &num_eopts)) {
       errx(2, "Couldn't decode eopts length");
@@ -1040,6 +1053,11 @@ static void erl_input(struct bufferevent *ev, void *arg) {
           break;
         case K_CURLOPT_TCP_FASTOPEN:
           eopts.curlopt_tcp_fastopen = eopt_long;
+          break;
+        case K_CURLOPT_INTERFACE:
+          if (erl_type == ERL_BINARY_EXT) {
+            eopts.curlopt_interface = eopt_binary;
+          }
           break;
         default:
           errx(2, "Unknown eopt value %ld", eopt);
