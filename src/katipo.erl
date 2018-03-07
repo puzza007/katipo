@@ -59,6 +59,7 @@
 -define(cacert, 16).
 -define(tcp_fastopen, 17).
 -define(interface, 18).
+-define(unix_socket_path, 19).
 
 -define(DEFAULT_REQ_TIMEOUT, 30000).
 -define(FOLLOWLOCATION_TRUE, 1).
@@ -256,7 +257,8 @@
           proxy = undefined :: undefined | binary(),
           return_metrics = false :: boolean(),
           tcp_fastopen = ?TCP_FASTOPEN_FALSE :: ?TCP_FASTOPEN_FALSE | ?TCP_FASTOPEN_TRUE,
-          interface = undefined :: undefined | binary()
+          interface = undefined :: undefined | binary(),
+          unix_socket_path = undefined :: undefined | binary()
          }).
 
 -spec get(katipo_pool:name(), url()) -> response().
@@ -366,7 +368,8 @@ handle_call(#req{method = Method,
                  password = Password,
                  proxy = Proxy,
                  tcp_fastopen = TCPFastOpen,
-                 interface = Interface},
+                 interface = Interface,
+                 unix_socket_path = UnixSocketPath},
              From,
              State=#state{port=Port, reqs=Reqs}) ->
     {Self, Ref} = From,
@@ -383,7 +386,8 @@ handle_call(#req{method = Method,
             {?password, Password},
             {?proxy, Proxy},
             {?tcp_fastopen, TCPFastOpen},
-            {?interface, Interface}],
+            {?interface, Interface},
+            {?unix_socket_path, UnixSocketPath}],
     Command = {Self, Ref, Method, Url, Headers, CookieJar, Body, Opts},
     true = port_command(Port, term_to_binary(Command)),
     Tref = erlang:start_timer(Timeout, self(), {req_timeout, From}),
@@ -551,6 +555,8 @@ opt(tcp_fastopen, false, {Req, Errors}) ->
     {Req#req{tcp_fastopen=?TCP_FASTOPEN_FALSE}, Errors};
 opt(interface, Interface, {Req, Errors}) when is_binary(Interface) ->
     {Req#req{interface=Interface}, Errors};
+opt(unix_socket_path, UnixSocketPath, {Req, Errors}) when is_binary(UnixSocketPath) ->
+    {Req#req{unix_socket_path=UnixSocketPath}, Errors};
 opt(K, V, {Req, Errors}) ->
     {Req, [{K, V} | Errors]}.
 

@@ -36,6 +36,7 @@
 #define K_CURLOPT_CACERT 16
 #define K_CURLOPT_TCP_FASTOPEN 17
 #define K_CURLOPT_INTERFACE 18
+#define K_CURLOPT_UNIX_SOCKET_PATH 19
 
 #define K_CURLAUTH_BASIC 100
 #define K_CURLAUTH_DIGEST 101
@@ -102,6 +103,7 @@ typedef struct _EasyOpts {
   char *curlopt_proxy;
   long curlopt_tcp_fastopen;
   char *curlopt_interface;
+  char *curlopt_unix_socket_path;
 } EasyOpts;
 
 static const char *curl_error_code(CURLcode error) {
@@ -785,6 +787,10 @@ static void new_conn(long method, char *url, struct curl_slist *req_headers,
     curl_easy_setopt(conn->easy, CURLOPT_INTERFACE,
                      eopts.curlopt_interface);
   }
+  if (eopts.curlopt_unix_socket_path != NULL) {
+    curl_easy_setopt(conn->easy, CURLOPT_UNIX_SOCKET_PATH,
+                     eopts.curlopt_unix_socket_path);
+  }
   #if LIBCURL_VERSION_NUM >= 0x073100 /* Available since 7.49.0 */
   curl_easy_setopt(conn->easy, CURLOPT_TCP_FASTOPEN, eopts.curlopt_tcp_fastopen);
   #endif
@@ -812,6 +818,9 @@ static void new_conn(long method, char *url, struct curl_slist *req_headers,
   }
   if (eopts.curlopt_interface != NULL) {
     free(eopts.curlopt_interface);
+  }
+  if (eopts.curlopt_unix_socket_path != NULL) {
+    free(eopts.curlopt_unix_socket_path);
   }
 
   set_method(method, conn);
@@ -961,6 +970,7 @@ static void erl_input(struct bufferevent *ev, void *arg) {
     eopts.curlopt_proxy = NULL;
     eopts.curlopt_tcp_fastopen = 0;
     eopts.curlopt_interface = NULL;
+    eopts.curlopt_unix_socket_path = NULL;
 
     if (ei_decode_list_header(buf, &index, &num_eopts)) {
       errx(2, "Couldn't decode eopts length");
@@ -1057,6 +1067,11 @@ static void erl_input(struct bufferevent *ev, void *arg) {
         case K_CURLOPT_INTERFACE:
           if (erl_type == ERL_BINARY_EXT) {
             eopts.curlopt_interface = eopt_binary;
+          }
+          break;
+        case K_CURLOPT_UNIX_SOCKET_PATH:
+          if (erl_type == ERL_BINARY_EXT) {
+            eopts.curlopt_unix_socket_path = eopt_binary;
           }
           break;
         default:

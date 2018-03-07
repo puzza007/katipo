@@ -107,6 +107,8 @@ groups() ->
        tcp_fastopen_false,
        interface,
        interface_unknown,
+       unix_socket_path,
+       unix_socket_path_cant_connect,
        timeout_ms,
        maxredirs,
        basic_unauthorised,
@@ -394,6 +396,15 @@ interface(_) ->
 interface_unknown(_) ->
     {error, #{code := interface_failed}} =
         katipo:get(?POOL, <<"http://httpbin.org/get">>, #{interface => <<"cannot_be_an_interface">>}).
+
+unix_socket_path(_) ->
+    {ok, #{status := 200, headers := Headers}} =
+        katipo:get(?POOL, <<"http://localhost/images/json">>, #{unix_socket_path => <<"/var/run/docker.sock">>}),
+    <<"Docker/",_/binary>> = proplists:get_value(<<"Server">>, Headers).
+
+unix_socket_path_cant_connect(_) ->
+    {error, #{code := couldnt_connect}} =
+        katipo:get(?POOL, <<"http://localhost/images/json">>, #{unix_socket_path => <<"4e199b4a1c40b497a95fcd1cd896351733849949">>}).
 
 maxredirs(_) ->
     Opts = #{followlocation => true, maxredirs => 2},

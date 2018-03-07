@@ -119,6 +119,7 @@ katipo:Method(Pool :: atom(), URL :: binary(), ReqOptions :: map()).
 | `return_metrics`    | `boolean()`                   | `false`     |                                                                                 |
 | `tcp_fastopen`      | `boolean()`                   | `false`     | [docs](https://curl.haxx.se/libcurl/c/CURLOPT_TCP_FASTOPEN.html) curl >= 7.49.0 |
 | `interface`         | `binary()`                    | `undefined` | [docs](https://curl.haxx.se/libcurl/c/CURLOPT_INTERFACE.html)                   |
+| `unix_socket_path`  | `binary()`                    | `undefined` | [docs](https://curl.haxx.se/libcurl/c/CURLOPT_UNIX_SOCKET_PATH.html)            |
 
 #### Responses
 
