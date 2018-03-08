@@ -261,6 +261,18 @@
           unix_socket_path = undefined :: undefined | binary()
          }).
 
+-ifdef(tcp_fastopen_available).
+-define(TCP_FASTOPEN_AVAILABLE, true).
+-else.
+-define(TCP_FASTOPEN_AVAILABLE, false).
+-endif.
+
+-ifdef(unix_socket_path_available).
+-define(UNIX_SOCKET_PATH_AVAILABLE, true).
+-else.
+-define(UNIX_SOCKET_PATH_AVAILABLE, false).
+-endif.
+
 -spec get(katipo_pool:name(), url()) -> response().
 get(PoolName, Url) ->
     get(PoolName, Url, #{}).
@@ -549,13 +561,14 @@ opt(proxy, Proxy, {Req, Errors}) when is_binary(Proxy) ->
     {Req#req{proxy=Proxy}, Errors};
 opt(return_metrics, Flag, {Req, Errors}) when is_boolean(Flag) ->
     {Req#req{return_metrics=Flag}, Errors};
-opt(tcp_fastopen, true, {Req, Errors}) ->
+opt(tcp_fastopen, true, {Req, Errors}) when ?TCP_FASTOPEN_AVAILABLE ->
     {Req#req{tcp_fastopen=?TCP_FASTOPEN_TRUE}, Errors};
-opt(tcp_fastopen, false, {Req, Errors}) ->
+opt(tcp_fastopen, false, {Req, Errors}) when ?TCP_FASTOPEN_AVAILABLE ->
     {Req#req{tcp_fastopen=?TCP_FASTOPEN_FALSE}, Errors};
 opt(interface, Interface, {Req, Errors}) when is_binary(Interface) ->
     {Req#req{interface=Interface}, Errors};
-opt(unix_socket_path, UnixSocketPath, {Req, Errors}) when is_binary(UnixSocketPath) ->
+opt(unix_socket_path, UnixSocketPath, {Req, Errors})
+  when is_binary(UnixSocketPath) andalso ?UNIX_SOCKET_PATH_AVAILABLE ->
     {Req#req{unix_socket_path=UnixSocketPath}, Errors};
 opt(K, V, {Req, Errors}) ->
     {Req, [{K, V} | Errors]}.

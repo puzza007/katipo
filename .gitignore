@@ -21,3 +21,4 @@ _build
 /priv/katipo
 .vagrant/
 local/
+/rebar3.crashdump

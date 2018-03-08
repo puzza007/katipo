@@ -374,12 +374,23 @@ followlocation_false(_) ->
         katipo:get(?POOL, <<"http://httpbin.org/redirect/6">>, #{followlocation => false}).
 
 tcp_fastopen_true(_) ->
-    {ok, #{}} =
-        katipo:get(?POOL, <<"http://httpbin.org/get">>, #{tcp_fastopen => true}).
+    case katipo:get(?POOL, <<"http://httpbin.org/get">>, #{tcp_fastopen => true}) of
+        {ok, #{}} ->
+            ok;
+        {error, #{code := bad_opts}} ->
+            ct:pal("tcp_fastopen not supported by installed version of curl"),
+            ok
+    end.
+
 
 tcp_fastopen_false(_) ->
-    {ok, #{}} =
-        katipo:get(?POOL, <<"http://httpbin.org/get">>, #{tcp_fastopen => false}).
+    case katipo:get(?POOL, <<"http://httpbin.org/get">>, #{tcp_fastopen => false}) of
+        {ok, #{}} ->
+            ok;
+        {error, #{code := bad_opts}} ->
+            ct:pal("tcp_fastopen not supported by installed version of curl"),
+            ok
+    end.
 
 interface(_) ->
     Interface = case os:type() of
@@ -398,13 +409,22 @@ interface_unknown(_) ->
         katipo:get(?POOL, <<"http://httpbin.org/get">>, #{interface => <<"cannot_be_an_interface">>}).
 
 unix_socket_path(_) ->
-    {ok, #{status := 200, headers := Headers}} =
-        katipo:get(?POOL, <<"http://localhost/images/json">>, #{unix_socket_path => <<"/var/run/docker.sock">>}),
-    <<"Docker/",_/binary>> = proplists:get_value(<<"Server">>, Headers).
+    case katipo:get(?POOL, <<"http://localhost/images/json">>, #{unix_socket_path => <<"/var/run/docker.sock">>}) of
+        {ok, #{status := 200, headers := Headers}} ->
+            <<"Docker/",_/binary>> = proplists:get_value(<<"Server">>, Headers);
+        {error, #{code := bad_opts}} ->
+            ct:pal("unix_socket_path not supported by installed version of curl"),
+            ok
+    end.
 
 unix_socket_path_cant_connect(_) ->
-    {error, #{code := couldnt_connect}} =
-        katipo:get(?POOL, <<"http://localhost/images/json">>, #{unix_socket_path => <<"4e199b4a1c40b497a95fcd1cd896351733849949">>}).
+    case katipo:get(?POOL, <<"http://localhost/images/json">>, #{unix_socket_path => <<"4e199b4a1c40b497a95fcd1cd896351733849949">>}) of
+        {error, #{code := couldnt_connect}} ->
+            ok;
+        {error, #{code := bad_opts}} ->
+            ct:pal("unix_socket_path not supported by installed version of curl"),
+            ok
+    end.
 
 maxredirs(_) ->
     Opts = #{followlocation => true, maxredirs => 2},
