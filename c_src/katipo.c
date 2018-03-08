@@ -787,10 +787,12 @@ static void new_conn(long method, char *url, struct curl_slist *req_headers,
     curl_easy_setopt(conn->easy, CURLOPT_INTERFACE,
                      eopts.curlopt_interface);
   }
+  #if LIBCURL_VERSION_NUM >= 0x072800 /* Available since 7.40.0 */
   if (eopts.curlopt_unix_socket_path != NULL) {
     curl_easy_setopt(conn->easy, CURLOPT_UNIX_SOCKET_PATH,
                      eopts.curlopt_unix_socket_path);
   }
+  #endif
   #if LIBCURL_VERSION_NUM >= 0x073100 /* Available since 7.49.0 */
   curl_easy_setopt(conn->easy, CURLOPT_TCP_FASTOPEN, eopts.curlopt_tcp_fastopen);
   #endif
