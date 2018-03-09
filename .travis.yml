@@ -4,6 +4,9 @@ group: edge
 
 language: erlang
 
+services:
+  - docker
+
 otp_release:
   - 18.2
   - 19.1

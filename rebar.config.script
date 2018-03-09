@@ -1,9 +1,34 @@
 %%% -*- mode: erlang -*-
 
+CurlVerHex = string:strip(os:cmd("curl-config --vernum"), right, $\n).
+CurlVerInt = erlang:list_to_integer(CurlVerHex, 16).
+
+%% CURLOPT_TCP_FASTOPEN since 7.49.0 (471296)
+CurlOptTcpFastopen = case CurlVerInt >= 471296 of
+                         true ->
+                             [{d, tcp_fastopen_available}];
+                         false ->
+                             []
+                     end.
+
+%% CURLOPT_UNIX_SOCKET_PATH since 7.40.0 (468992)
+CurlOptUnixSocketPath = case CurlVerInt >= 468992 of
+                            true ->
+                                [{d, unix_socket_path_available}];
+                            false ->
+                                []
+                        end.
+
+{_, ErlOpts} = lists:keyfind(erl_opts, 1, CONFIG).
+
+ErlOpts2 = ErlOpts ++ CurlOptTcpFastopen ++ CurlOptUnixSocketPath.
+
+Config1 = lists:keystore(erl_opts, 1, CONFIG, {erl_opts, ErlOpts2}).
+
 case os:getenv("TRAVIS") of
     "true" ->
         JobId   = os:getenv("TRAVIS_JOB_ID"),
-        lists:keystore(coveralls_service_job_id, 1, CONFIG, {coveralls_service_job_id, JobId});
+        lists:keystore(coveralls_service_job_id, 1, Config1, {coveralls_service_job_id, JobId});
     _ ->
-        CONFIG
+        Config1
 end.
