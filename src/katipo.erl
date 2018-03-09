@@ -273,6 +273,8 @@
 -define(UNIX_SOCKET_PATH_AVAILABLE, false).
 -endif.
 
+-dialyzer({nowarn_function, opt/3}).
+
 -spec get(katipo_pool:name(), url()) -> response().
 get(PoolName, Url) ->
     get(PoolName, Url, #{}).
