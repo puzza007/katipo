@@ -26,4 +26,4 @@ start(PoolName, PoolSize, WorkerOpts)
 
 -spec stop(name()) -> ok.
 stop(PoolName) when is_atom(PoolName) ->
-    wpool:stop_pool(PoolName).
+    wpool:stop_sup_pool(PoolName).
