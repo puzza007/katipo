@@ -115,6 +115,8 @@ groups() ->
        basic_authorised,
        digest_unauthorised,
        digest_authorised,
+       lock_data_ssl_session_true,
+       lock_data_ssl_session_false,
        badopts,
        proxy_couldnt_connect]},
      {pool, [],
@@ -458,6 +460,20 @@ digest_authorised(_) ->
     Json = jsx:decode(Body),
     true = proplists:get_value(<<"authenticated">>, Json),
     Username = proplists:get_value(<<"user">>, Json).
+
+lock_data_ssl_session_true(_) ->
+    {ok, #{status := 200, body := Body}} =
+        katipo:get(?POOL, <<"https://httpbin.org/get?a=%21%40%23%24%25%5E%26%2A%28%29_%2B">>,
+                  #{lock_data_ssl_session => true}),
+    Json = jsx:decode(Body),
+    [{<<"a">>, <<"!@#$%^&*()_+">>}] = proplists:get_value(<<"args">>, Json).
+
+lock_data_ssl_session_false(_) ->
+    {ok, #{status := 200, body := Body}} =
+        katipo:get(?POOL, <<"https://httpbin.org/get?a=%21%40%23%24%25%5E%26%2A%28%29_%2B">>,
+                  #{lock_data_ssl_session => false}),
+    Json = jsx:decode(Body),
+    [{<<"a">>, <<"!@#$%^&*()_+">>}] = proplists:get_value(<<"args">>, Json).
 
 badopts(_) ->
     {error, #{code := bad_opts, message := Message}} =

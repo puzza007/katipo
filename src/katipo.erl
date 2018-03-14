@@ -60,6 +60,7 @@
 -define(tcp_fastopen, 17).
 -define(interface, 18).
 -define(unix_socket_path, 19).
+-define(lock_data_ssl_session, 20).
 
 -define(DEFAULT_REQ_TIMEOUT, 30000).
 -define(FOLLOWLOCATION_TRUE, 1).
@@ -73,6 +74,8 @@
 -define(CURLAUTH_UNDEFINED, 102).
 -define(TCP_FASTOPEN_FALSE, 0).
 -define(TCP_FASTOPEN_TRUE, 1).
+-define(LOCK_DATA_SSL_SESSION_FALSE, 0).
+-define(LOCK_DATA_SSL_SESSION_TRUE, 1).
 
 -define(METHODS, [get, post, put, head, options, patch, delete]).
 
@@ -259,7 +262,9 @@
           return_metrics = false :: boolean(),
           tcp_fastopen = ?TCP_FASTOPEN_FALSE :: ?TCP_FASTOPEN_FALSE | ?TCP_FASTOPEN_TRUE,
           interface = undefined :: undefined | binary(),
-          unix_socket_path = undefined :: undefined | binary()
+          unix_socket_path = undefined :: undefined | binary(),
+          lock_data_ssl_session = ?LOCK_DATA_SSL_SESSION_FALSE ::
+            ?LOCK_DATA_SSL_SESSION_FALSE | ?LOCK_DATA_SSL_SESSION_TRUE
          }).
 
 -ifdef(tcp_fastopen_available).
@@ -384,7 +389,8 @@ handle_call(#req{method = Method,
                  proxy = Proxy,
                  tcp_fastopen = TCPFastOpen,
                  interface = Interface,
-                 unix_socket_path = UnixSocketPath},
+                 unix_socket_path = UnixSocketPath,
+                 lock_data_ssl_session = LockDataSslSession},
              From,
              State=#state{port=Port, reqs=Reqs}) ->
     {Self, Ref} = From,
@@ -402,7 +408,8 @@ handle_call(#req{method = Method,
             {?proxy, Proxy},
             {?tcp_fastopen, TCPFastOpen},
             {?interface, Interface},
-            {?unix_socket_path, UnixSocketPath}],
+            {?unix_socket_path, UnixSocketPath},
+            {?lock_data_ssl_session, LockDataSslSession}],
     Command = {Self, Ref, Method, Url, Headers, CookieJar, Body, Opts},
     true = port_command(Port, term_to_binary(Command)),
     Tref = erlang:start_timer(Timeout, self(), {req_timeout, From}),
@@ -573,6 +580,10 @@ opt(interface, Interface, {Req, Errors}) when is_binary(Interface) ->
 opt(unix_socket_path, UnixSocketPath, {Req, Errors})
   when is_binary(UnixSocketPath) andalso ?UNIX_SOCKET_PATH_AVAILABLE ->
     {Req#req{unix_socket_path=UnixSocketPath}, Errors};
+opt(lock_data_ssl_session, true, {Req, Errors}) ->
+    {Req#req{lock_data_ssl_session=?LOCK_DATA_SSL_SESSION_TRUE}, Errors};
+opt(lock_data_ssl_session, false, {Req, Errors}) ->
+    {Req#req{lock_data_ssl_session=?LOCK_DATA_SSL_SESSION_FALSE}, Errors};
 opt(K, V, {Req, Errors}) ->
     {Req, [{K, V} | Errors]}.
 
