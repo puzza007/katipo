@@ -4,4 +4,4 @@ MAINTAINER Paul Oliver
 
 COPY . /katipo
 
-RUN cd /katipo && make update test dialyzer
+RUN cd /katipo && rebar3 update && rebar3 ct && rebar3 dialyzer
