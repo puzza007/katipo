@@ -177,8 +177,7 @@ brew install libevent
 ### Building
 
 ```sh
-make
-make test
+rebar3 compile
 ```
 
 [travis_ci]: https://travis-ci.org/puzza007/katipo

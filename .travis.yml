@@ -13,9 +13,7 @@ otp_release:
   - 20.0
   - 20.1
 
-script: PATH=.:$PATH make update test dialyzer coveralls
-
-install: wget https://github.com/erlang/rebar3/releases/download/3.4.2/rebar3 && chmod 755 rebar3
+script: rebar3 update && rebar3 ct && rebar3 dialyzer && rebar3 coveralls send
 
 cache:
   directories:
@@ -25,6 +23,3 @@ addons:
   apt:
     packages:
       - libevent-dev
-  # artifacts:
-  #   paths:
-  #     - $TRAVIS_BUILD_DIR/_build/test/logs/
