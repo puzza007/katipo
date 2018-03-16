@@ -1,12 +1,10 @@
 {"1.1.0",
-[{<<"cowlib">>,{pkg,<<"cowlib">>,<<"1.0.2">>},0},
- {<<"metrics">>,
-  {git,"https://github.com/voughtdq/erlang-metrics.git",
-       {ref,"cc99b5be6afcd6bd3715fa23ed9ffd207cfb5996"}},
-  0},
+[{<<"cowlib">>,{pkg,<<"cowlib">>,<<"2.2.0">>},0},
+ {<<"metrics">>,{pkg,<<"metrics">>,<<"2.5.0">>},0},
  {<<"worker_pool">>,{pkg,<<"worker_pool">>,<<"3.1.1">>},0}]}.
 [
 {pkg_hash,[
- {<<"cowlib">>, <<"9D769A1D062C9C3AC753096F868CA121E2730B9A377DE23DEC0F7E08B1DF84EE">>},
+ {<<"cowlib">>, <<"1CD55E37B6F9171C934C8685BB25184C30EC0232F431A3E2A6E5BE976255CCFF">>},
+ {<<"metrics">>, <<"268D218D56529CB5F070D74BBFC3AF64C668379B5B18FAFDA88959442F790C57">>},
  {<<"worker_pool">>, <<"A9BF27CFF366999784A3F0657F016CE3A57901490858CCA3FB3BE1208BF2110D">>}]}
 ].

@@ -1,15 +1,7 @@
 -module(get_handler).
 
--export([init/3]).
--export([handle/2]).
--export([terminate/3]).
+-export([init/2]).
 
-init(_, Req, _) ->
-    {ok, Req, no_state}.
-
-handle(Req, State) ->
+init(Req, Opts) ->
     Req2 = cowboy_req:reply(200, Req),
-    {ok, Req2, State}.
-
-terminate(_, _, _) ->
-    ok.
+    {ok, Req2, Opts}.
