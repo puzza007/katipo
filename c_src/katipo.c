@@ -40,6 +40,7 @@
 
 #define K_CURLAUTH_BASIC 100
 #define K_CURLAUTH_DIGEST 101
+#define K_CURLAUTH_UNDEFINED 102
 
 struct bufferevent *to_erlang;
 struct bufferevent *from_erlang;
@@ -303,7 +304,6 @@ static const char *curl_error_code(CURLcode error) {
     default:
       return "unknown_error";
   }
-  return "unknown_error";
 }
 
 /* Die if we get a bad CURLMcode somewhere */
@@ -992,26 +992,7 @@ static void erl_input(struct bufferevent *ev, void *arg) {
         if (ei_decode_long(buf, &index, &eopt_long)) {
           errx(2, "Couldn't read eopt long value");
         }
-        break;
-      case ERL_BINARY_EXT:
-        eopt_binary = (char *)malloc(size + 1);
-        if (ei_decode_binary(buf, &index, eopt_binary, &sizel)) {
-          errx(2, "Couldn't read eopt binary value");
-        }
-        eopt_binary[size] = '\0';
-        break;
-      case ERL_ATOM_EXT:
-        // assuming this is 'undefined' == NULL
-        if (ei_skip_term(buf, &index)) {
-          errx(2, "Couldn't skip eopt atom value");
-        }
-        break;
-      default:
-        errx(2, "Couldn't read eopt value '%c'", erl_type);
-        break;
-      }
-
-      switch (eopt) {
+        switch (eopt) {
         case K_CURLOPT_CONNECTTIMEOUT_MS:
           eopts.curlopt_connecttimeout_ms = eopt_long;
           break;
@@ -1024,60 +1005,69 @@ static void erl_input(struct bufferevent *ev, void *arg) {
         case K_CURLOPT_SSL_VERIFYPEER:
           eopts.curlopt_ssl_verifypeer = eopt_long;
           break;
-        case K_CURLOPT_CAPATH:
-          if (erl_type == ERL_BINARY_EXT) {
-            eopts.curlopt_capath = eopt_binary;
-          }
-          break;
-        case K_CURLOPT_CACERT:
-          if (erl_type == ERL_BINARY_EXT) {
-            eopts.curlopt_cacert = eopt_binary;
-          }
-          break;
         case K_CURLOPT_TIMEOUT_MS:
           eopts.curlopt_timeout_ms = eopt_long;
           break;
         case K_CURLOPT_MAXREDIRS:
           eopts.curlopt_maxredirs = eopt_long;
           break;
-        case K_CURLOPT_HTTP_AUTH:
-          if (erl_type != ERL_ATOM_EXT) {
-            if (eopt_long == K_CURLAUTH_BASIC) {
-              eopts.curlopt_http_auth = CURLAUTH_BASIC;
-            } else if (eopt_long == K_CURLAUTH_DIGEST) {
-              eopts.curlopt_http_auth = CURLAUTH_DIGEST;
-            }
-          }
-        case K_CURLOPT_USERNAME:
-          if (erl_type == ERL_BINARY_EXT) {
-            eopts.curlopt_username = eopt_binary;
-          }
-          break;
-        case K_CURLOPT_PASSWORD:
-          if (erl_type == ERL_BINARY_EXT) {
-            eopts.curlopt_password = eopt_binary;
-          }
-          break;
-        case K_CURLOPT_PROXY:
-          if (erl_type == ERL_BINARY_EXT) {
-            eopts.curlopt_proxy = eopt_binary;
-          }
-          break;
         case K_CURLOPT_TCP_FASTOPEN:
           eopts.curlopt_tcp_fastopen = eopt_long;
           break;
-        case K_CURLOPT_INTERFACE:
-          if (erl_type == ERL_BINARY_EXT) {
-            eopts.curlopt_interface = eopt_binary;
-          }
-          break;
-        case K_CURLOPT_UNIX_SOCKET_PATH:
-          if (erl_type == ERL_BINARY_EXT) {
-            eopts.curlopt_unix_socket_path = eopt_binary;
+        case K_CURLOPT_HTTP_AUTH:
+          if (eopt_long == K_CURLAUTH_BASIC) {
+            eopts.curlopt_http_auth = CURLAUTH_BASIC;
+          } else if (eopt_long == K_CURLAUTH_DIGEST) {
+            eopts.curlopt_http_auth = CURLAUTH_DIGEST;
+          } else if (eopt_long != K_CURLAUTH_UNDEFINED) {
+            errx(2, "Unknown curlopt_http_auth value %ld", eopt_long);
           }
           break;
         default:
-          errx(2, "Unknown eopt value %ld", eopt);
+          errx(2, "Unknown eopt long value %ld", eopt);
+        }
+        break;
+      case ERL_BINARY_EXT:
+        eopt_binary = (char *)malloc(size + 1);
+        if (ei_decode_binary(buf, &index, eopt_binary, &sizel)) {
+          errx(2, "Couldn't read eopt binary value");
+        }
+        eopt_binary[size] = '\0';
+        switch (eopt) {
+        case K_CURLOPT_CAPATH:
+          eopts.curlopt_capath = eopt_binary;
+          break;
+        case K_CURLOPT_CACERT:
+          eopts.curlopt_cacert = eopt_binary;
+          break;
+        case K_CURLOPT_USERNAME:
+          eopts.curlopt_username = eopt_binary;
+          break;
+        case K_CURLOPT_PASSWORD:
+          eopts.curlopt_password = eopt_binary;
+          break;
+        case K_CURLOPT_PROXY:
+          eopts.curlopt_proxy = eopt_binary;
+          break;
+        case K_CURLOPT_INTERFACE:
+          eopts.curlopt_interface = eopt_binary;
+          break;
+        case K_CURLOPT_UNIX_SOCKET_PATH:
+          eopts.curlopt_unix_socket_path = eopt_binary;
+          break;
+        default:
+          errx(2, "Unknown eopt binary value %ld", eopt);
+        }
+        break;
+      case ERL_ATOM_EXT:
+        // assuming this is 'undefined' == NULL
+        if (ei_skip_term(buf, &index)) {
+          errx(2, "Couldn't skip eopt atom value");
+        }
+        break;
+      default:
+        errx(2, "Couldn't read eopt value '%c'", erl_type);
+        break;
       }
     }
 
