@@ -70,6 +70,7 @@
 -define(SSL_VERIFYPEER_FALSE, 0).
 -define(CURLAUTH_BASIC, 100).
 -define(CURLAUTH_DIGEST, 101).
+-define(CURLAUTH_UNDEFINED, 102).
 -define(TCP_FASTOPEN_FALSE, 0).
 -define(TCP_FASTOPEN_TRUE, 1).
 
@@ -215,7 +216,7 @@
 -type response() :: {ok, map()} | {error, map()}.
 -endif.
 -type http_auth() :: basic | digest.
--type http_auth_int() :: ?CURLAUTH_BASIC | ?CURLAUTH_DIGEST.
+-type http_auth_int() :: ?CURLAUTH_UNDEFINED | ?CURLAUTH_BASIC | ?CURLAUTH_DIGEST.
 -type curlmopts() :: [{max_pipeline_length, non_neg_integer()} |
                       {pipelining, boolean()} |
                       {max_total_connections, non_neg_integer()}].
@@ -251,7 +252,7 @@
           timeout_ms = ?DEFAULT_REQ_TIMEOUT :: pos_integer(),
           maxredirs = 9 :: non_neg_integer(),
           timeout = ?DEFAULT_REQ_TIMEOUT :: pos_integer(),
-          http_auth = undefined :: undefined | http_auth_int(),
+          http_auth = ?CURLAUTH_UNDEFINED :: http_auth_int(),
           username = undefined :: undefined | binary(),
           password = undefined :: undefined | binary(),
           proxy = undefined :: undefined | binary(),
