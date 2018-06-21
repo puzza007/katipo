@@ -8,10 +8,10 @@ services:
   - docker
 
 otp_release:
-  - 18.2
   - 19.1
   - 20.0
   - 20.1
+  - 21.0
 
 script: rebar3 update && rebar3 ct && rebar3 dialyzer && rebar3 coveralls send
 
