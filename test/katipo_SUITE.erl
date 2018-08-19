@@ -306,12 +306,12 @@ deflate(_) ->
 bytes(_) ->
     {ok, #{status := 200, body := Body}} = katipo:get(?POOL, <<"http://httpbin.org/bytes/1024?seed=9999">>),
     1024 = byte_size(Body),
-    <<214,141,60,147,148,212,22,181,40,183,133,31,67,245,222,40>> = crypto:hash(md5, Body).
+    <<168,123,193,120,18,120,65,73,67,119,198,61,39,1,24,169>> = crypto:hash(md5, Body).
 
 stream_bytes(_) ->
     {ok, #{status := 200, body := Body}} = katipo:get(?POOL, <<"http://httpbin.org/bytes/1024?seed=9999&chunk_size=8">>),
     1024 = byte_size(Body),
-    <<214,141,60,147,148,212,22,181,40,183,133,31,67,245,222,40>> = crypto:hash(md5, Body).
+    <<168,123,193,120,18,120,65,73,67,119,198,61,39,1,24,169>> = crypto:hash(md5, Body).
 
 utf8(_) ->
     {ok, #{status := 200, body := Body}} = katipo:get(?POOL, <<"http://httpbin.org/encoding/utf8">>),
