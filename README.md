@@ -102,24 +102,25 @@ katipo:Method(Pool :: atom(), URL :: binary(), ReqOptions :: map()).
 
 #### Request options
 
-| Option              | Type                          | Default     | Notes                                                                               |
-|:--------------------|:------------------------------|:------------|:------------------------------------------------------------------------------------|
-| `headers`           | `[{binary(), iodata()}]`      | `[]`        |                                                                                     |
-| `cookiejar`         | opaque (returned in response) | `[]`        |                                                                                     |
-| `body`              | `iodata()`                    | `<<>>`      |                                                                                     |
-| `connecttimeout_ms` | `pos_integer()`               | 30000       | [docs](https://curl.haxx.se/libcurl/c/CURLOPT_CONNECTTIMEOUT.html)                  |
-| `followlocation`    | `boolean()`                   | `false`     | [docs](https://curl.haxx.se/libcurl/c/CURLOPT_FOLLOWLOCATION.html)                  |
-| `ssl_verifyhost`    | `boolean()`                   | `true`      | [docs](https://curl.haxx.se/libcurl/c/CURLOPT_SSL_VERIFYHOST.html)                  |
-| `ssl_verifypeer`    | `boolean()`                   | `true`      | [docs](https://curl.haxx.se/libcurl/c/CURLOPT_SSL_VERIFYPEER.html)                  |
-| `capath`            | `binary()`                    | `undefined` |                                                                                     |
-| `cacert`            | `binary()`                    | `undefined` |                                                                                     |
-| `timeout_ms`        | `pos_integer()`               | 30000       |                                                                                     |
-| `maxredirs`         | `non_neg_integer()`           | 9           |                                                                                     |
-| `proxy`             | `binary()`                    | `undefined` | [docs](https://curl.haxx.se/libcurl/c/CURLOPT_PROXY.html)                           |
-| `return_metrics`    | `boolean()`                   | `false`     |                                                                                     |
-| `tcp_fastopen`      | `boolean()`                   | `false`     | [docs](https://curl.haxx.se/libcurl/c/CURLOPT_TCP_FASTOPEN.html) curl >= 7.49.0     |
-| `interface`         | `binary()`                    | `undefined` | [docs](https://curl.haxx.se/libcurl/c/CURLOPT_INTERFACE.html)                       |
-| `unix_socket_path`  | `binary()`                    | `undefined` | [docs](https://curl.haxx.se/libcurl/c/CURLOPT_UNIX_SOCKET_PATH.html) curl >= 7.40.0 |
+| Option                  | Type                          | Default     | Notes                                                                               |
+|:------------------------|:------------------------------|:------------|:------------------------------------------------------------------------------------|
+| `headers`               | `[{binary(), iodata()}]`      | `[]`        |                                                                                     |
+| `cookiejar`             | opaque (returned in response) | `[]`        |                                                                                     |
+| `body`                  | `iodata()`                    | `<<>>`      |                                                                                     |
+| `connecttimeout_ms`     | `pos_integer()`               | 30000       | [docs](https://curl.haxx.se/libcurl/c/CURLOPT_CONNECTTIMEOUT.html)                  |
+| `followlocation`        | `boolean()`                   | `false`     | [docs](https://curl.haxx.se/libcurl/c/CURLOPT_FOLLOWLOCATION.html)                  |
+| `ssl_verifyhost`        | `boolean()`                   | `true`      | [docs](https://curl.haxx.se/libcurl/c/CURLOPT_SSL_VERIFYHOST.html)                  |
+| `ssl_verifypeer`        | `boolean()`                   | `true`      | [docs](https://curl.haxx.se/libcurl/c/CURLOPT_SSL_VERIFYPEER.html)                  |
+| `capath`                | `binary()`                    | `undefined` |                                                                                     |
+| `cacert`                | `binary()`                    | `undefined` |                                                                                     |
+| `timeout_ms`            | `pos_integer()`               | 30000       |                                                                                     |
+| `maxredirs`             | `non_neg_integer()`           | 9           |                                                                                     |
+| `proxy`                 | `binary()`                    | `undefined` | [docs](https://curl.haxx.se/libcurl/c/CURLOPT_PROXY.html)                           |
+| `return_metrics`        | `boolean()`                   | `false`     |                                                                                     |
+| `tcp_fastopen`          | `boolean()`                   | `false`     | [docs](https://curl.haxx.se/libcurl/c/CURLOPT_TCP_FASTOPEN.html) curl >= 7.49.0     |
+| `interface`             | `binary()`                    | `undefined` | [docs](https://curl.haxx.se/libcurl/c/CURLOPT_INTERFACE.html)                       |
+| `unix_socket_path`      | `binary()`                    | `undefined` | [docs](https://curl.haxx.se/libcurl/c/CURLOPT_UNIX_SOCKET_PATH.html) curl >= 7.40.0 |
+| `lock_data_ssl_session` | `boolean()`                   | `false`     | [docs](https://curl.haxx.se/libcurl/c/curl_share_setopt.html) curl >= 7.23.0        |
 
 #### Responses
 

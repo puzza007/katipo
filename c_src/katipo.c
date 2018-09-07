@@ -37,6 +37,7 @@
 #define K_CURLOPT_TCP_FASTOPEN 17
 #define K_CURLOPT_INTERFACE 18
 #define K_CURLOPT_UNIX_SOCKET_PATH 19
+#define K_CURLOPT_LOCK_DATA_SSL_SESSION 20
 
 #define K_CURLAUTH_BASIC 100
 #define K_CURLAUTH_DIGEST 101
@@ -49,6 +50,7 @@ typedef struct _GlobalInfo {
   struct event_base *evbase;
   struct event *timer_event;
   CURLM *multi;
+  CURLSH *shobject;
   int still_running;
   size_t to_get;
 } GlobalInfo;
@@ -105,6 +107,7 @@ typedef struct _EasyOpts {
   long curlopt_tcp_fastopen;
   char *curlopt_interface;
   char *curlopt_unix_socket_path;
+  long curlopt_lock_data_ssl_session;
 } EasyOpts;
 
 static const char *curl_error_code(CURLcode error) {
@@ -802,6 +805,9 @@ static void new_conn(long method, char *url, struct curl_slist *req_headers,
     curl_easy_setopt(conn->easy, CURLOPT_COOKIELIST, nc->data);
     nc = nc->next;
   }
+  if (eopts.curlopt_lock_data_ssl_session) {
+    curl_easy_setopt(conn->easy, CURLOPT_SHARE, global->shobject);
+  }
 
   if (eopts.curlopt_capath != NULL) {
     free(eopts.curlopt_capath);
@@ -973,6 +979,7 @@ static void erl_input(struct bufferevent *ev, void *arg) {
     eopts.curlopt_tcp_fastopen = 0;
     eopts.curlopt_interface = NULL;
     eopts.curlopt_unix_socket_path = NULL;
+    eopts.curlopt_lock_data_ssl_session = 0;
 
     if (ei_decode_list_header(buf, &index, &num_eopts)) {
       errx(2, "Couldn't decode eopts length");
@@ -1022,6 +1029,9 @@ static void erl_input(struct bufferevent *ev, void *arg) {
           } else if (eopt_long != K_CURLAUTH_UNDEFINED) {
             errx(2, "Unknown curlopt_http_auth value %ld", eopt_long);
           }
+          break;
+        case K_CURLOPT_LOCK_DATA_SSL_SESSION:
+          eopts.curlopt_lock_data_ssl_session = eopt_long;
           break;
         default:
           errx(2, "Unknown eopt long value %ld", eopt);
@@ -1124,6 +1134,13 @@ int main(int argc, char **argv) {
   global.multi = curl_multi_init();
   if (!global.multi) {
     errx(2, "curl_multi_init failed");
+  }
+  global.shobject = curl_share_init();
+  if (!global.shobject) {
+    errx(2, "curl_share_init failed");
+  }
+  if (CURLSHE_OK != curl_share_setopt(global.shobject, CURLSHOPT_SHARE, CURL_LOCK_DATA_SSL_SESSION)) {
+    errx(2, "curl_share_setopt failed");
   }
   global.timer_event = evtimer_new(global.evbase, timer_cb, &global);
   global.to_get = 0;
