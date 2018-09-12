@@ -30,12 +30,12 @@ init_per_group(https, Config) ->
     Dispatch = cowboy_router:compile([{'_', [{"/", get_handler, []}]}]),
     DataDir = ?config(data_dir, Config),
     CACert = filename:join(DataDir, "cowboy-ca.crt"),
-    {ok, _} = cowboy:start_https(ct_https, 1,
-                                 [{port, 8443},
-                                  {cacertfile, CACert},
-                                  {certfile, filename:join(DataDir, "server.crt")},
-                                  {keyfile, filename:join(DataDir, "server.key")}],
-                                 [{env, [{dispatch, Dispatch}]}]),
+    {ok, _} = cowboy:start_tls(ct_https,
+                               [{port, 8443},
+                                {cacertfile, CACert},
+                                {certfile, filename:join(DataDir, "server.crt")},
+                                {keyfile, filename:join(DataDir, "server.key")}],
+                               #{env => #{dispatch => Dispatch}}),
     [{cacert_file, list_to_binary(CACert)} | Config];
 init_per_group(proxy, Config) ->
     application:ensure_all_started(http_proxy),

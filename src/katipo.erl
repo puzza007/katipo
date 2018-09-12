@@ -207,7 +207,6 @@
 -type body() :: binary().
 -type request() :: map().
 -type metrics() :: proplists:proplist().
--ifdef(OTP_RELEASE).
 -type response() :: {ok, #{status := status(),
                            headers := headers(),
                            cookiejar := cookiejar(),
@@ -215,9 +214,6 @@
                            metrics => proplists:proplist()}} |
                     {error, #{code := error_code(),
                               message := error_msg()}}.
--else.
--type response() :: {ok, map()} | {error, map()}.
--endif.
 -type http_auth() :: basic | digest.
 -type http_auth_int() :: ?CURLAUTH_UNDEFINED | ?CURLAUTH_BASIC | ?CURLAUTH_DIGEST.
 -type curlmopts() :: [{max_pipeline_length, non_neg_integer()} |
