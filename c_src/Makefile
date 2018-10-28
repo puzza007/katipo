@@ -30,7 +30,7 @@ endif
 CFLAGS += -fPIC -I $(ERTS_INCLUDE_DIR) -I $(ERL_INTERFACE_INCLUDE_DIR)
 CXXFLAGS += -fPIC -I $(ERTS_INCLUDE_DIR) -I $(ERL_INTERFACE_INCLUDE_DIR)
 
-LDLIBS += -L $(ERL_INTERFACE_LIB_DIR) -lerl_interface -lei -lcurl -lssl -lcrypto -levent
+LDLIBS += -L $(ERL_INTERFACE_LIB_DIR) -L /usr/local/opt/openssl/lib/ -L /usr/local/opt/curl/lib/ -lerl_interface -lei -lcurl -lssl -lcrypto -levent
 
 c_verbose_0 = @echo " C     " $(?F);
 c_verbose = $(c_verbose_$(V))

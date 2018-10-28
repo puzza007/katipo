@@ -13,7 +13,9 @@ otp_release:
   - 20.1
   - 21.0
 
-script: rebar3 update && rebar3 ct --readable=false && rebar3 dialyzer && rebar3 coveralls send
+install: wget https://github.com/erlang/rebar3/releases/download/3.6.2/rebar3 && chmod 755 rebar3
+
+script: ./rebar3 update && ./rebar3 ct && ./rebar3 dialyzer && ./rebar3 coveralls send
 
 cache:
   directories:

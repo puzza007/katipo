@@ -4,7 +4,7 @@ CurlVerHex = string:strip(os:cmd("curl-config --vernum"), right, $\n).
 CurlVerInt = erlang:list_to_integer(CurlVerHex, 16).
 
 %% CURLOPT_TCP_FASTOPEN since 7.49.0 (471296)
-CurlOptTcpFastopen = case CurlVerInt >= 471296 of
+CurlOptTcpFastopen = case CurlVerInt >= 16#073100 of
                          true ->
                              [{d, tcp_fastopen_available}];
                          false ->
@@ -12,16 +12,24 @@ CurlOptTcpFastopen = case CurlVerInt >= 471296 of
                      end.
 
 %% CURLOPT_UNIX_SOCKET_PATH since 7.40.0 (468992)
-CurlOptUnixSocketPath = case CurlVerInt >= 468992 of
+CurlOptUnixSocketPath = case CurlVerInt >= 16#072800 of
                             true ->
                                 [{d, unix_socket_path_available}];
                             false ->
                                 []
                         end.
 
+%% CURLOPT_RESOLVE since 7.59.0 (473856)
+CurlOptResolve = case CurlVerInt >= 16#073B00 of
+                            true ->
+                                [{d, resolve_available}];
+                            false ->
+                                []
+                        end.
+
 {_, ErlOpts} = lists:keyfind(erl_opts, 1, CONFIG).
 
-ErlOpts2 = ErlOpts ++ CurlOptTcpFastopen ++ CurlOptUnixSocketPath.
+ErlOpts2 = ErlOpts ++ CurlOptTcpFastopen ++ CurlOptUnixSocketPath ++ CurlOptResolve.
 
 Config1 = lists:keystore(erl_opts, 1, CONFIG, {erl_opts, ErlOpts2}).
 

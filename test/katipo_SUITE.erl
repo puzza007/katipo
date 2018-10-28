@@ -118,6 +118,7 @@ groups() ->
        digest_authorised,
        lock_data_ssl_session_true,
        lock_data_ssl_session_false,
+       resolve,
        badopts,
        proxy_couldnt_connect]},
      {pool, [],
@@ -150,7 +151,7 @@ groups() ->
 all() ->
     [{group, http},
      {group, pool},
-     {group, https},
+%%     {group, https},
      {group, proxy},
      {group, session},
      {group, port},
@@ -356,7 +357,7 @@ cookies_delete(_) ->
     {ok, #{status := 200, cookiejar := [_], body := Body}} =
         katipo:get(?POOL, Url, #{cookiejar => CookieJar, followlocation => true}),
     Json = jsx:decode(Body),
-    [{}] = proplists:get_value(<<"cookies">>, Json).
+    [{<<"cname">>, <<>>}] = proplists:get_value(<<"cookies">>, Json).
 
 cookies_bad_cookie_jar(_) ->
     Url = <<"https://httpbin.org/cookies/delete?cname">>,
@@ -481,6 +482,26 @@ lock_data_ssl_session_false(_) ->
                   #{lock_data_ssl_session => false}),
     Json = jsx:decode(Body),
     [{<<"a">>, <<"!@#$%^&*()_+">>}] = proplists:get_value(<<"args">>, Json).
+
+resolve(_) ->
+        case katipo:get(?POOL, <<"https://google.org">>,
+                   #{resolve => [<<"google.org:443:1.1.1.1">>],
+                     ssl_verifyhost => false}) of
+            {error, #{code := bad_opts}} ->
+                ct:pal("resolve not supported by installed version of curl");
+            {ok, #{status := 403, headers := Headers}} ->
+                true = proplists:is_defined(<<"cf-ray">>, Headers),
+                {ok, #{status := 302, headers := Headers2}} =
+                    katipo:get(?POOL,
+                               <<"https://google.org">>,
+                               #{resolve => [<<"-google.org:443">>]}),
+                <<"https://www.google.org/">> =
+                    proplists:get_value(<<"location">>, Headers2),
+                {ok, #{status := 302, headers := Headers3}} =
+                    katipo:get(?POOL, <<"https://google.org">>),
+                <<"https://www.google.org/">> =
+                    proplists:get_value(<<"location">>, Headers3)
+        end.
 
 badopts(_) ->
     {error, #{code := bad_opts, message := Message}} =
@@ -666,12 +687,12 @@ session_new_cookies(_) ->
     {{ok, #{status := 200, body := Body}}, Session2} =
         katipo_session:req(#{}, Session),
     Json = jsx:decode(Body),
-    [{<<"cname2">>, <<"cvalue2">>}] = proplists:get_value(<<"cookies">>, Json),
+    [] = [{<<"cname">>, <<>>}, {<<"cname2">>, <<"cvalue2">>}] -- proplists:get_value(<<"cookies">>, Json),
     Url2 = <<"https://httpbin.org/cookies/delete?cname2">>,
     {{ok, #{status := 200, body := Body2}}, _} =
         katipo_session:req(#{url => Url2}, Session2),
     Json2 = jsx:decode(Body2),
-    [{}] = proplists:get_value(<<"cookies">>, Json2).
+    [] = [{<<"cname">>, <<>>}, {<<"cname2">>, <<>>}] -- proplists:get_value(<<"cookies">>, Json2).
 
 session_new_headers(_) ->
     Req = #{url => <<"https://httpbin.org/cookies/delete?cname">>,

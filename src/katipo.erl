@@ -61,6 +61,7 @@
 -define(interface, 18).
 -define(unix_socket_path, 19).
 -define(lock_data_ssl_session, 20).
+-define(resolve, 21).
 
 -define(DEFAULT_REQ_TIMEOUT, 30000).
 -define(FOLLOWLOCATION_TRUE, 1).
@@ -202,6 +203,7 @@
 -type header() :: {binary(), iodata()}.
 -type headers() :: [header()].
 -opaque cookiejar() :: [binary()].
+-type resolve() :: [binary()].
 -type qs_vals() :: [{binary(), binary() | true}].
 -type req_body() :: iodata() | qs_vals().
 -type body() :: binary().
@@ -260,7 +262,8 @@
           interface = undefined :: undefined | binary(),
           unix_socket_path = undefined :: undefined | binary(),
           lock_data_ssl_session = ?LOCK_DATA_SSL_SESSION_FALSE ::
-            ?LOCK_DATA_SSL_SESSION_FALSE | ?LOCK_DATA_SSL_SESSION_TRUE
+            ?LOCK_DATA_SSL_SESSION_FALSE | ?LOCK_DATA_SSL_SESSION_TRUE,
+          resolve = [] :: resolve()
          }).
 
 -ifdef(tcp_fastopen_available).
@@ -273,6 +276,12 @@
 -define(UNIX_SOCKET_PATH_AVAILABLE, true).
 -else.
 -define(UNIX_SOCKET_PATH_AVAILABLE, false).
+-endif.
+
+-ifdef(resolve_available).
+-define(RESOLVE_AVAILABLE, true).
+-else.
+-define(RESOLVE_AVAILABLE, false).
 -endif.
 
 -dialyzer({nowarn_function, opt/3}).
@@ -386,7 +395,8 @@ handle_call(#req{method = Method,
                  tcp_fastopen = TCPFastOpen,
                  interface = Interface,
                  unix_socket_path = UnixSocketPath,
-                 lock_data_ssl_session = LockDataSslSession},
+                 lock_data_ssl_session = LockDataSslSession,
+                 resolve = Resolve},
              From,
              State=#state{port=Port, reqs=Reqs}) ->
     {Self, Ref} = From,
@@ -405,7 +415,8 @@ handle_call(#req{method = Method,
             {?tcp_fastopen, TCPFastOpen},
             {?interface, Interface},
             {?unix_socket_path, UnixSocketPath},
-            {?lock_data_ssl_session, LockDataSslSession}],
+            {?lock_data_ssl_session, LockDataSslSession},
+            {?resolve, Resolve}],
     Command = {Self, Ref, Method, Url, Headers, CookieJar, Body, Opts},
     true = port_command(Port, term_to_binary(Command)),
     Tref = erlang:start_timer(Timeout, self(), {req_timeout, From}),
@@ -580,6 +591,13 @@ opt(lock_data_ssl_session, true, {Req, Errors}) ->
     {Req#req{lock_data_ssl_session=?LOCK_DATA_SSL_SESSION_TRUE}, Errors};
 opt(lock_data_ssl_session, false, {Req, Errors}) ->
     {Req#req{lock_data_ssl_session=?LOCK_DATA_SSL_SESSION_FALSE}, Errors};
+opt(resolve, Resolve, {Req, Errors}) when ?RESOLVE_AVAILABLE andalso is_list(Resolve) ->
+    case lists:all(fun is_binary/1, Resolve) of
+        true ->
+            {Req#req{resolve=Resolve}, Errors};
+        false ->
+            {Req, [{resolve, Resolve} | Errors]}
+    end;
 opt(K, V, {Req, Errors}) ->
     {Req, [{K, V} | Errors]}.
 
