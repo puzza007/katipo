@@ -357,8 +357,13 @@ cookies_delete(_) ->
     {ok, #{status := 200, cookiejar := [_], body := Body}} =
         katipo:get(?POOL, Url, #{cookiejar => CookieJar, followlocation => true}),
     Json = jsx:decode(Body),
-    ct:pal("~p", [proplists:get_value(<<"cookies">>, Json)]),
-    [{<<"cname">>, <<>>}] = proplists:get_value(<<"cookies">>, Json).
+    Cookies = proplists:get_value(<<"cookies">>, Json),
+    [] = lists:filter(fun({<<"cname">>, <<>>}) -> false;
+                         ({}) -> false;
+                         (_) -> true
+                      end,
+                      Cookies).
+
 
 cookies_bad_cookie_jar(_) ->
     Url = <<"https://httpbin.org/cookies/delete?cname">>,
@@ -685,17 +690,20 @@ session_new_cookies(_) ->
                  <<"httpbin.org\tFALSE\t/\tTRUE\t0\tcname2\tcvalue2">>],
     Req = #{url => Url, cookiejar => CookieJar, followlocation => true},
     {ok, Session} = katipo_session:new(?POOL, Req),
-    {{ok, #{status := 200, body := Body}}, Session2} =
+    {{ok, #{status := 200}}, Session2} =
         katipo_session:req(#{}, Session),
+    Url2 = <<"https://httpbin.org/cookies/delete?cname2">>,
+    {{ok, #{status := 200, body := Body}}, _} =
+        katipo_session:req(#{url => Url2}, Session2),
     Json = jsx:decode(Body),
     ct:pal("~p", [proplists:get_value(<<"cookies">>, Json)]),
-    [] = [{<<"cname">>, <<>>}, {<<"cname2">>, <<"cvalue2">>}] -- proplists:get_value(<<"cookies">>, Json),
-    Url2 = <<"https://httpbin.org/cookies/delete?cname2">>,
-    {{ok, #{status := 200, body := Body2}}, _} =
-        katipo_session:req(#{url => Url2}, Session2),
-    Json2 = jsx:decode(Body2),
-    ct:pal("~p", [proplists:get_value(<<"cookies">>, Json2)]),
-    [] = [{<<"cname">>, <<>>}, {<<"cname2">>, <<>>}] -- proplists:get_value(<<"cookies">>, Json2).
+    Cookies = proplists:get_value(<<"cookies">>, Json),
+    [] = lists:filter(fun({<<"cname">>, <<>>}) -> false;
+                         ({<<"cname2">>, <<>>}) -> false;
+                         ({}) -> false;
+                         (_) -> true
+                      end,
+                      Cookies).
 
 session_new_headers(_) ->
     Req = #{url => <<"https://httpbin.org/cookies/delete?cname">>,
