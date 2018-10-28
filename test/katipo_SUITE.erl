@@ -151,7 +151,7 @@ groups() ->
 all() ->
     [{group, http},
      {group, pool},
-%%     {group, https},
+     {group, https},
      {group, proxy},
      {group, session},
      {group, port},
