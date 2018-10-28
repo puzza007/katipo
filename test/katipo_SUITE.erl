@@ -357,6 +357,7 @@ cookies_delete(_) ->
     {ok, #{status := 200, cookiejar := [_], body := Body}} =
         katipo:get(?POOL, Url, #{cookiejar => CookieJar, followlocation => true}),
     Json = jsx:decode(Body),
+    ct:pal("~p", [proplists:get_value(<<"cookies">>, Json)]),
     [{<<"cname">>, <<>>}] = proplists:get_value(<<"cookies">>, Json).
 
 cookies_bad_cookie_jar(_) ->
@@ -687,11 +688,13 @@ session_new_cookies(_) ->
     {{ok, #{status := 200, body := Body}}, Session2} =
         katipo_session:req(#{}, Session),
     Json = jsx:decode(Body),
+    ct:pal("~p", [proplists:get_value(<<"cookies">>, Json)]),
     [] = [{<<"cname">>, <<>>}, {<<"cname2">>, <<"cvalue2">>}] -- proplists:get_value(<<"cookies">>, Json),
     Url2 = <<"https://httpbin.org/cookies/delete?cname2">>,
     {{ok, #{status := 200, body := Body2}}, _} =
         katipo_session:req(#{url => Url2}, Session2),
     Json2 = jsx:decode(Body2),
+    ct:pal("~p", [proplists:get_value(<<"cookies">>, Json2)]),
     [] = [{<<"cname">>, <<>>}, {<<"cname2">>, <<>>}] -- proplists:get_value(<<"cookies">>, Json2).
 
 session_new_headers(_) ->
