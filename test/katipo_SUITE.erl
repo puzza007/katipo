@@ -496,7 +496,7 @@ resolve(_) ->
             {error, #{code := bad_opts}} ->
                 ct:pal("resolve not supported by installed version of curl");
             {ok, #{status := 403, headers := Headers}} ->
-                true = lists:any(fun({K, V}) ->
+                true = lists:any(fun({K, _V}) ->
                                          string:to_lower(binary_to_list(K)) =:= "cf-ray"
                                  end,
                                  Headers),
