@@ -18,6 +18,7 @@ before_install:
   - tar -jxf curl-7.61.1.tar.bz2
   - cd curl-7.61.1
   - ./configure && sudo make install
+  - cd -
 
 install: wget https://github.com/erlang/rebar3/releases/download/3.6.2/rebar3 && chmod 755 rebar3
 
