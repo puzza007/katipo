@@ -496,7 +496,10 @@ resolve(_) ->
             {error, #{code := bad_opts}} ->
                 ct:pal("resolve not supported by installed version of curl");
             {ok, #{status := 403, headers := Headers}} ->
-                ct:pal("ZZZ ~p", [Headers]),
+                true = lists:any(fun({K, V}) ->
+                                         string:to_lower(binary_to_list(K)) =:= "cf-ray"
+                                 end,
+                                 Headers),
                 true = proplists:is_defined(<<"cf-ray">>, Headers),
                 {ok, #{status := 302, headers := Headers2}} =
                     katipo:get(?POOL,
