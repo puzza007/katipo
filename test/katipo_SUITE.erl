@@ -496,6 +496,7 @@ resolve(_) ->
             {error, #{code := bad_opts}} ->
                 ct:pal("resolve not supported by installed version of curl");
             {ok, #{status := 403, headers := Headers}} ->
+                ct:pal("ZZZ ~p", [Headers]),
                 true = proplists:is_defined(<<"cf-ray">>, Headers),
                 {ok, #{status := 302, headers := Headers2}} =
                     katipo:get(?POOL,
