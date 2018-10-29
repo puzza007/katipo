@@ -500,7 +500,6 @@ resolve(_) ->
                                          string:to_lower(binary_to_list(K)) =:= "cf-ray"
                                  end,
                                  Headers),
-                true = proplists:is_defined(<<"cf-ray">>, Headers),
                 {ok, #{status := 302, headers := Headers2}} =
                     katipo:get(?POOL,
                                <<"https://google.org">>,
