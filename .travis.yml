@@ -17,7 +17,7 @@ before_install:
   - wget https://github.com/curl/curl/releases/download/curl-7_61_1/curl-7.61.1.tar.bz2
   - tar -jxf curl-7.61.1.tar.bz2
   - cd curl-7.61.1
-  - ./configure && make install
+  - ./configure && sudo make install
 
 install: wget https://github.com/erlang/rebar3/releases/download/3.6.2/rebar3 && chmod 755 rebar3
 
