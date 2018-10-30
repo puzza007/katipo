@@ -69,7 +69,7 @@ init_per_testcase(TestCase, Config)
     {ok, Socket} = gen_tcp:listen(0, TcpOpts),
     Opts = [{num_acceptors, 1}, {socket, Socket}],
     {ok, _} = cowboy:start_clear(TestCase, Opts, #{env => #{dispatch => Dispatch}}),
-    [{TestCase, file} | Config];
+    [{TestCase, File} | Config];
 init_per_testcase(_, Config) ->
     Config.
 
@@ -80,10 +80,10 @@ end_per_testcase(TestCase, Config)
     proplists:delete(http_proxy, Config);
 end_per_testcase(TestCase, Config)
   when TestCase == unix_socket_path orelse TestCase == unix_socket_path_cant_connect ->
-    File = ?config({TestCase, file}, Config),
+    File = ?config(TestCase, Config),
     file:delete(File),
     ok = cowboy:stop_listener(TestCase),
-    proplists:delete({TestCase, file}, Config);
+    proplists:delete(TestCase, Config);
 end_per_testcase(_, Config) ->
     Config.
 
@@ -445,7 +445,8 @@ interface_unknown(_) ->
         katipo:get(?POOL, <<"https://httpbin.org/get">>, #{interface => <<"cannot_be_an_interface">>}).
 
 unix_socket_path(Config) ->
-    File = ?config({unix_socket_path, file}, Config),
+    File = ?config(unix_socket_path, Config),
+    FileBin = list_to_binary(File),
     case katipo:get(?POOL, <<"http://localhost/images/json">>, #{unix_socket_path => File}) of
         {ok, #{status := 200, headers := Headers}} ->
             <<"Docker/",_/binary>> = proplists:get_value(<<"Server">>, Headers);
