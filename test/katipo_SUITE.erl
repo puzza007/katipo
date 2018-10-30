@@ -56,6 +56,20 @@ init_per_testcase(TestCase, Config)
   when TestCase == proxy_get orelse TestCase == proxy_post_data ->
     {ok, HttpProxyService} = http_proxy:start(3128, []),
     [{http_proxy, HttpProxyService} | Config];
+init_per_testcase(TestCase, Config)
+  when TestCase == unix_socket_path orelse TestCase == unix_socket_path_cant_connect ->
+    application:ensure_all_started(ranch),
+    Dispatch = cowboy_router:compile([
+                                      {'_', [
+                                             {"/", unix_socket_handler, []}
+                                            ]}
+                                     ]),
+    File = string:strip(os:cmd("mktemp -u"), right, $\n),
+    TcpOpts = [binary, {ifaddr, {local, File}}],
+    {ok, Socket} = gen_tcp:listen(0, TcpOpts),
+    Opts = [{num_acceptors, 1}, {socket, Socket}],
+    {ok, _} = cowboy:start_clear(TestCase, Opts, #{env => #{dispatch => Dispatch}}),
+    [{TestCase, file} | Config];
 init_per_testcase(_, Config) ->
     Config.
 
@@ -64,6 +78,12 @@ end_per_testcase(TestCase, Config)
     HttpProxyService = ?config(http_proxy, Config),
     ok = http_proxy:stop(HttpProxyService),
     proplists:delete(http_proxy, Config);
+end_per_testcase(TestCase, Config)
+  when TestCase == unix_socket_path orelse TestCase == unix_socket_path_cant_connect ->
+    File = ?config({TestCase, file}, Config),
+    file:delete(File),
+    ok = cowboy:stop_listener(TestCase),
+    proplists:delete({TestCase, file}, Config);
 end_per_testcase(_, Config) ->
     Config.
 
@@ -424,8 +444,9 @@ interface_unknown(_) ->
     {error, #{code := interface_failed}} =
         katipo:get(?POOL, <<"https://httpbin.org/get">>, #{interface => <<"cannot_be_an_interface">>}).
 
-unix_socket_path(_) ->
-    case katipo:get(?POOL, <<"http://localhost/images/json">>, #{unix_socket_path => <<"/var/run/docker.sock">>}) of
+unix_socket_path(Config) ->
+    File = ?config({unix_socket_path, file}, Config),
+    case katipo:get(?POOL, <<"http://localhost/images/json">>, #{unix_socket_path => File}) of
         {ok, #{status := 200, headers := Headers}} ->
             <<"Docker/",_/binary>> = proplists:get_value(<<"Server">>, Headers);
         {error, #{code := bad_opts}} ->
