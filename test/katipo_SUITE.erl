@@ -447,9 +447,9 @@ interface_unknown(_) ->
 unix_socket_path(Config) ->
     File = ?config(unix_socket_path, Config),
     FileBin = list_to_binary(File),
-    case katipo:get(?POOL, <<"http://localhost/images/json">>, #{unix_socket_path => File}) of
-        {ok, #{status := 200, headers := Headers}} ->
-            <<"Docker/",_/binary>> = proplists:get_value(<<"Server">>, Headers);
+    case katipo:get(?POOL, <<"http://localhost">>, #{unix_socket_path => FileBin}) of
+        {ok, #{status := 200, body := <<"unix domain">>}} ->
+            ok;
         {error, #{code := bad_opts}} ->
             ct:pal("unix_socket_path not supported by installed version of curl"),
             ok
