@@ -447,7 +447,6 @@ interface_unknown(_) ->
 unix_socket_path(Config) ->
     File = ?config(unix_socket_path, Config),
     FileBin = list_to_binary(File),
-    ct:pal("ZZZ ~p", [FileBin]),
     case katipo:get(?POOL, <<"http://localhost">>, #{unix_socket_path => FileBin}) of
         {ok, #{status := 200, body := <<"unix domain">>}} ->
             ok;
