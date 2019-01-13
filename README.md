@@ -167,6 +167,11 @@ wget http://packages.erlang-solutions.com/site/esl/esl-erlang/FLAVOUR_1_esl/esl-
 
 sudo dpkg -i esl-erlang_18.0-1~ubuntu~trusty_amd64.deb
 ```
+#### Fedora
+
+```sh
+sudo dnf install libevent.x86_64 libcurl.x86_64 libevent-devel.x86_64
+```
 
 #### OSX
 
