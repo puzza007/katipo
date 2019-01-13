@@ -1,10 +1,8 @@
 {"1.1.0",
-[{<<"cowlib">>,{pkg,<<"cowlib">>,<<"2.4.0">>},0},
- {<<"metrics">>,{pkg,<<"metrics">>,<<"2.5.0">>},0},
+[{<<"metrics">>,{pkg,<<"metrics">>,<<"2.5.0">>},0},
  {<<"worker_pool">>,{pkg,<<"worker_pool">>,<<"3.1.1">>},0}]}.
 [
 {pkg_hash,[
- {<<"cowlib">>, <<"93525F288EBAD37A9DFDDD1CCED54A7BFDC96B8DDF66BE1927447048DE65DA8E">>},
  {<<"metrics">>, <<"268D218D56529CB5F070D74BBFC3AF64C668379B5B18FAFDA88959442F790C57">>},
  {<<"worker_pool">>, <<"A9BF27CFF366999784A3F0657F016CE3A57901490858CCA3FB3BE1208BF2110D">>}]}
 ].

@@ -487,7 +487,7 @@ parse_header(Line) when is_binary(Line) ->
 
 -spec encode_body(req_body()) -> body().
 encode_body([{_, _}|_] = KVs) ->
-    cow_qs:qs(KVs);
+    katipo_cow_qs:qs(KVs);
 encode_body(Body) when is_binary(Body) ->
     Body;
 encode_body(Body) when is_list(Body) ->
