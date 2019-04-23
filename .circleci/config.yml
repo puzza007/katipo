@@ -1,0 +1,52 @@
+version: 2.1
+
+orbs:
+  rebar3: tsloughter/rebar3@0.6.3
+  codecov: codecov/codecov@1.0.4
+
+jobs:
+  build_and_test:
+    parameters:
+      tag:
+        description: The Erlang/OTP docker image tag to use
+        type: string
+      codecov_flag:
+        description: String the coverage reports are grouped by
+        type: string
+    executor:
+      name: rebar3/erlang
+      tag: <<parameters.tag>>
+    steps:
+      - checkout
+      - rebar3/with_deps_cache:
+          cache_key_postfix: -<<parameters.tag>>
+          steps:
+            - rebar3/compile
+            - rebar3/dialyzer
+            - run: rebar3 as test xref
+            - rebar3/ct
+
+            - store_test_results:
+                path: ~/project/_build/test/logs/
+            - store_artifacts:
+                path: ~/project/_build/test/logs
+                destination: common_test
+
+            - rebar3/cover
+            - run: rebar3 as test covertool generate
+            - codecov/upload:
+                file: _build/test/covertool/katipo.covertool.xml
+                flags: <<parameters.codecov_flag>>
+
+
+workflows:
+  run_all:
+    jobs:
+      - build_and_test:
+          name: "otp-21"
+          tag: "21.2"
+          codecov_flag: "otp21"
+      - build_and_test:
+          name: "otp-20"
+          tag: "20"
+          codecov_flag: "otp20"
