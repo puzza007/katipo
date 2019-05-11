@@ -13,7 +13,7 @@ otp_release:
   - 20.1
   - 21.0
 
-script: rebar3 update && rebar3 ct --readable=false && rebar3 dialyzer && rebar3 coveralls send
+script: rebar3 update && rebar3 ct && rebar3 dialyzer && rebar3 coveralls send
 
 cache:
   directories:
