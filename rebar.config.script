@@ -19,9 +19,17 @@ CurlOptUnixSocketPath = case CurlVerInt >= 468992 of
                                 []
                         end.
 
+%% CURLOPT_DOHURL since 7.59.0 (473856)
+CurlOptDOHURL = case CurlVerInt >= 473856 of
+                            true ->
+                                [{d, doh_url_available}];
+                            false ->
+                                []
+                        end.
+
 {_, ErlOpts} = lists:keyfind(erl_opts, 1, CONFIG).
 
-ErlOpts2 = ErlOpts ++ CurlOptTcpFastopen ++ CurlOptUnixSocketPath.
+ErlOpts2 = ErlOpts ++ CurlOptTcpFastopen ++ CurlOptUnixSocketPath ++ CurlOptDOHURL.
 
 Config1 = lists:keystore(erl_opts, 1, CONFIG, {erl_opts, ErlOpts2}).
 

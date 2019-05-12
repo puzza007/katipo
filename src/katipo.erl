@@ -34,6 +34,10 @@
 %% only for mocking during tests
 -export([get_timeout/1]).
 
+-export([tcp_fastopen_available/0]).
+-export([unix_socket_path_available/0]).
+-export([doh_url_available/0]).
+
 -record(state, {port :: port(),
                 reqs = #{} :: map()}).
 
@@ -61,6 +65,7 @@
 -define(interface, 18).
 -define(unix_socket_path, 19).
 -define(lock_data_ssl_session, 20).
+-define(doh_url, 21).
 
 -define(DEFAULT_REQ_TIMEOUT, 30000).
 -define(FOLLOWLOCATION_TRUE, 1).
@@ -134,7 +139,6 @@
         unknown_option |
         telnet_option_syntax |
         obsolete50 |
-        peer_failed_verification |
         got_nothing |
         ssl_engine_notfound |
         ssl_engine_setfailed |
@@ -202,6 +206,7 @@
 -type header() :: {binary(), iodata()}.
 -type headers() :: [header()].
 -opaque cookiejar() :: [binary()].
+-type doh_url() :: binary().
 -type qs_vals() :: [{binary(), binary() | true}].
 -type req_body() :: iodata() | qs_vals().
 -type body() :: binary().
@@ -260,7 +265,8 @@
           interface = undefined :: undefined | binary(),
           unix_socket_path = undefined :: undefined | binary(),
           lock_data_ssl_session = ?LOCK_DATA_SSL_SESSION_FALSE ::
-            ?LOCK_DATA_SSL_SESSION_FALSE | ?LOCK_DATA_SSL_SESSION_TRUE
+            ?LOCK_DATA_SSL_SESSION_FALSE | ?LOCK_DATA_SSL_SESSION_TRUE,
+          doh_url = undefined :: undefined | doh_url()
          }).
 
 -ifdef(tcp_fastopen_available).
@@ -269,11 +275,26 @@
 -define(TCP_FASTOPEN_AVAILABLE, false).
 -endif.
 
+tcp_fastopen_available() ->
+    ?TCP_FASTOPEN_AVAILABLE.
+
 -ifdef(unix_socket_path_available).
 -define(UNIX_SOCKET_PATH_AVAILABLE, true).
 -else.
 -define(UNIX_SOCKET_PATH_AVAILABLE, false).
 -endif.
+
+unix_socket_path_available() ->
+    ?UNIX_SOCKET_PATH_AVAILABLE.
+
+-ifdef(doh_url_available).
+-define(DOH_URL_AVAILABLE, true).
+-else.
+-define(DOH_URL_AVAILABLE, false).
+-endif.
+
+doh_url_available() ->
+    ?DOH_URL_AVAILABLE.
 
 -dialyzer({nowarn_function, opt/3}).
 
@@ -386,7 +407,8 @@ handle_call(#req{method = Method,
                  tcp_fastopen = TCPFastOpen,
                  interface = Interface,
                  unix_socket_path = UnixSocketPath,
-                 lock_data_ssl_session = LockDataSslSession},
+                 lock_data_ssl_session = LockDataSslSession,
+                 doh_url = DOHURL},
              From,
              State=#state{port=Port, reqs=Reqs}) ->
     {Self, Ref} = From,
@@ -405,7 +427,8 @@ handle_call(#req{method = Method,
             {?tcp_fastopen, TCPFastOpen},
             {?interface, Interface},
             {?unix_socket_path, UnixSocketPath},
-            {?lock_data_ssl_session, LockDataSslSession}],
+            {?lock_data_ssl_session, LockDataSslSession},
+            {?doh_url, DOHURL}],
     Command = {Self, Ref, Method, Url, Headers, CookieJar, Body, Opts},
     true = port_command(Port, term_to_binary(Command)),
     Tref = erlang:start_timer(Timeout, self(), {req_timeout, From}),
@@ -580,6 +603,8 @@ opt(lock_data_ssl_session, true, {Req, Errors}) ->
     {Req#req{lock_data_ssl_session=?LOCK_DATA_SSL_SESSION_TRUE}, Errors};
 opt(lock_data_ssl_session, false, {Req, Errors}) ->
     {Req#req{lock_data_ssl_session=?LOCK_DATA_SSL_SESSION_FALSE}, Errors};
+opt(doh_url, DOHURL, {Req, Errors}) when ?DOH_URL_AVAILABLE andalso is_binary(DOHURL) ->
+    {Req#req{doh_url=DOHURL}, Errors};
 opt(K, V, {Req, Errors}) ->
     {Req, [{K, V} | Errors]}.
 
