@@ -38,6 +38,7 @@
 #define K_CURLOPT_INTERFACE 18
 #define K_CURLOPT_UNIX_SOCKET_PATH 19
 #define K_CURLOPT_LOCK_DATA_SSL_SESSION 20
+#define K_CURLOPT_DOH_URL 21
 
 #define K_CURLAUTH_BASIC 100
 #define K_CURLAUTH_DIGEST 101
@@ -108,6 +109,7 @@ typedef struct _EasyOpts {
   char *curlopt_interface;
   char *curlopt_unix_socket_path;
   long curlopt_lock_data_ssl_session;
+  char *curlopt_doh_url;
 } EasyOpts;
 
 static const char *curl_error_code(CURLcode error) {
@@ -216,8 +218,6 @@ static const char *curl_error_code(CURLcode error) {
       return "telnet_option_syntax";
     case CURLE_OBSOLETE50:
       return "obsolete50";
-    case CURLE_PEER_FAILED_VERIFICATION:
-      return "peer_failed_verification";
     case CURLE_GOT_NOTHING:
       return "got_nothing";
     case CURLE_SSL_ENGINE_NOTFOUND:
@@ -805,6 +805,9 @@ static void new_conn(long method, char *url, struct curl_slist *req_headers,
     curl_easy_setopt(conn->easy, CURLOPT_COOKIELIST, nc->data);
     nc = nc->next;
   }
+  #if LIBCURL_VERSION_NUM >= 0x073E00 /* Available since 7.62.0 */
+  curl_easy_setopt(conn->easy, CURLOPT_DOH_URL, eopts.curlopt_doh_url);
+  #endif
   if (eopts.curlopt_lock_data_ssl_session) {
     curl_easy_setopt(conn->easy, CURLOPT_SHARE, global->shobject);
   }
@@ -830,6 +833,9 @@ static void new_conn(long method, char *url, struct curl_slist *req_headers,
   if (eopts.curlopt_unix_socket_path != NULL) {
     free(eopts.curlopt_unix_socket_path);
   }
+  if (eopts.curlopt_doh_url != NULL) {
+    free(eopts.curlopt_doh_url);
+  }
 
   set_method(method, conn);
   rc = curl_multi_add_handle(global->multi, conn->easy);
@@ -853,8 +859,8 @@ static void erl_input(struct bufferevent *ev, void *arg) {
 
   GlobalInfo *global = (GlobalInfo *)arg;
   struct evbuffer *input = bufferevent_get_input(from_erlang);
-  struct curl_slist *req_headers;
-  struct curl_slist *req_cookies;
+  struct curl_slist *req_headers = NULL;
+  struct curl_slist *req_cookies = NULL;
   char *header;
   char *cookie;
   int num_headers;
@@ -980,6 +986,7 @@ static void erl_input(struct bufferevent *ev, void *arg) {
     eopts.curlopt_interface = NULL;
     eopts.curlopt_unix_socket_path = NULL;
     eopts.curlopt_lock_data_ssl_session = 0;
+    eopts.curlopt_doh_url = NULL;
 
     if (ei_decode_list_header(buf, &index, &num_eopts)) {
       errx(2, "Couldn't decode eopts length");
@@ -1065,6 +1072,9 @@ static void erl_input(struct bufferevent *ev, void *arg) {
         case K_CURLOPT_UNIX_SOCKET_PATH:
           eopts.curlopt_unix_socket_path = eopt_binary;
           break;
+        case K_CURLOPT_DOH_URL:
+          eopts.curlopt_doh_url = eopt_binary;
+          break;
         default:
           errx(2, "Unknown eopt binary value %ld", eopt);
         }
@@ -1085,8 +1095,8 @@ static void erl_input(struct bufferevent *ev, void *arg) {
       errx(2, "Couldn't skip empty eopt list");
     }
 
-    new_conn(method, url, req_headers, req_cookies, post_data, post_data_size,
-             eopts, pid, ref, arg);
+    new_conn(method, url, req_headers, req_cookies, post_data,
+             post_data_size, eopts, pid, ref, arg);
 
     free(buf);
   }

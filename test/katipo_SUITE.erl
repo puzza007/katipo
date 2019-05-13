@@ -118,6 +118,7 @@ groups() ->
        digest_authorised,
        lock_data_ssl_session_true,
        lock_data_ssl_session_false,
+       doh_url,
        badopts,
        proxy_couldnt_connect]},
      {pool, [],
@@ -402,9 +403,12 @@ tcp_fastopen_false(_) ->
     end.
 
 interface(_) ->
+    Travis = os:getenv("TRAVIS") == "true",
     Interface = case os:type() of
                     {unix, darwin} ->
                         <<"en0">>;
+                    {unix, _} when Travis->
+                        <<"ens4">>;
                     {unix, _} ->
                         <<"eth0">>;
                     _ ->
@@ -481,6 +485,19 @@ lock_data_ssl_session_false(_) ->
                   #{lock_data_ssl_session => false}),
     Json = jsx:decode(Body),
     [{<<"a">>, <<"!@#$%^&*()_+">>}] = proplists:get_value(<<"args">>, Json).
+
+doh_url(_) ->
+    case katipo:doh_url_available() of
+        true ->
+            {ok, #{status := 301, headers := Headers}} =
+                katipo:get(?POOL, <<"https://google.com">>,
+                           #{doh_url => <<"https://1.1.1.1/dns-query">>}),
+            {ok, #{status := 301, headers := Headers}} =
+                katipo:get(?POOL, <<"https://google.com">>,
+                           #{doh_url => <<"https://1.1.1.1">>});
+        false ->
+            ok
+    end.
 
 badopts(_) ->
     {error, #{code := bad_opts, message := Message}} =

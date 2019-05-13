@@ -1,5 +1,5 @@
 sudo: required
-dist: trusty
+dist: xenial
 group: edge
 
 language: erlang
@@ -7,15 +7,25 @@ language: erlang
 services:
   - docker
 
-install: wget https://github.com/erlang/rebar3/releases/download/3.10.0/rebar3 && chmod 755 rebar3
+install:
+  - ORIG_DIR=$PWD
+  - wget https://github.com/erlang/rebar3/releases/download/3.10.0/rebar3 && chmod 755 rebar3
+  - wget https://github.com/curl/curl/releases/download/curl-7_64_1/curl-7.64.1.tar.gz && tar xf curl-7.64.1.tar.gz
+  - cd curl-7.64.1 && ./configure && make && sudo make install
+  - cd $ORIG_DIR
 
 otp_release:
-  - 19.1
-  - 20.0
-  - 20.1
+  - 20.3
   - 21.3
 
-script: ./rebar3 update && ./rebar3 ct && ./rebar3 dialyzer && ./rebar3 coveralls send
+script:
+  - export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/usr/local/lib
+  - ./rebar3 update && ./rebar3 ct && ./rebar3 dialyzer && ./rebar3 coveralls send
+
+before_install:
+  - sudo ifconfig
+  - sudo apt-get update -q
+  - sudo apt-get install -qy build-essential libssl-dev libnghttp2-dev
 
 cache:
   directories:

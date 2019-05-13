@@ -121,6 +121,7 @@ katipo:Method(Pool :: atom(), URL :: binary(), ReqOptions :: map()).
 | `interface`             | `binary()`                    | `undefined` | [docs](https://curl.haxx.se/libcurl/c/CURLOPT_INTERFACE.html)                       |
 | `unix_socket_path`      | `binary()`                    | `undefined` | [docs](https://curl.haxx.se/libcurl/c/CURLOPT_UNIX_SOCKET_PATH.html) curl >= 7.40.0 |
 | `lock_data_ssl_session` | `boolean()`                   | `false`     | [docs](https://curl.haxx.se/libcurl/c/curl_share_setopt.html) curl >= 7.23.0        |
+| `doh_url`               | `binary()`                    | `undefined` | [docs](https://curl.haxx.se/libcurl/c/CURLOPT_DOH_URL.html) curl >= 7.62.0          |
 
 #### Responses
 
