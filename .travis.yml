@@ -15,9 +15,7 @@ install:
   - cd $ORIG_DIR
 
 otp_release:
-  - 19.1
-  - 20.0
-  - 20.1
+  - 20.3
   - 21.3
 
 script:
