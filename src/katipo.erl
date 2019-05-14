@@ -66,6 +66,8 @@
 -define(unix_socket_path, 19).
 -define(lock_data_ssl_session, 20).
 -define(doh_url, 21).
+-define(http_version, 22).
+-define(verbose, 23).
 
 -define(DEFAULT_REQ_TIMEOUT, 30000).
 -define(FOLLOWLOCATION_TRUE, 1).
@@ -81,6 +83,8 @@
 -define(TCP_FASTOPEN_TRUE, 1).
 -define(LOCK_DATA_SSL_SESSION_FALSE, 0).
 -define(LOCK_DATA_SSL_SESSION_TRUE, 1).
+-define(VERBOSE_TRUE, 1).
+-define(VERBOSE_FALSE, 0).
 
 -define(METHODS, [get, post, put, head, options, patch, delete]).
 
@@ -221,8 +225,15 @@
                               message := error_msg()}}.
 -type http_auth() :: basic | digest.
 -type http_auth_int() :: ?CURLAUTH_UNDEFINED | ?CURLAUTH_BASIC | ?CURLAUTH_DIGEST.
+-type pipelining() :: nothing | http1 | multiplex.
+-type curlopt_http_version() :: curl_http_version_none |
+                                curl_http_version_1_0 |
+                                curl_http_version_1_1 |
+                                curl_http_version_2_0 |
+                                curl_http_version_2tls |
+                                curl_http_version_2_prior_knowledge.
 -type curlmopts() :: [{max_pipeline_length, non_neg_integer()} |
-                      {pipelining, boolean()} |
+                      {pipelining, pipelining()} |
                       {max_total_connections, non_neg_integer()}].
 
 -export_type([method/0]).
@@ -266,7 +277,9 @@
           unix_socket_path = undefined :: undefined | binary(),
           lock_data_ssl_session = ?LOCK_DATA_SSL_SESSION_FALSE ::
             ?LOCK_DATA_SSL_SESSION_FALSE | ?LOCK_DATA_SSL_SESSION_TRUE,
-          doh_url = undefined :: undefined | doh_url()
+          doh_url = undefined :: undefined | doh_url(),
+          http_version = curl_http_version_none :: curlopt_http_version(),
+          verbose = ?VERBOSE_FALSE :: ?VERBOSE_FALSE | ?VERBOSE_TRUE
          }).
 
 -ifdef(tcp_fastopen_available).
@@ -408,7 +421,9 @@ handle_call(#req{method = Method,
                  interface = Interface,
                  unix_socket_path = UnixSocketPath,
                  lock_data_ssl_session = LockDataSslSession,
-                 doh_url = DOHURL},
+                 doh_url = DOHURL,
+                 http_version = HTTPVersion,
+                 verbose = Verbose},
              From,
              State=#state{port=Port, reqs=Reqs}) ->
     {Self, Ref} = From,
@@ -428,7 +443,9 @@ handle_call(#req{method = Method,
             {?interface, Interface},
             {?unix_socket_path, UnixSocketPath},
             {?lock_data_ssl_session, LockDataSslSession},
-            {?doh_url, DOHURL}],
+            {?doh_url, DOHURL},
+            {?http_version, HTTPVersion},
+            {?verbose, Verbose}],
     Command = {Self, Ref, Method, Url, Headers, CookieJar, Body, Opts},
     true = port_command(Port, term_to_binary(Command)),
     Tref = erlang:start_timer(Timeout, self(), {req_timeout, From}),
@@ -524,8 +541,12 @@ get_mopts(Opts) ->
 mopt_supported({max_pipeline_length, Val})
   when is_integer(Val) andalso Val >= 0 ->
     {true, "--max-pipeline-length " ++ integer_to_list(Val)};
-mopt_supported({pipelining, true}) ->
-    {true, "--pipelining"};
+mopt_supported({pipelining, nothing}) ->
+    {true, "--pipelining 0"};
+mopt_supported({pipelining, http1}) ->
+    {true, "--pipelining 1"};
+mopt_supported({pipelining, multiplex}) ->
+    {true, "--pipelining 2"};
 mopt_supported({max_total_connections, Val})
   when is_integer(Val) andalso Val >= 0 ->
     {true, "--max-total-connections " ++ integer_to_list(Val)};
@@ -605,6 +626,22 @@ opt(lock_data_ssl_session, false, {Req, Errors}) ->
     {Req#req{lock_data_ssl_session=?LOCK_DATA_SSL_SESSION_FALSE}, Errors};
 opt(doh_url, DOHURL, {Req, Errors}) when ?DOH_URL_AVAILABLE andalso is_binary(DOHURL) ->
     {Req#req{doh_url=DOHURL}, Errors};
+opt(http_version, curl_http_version_none, {Req, Errors}) ->
+    {Req#req{http_version=0}, Errors};
+opt(http_version, curl_http_version_1_0, {Req, Errors}) ->
+    {Req#req{http_version=1}, Errors};
+opt(http_version, curl_http_version_1_1, {Req, Errors}) ->
+    {Req#req{http_version=2}, Errors};
+opt(http_version, curl_http_version_2_0, {Req, Errors}) ->
+    {Req#req{http_version=3}, Errors};
+opt(http_version, curl_http_version_2tls, {Req, Errors}) ->
+    {Req#req{http_version=4}, Errors};
+opt(http_version, curl_http_version_2_prior_knowledge, {Req, Errors}) ->
+    {Req#req{http_version=5}, Errors};
+opt(verbose, true, {Req, Errors}) ->
+    {Req#req{verbose=?VERBOSE_TRUE}, Errors};
+opt(verbose, false, {Req, Errors}) ->
+    {Req#req{verbose=?VERBOSE_FALSE}, Errors};
 opt(K, V, {Req, Errors}) ->
     {Req, [{K, V} | Errors]}.
 

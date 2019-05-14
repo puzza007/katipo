@@ -146,7 +146,9 @@ groups() ->
       [max_total_connections]},
      {metrics, [],
       [metrics_true,
-       metrics_false]}].
+       metrics_false]},
+     {http2, [parallel],
+      [http2_get]}].
 
 all() ->
     [{group, http},
@@ -155,7 +157,8 @@ all() ->
      {group, proxy},
      {group, session},
      {group, port},
-     {group, metrics}].
+     {group, metrics},
+     {group, http2}].
 
 get(_) ->
     {ok, #{status := 200, body := Body}} =
@@ -596,7 +599,7 @@ port_late_response(_) ->
 pool_opts(_) ->
     PoolName = pool_opts,
     PoolSize = 1,
-    PoolOpts = [{pipelining, true},
+    PoolOpts = [{pipelining, multiplex},
                 {max_pipeline_length, 5},
                 {max_total_connections, 10},
                 {ignore_junk_opt, hithere}],
@@ -772,6 +775,13 @@ metrics_false(_) ->
     {ok, #{status := 200} = Res} =
         katipo:head(?POOL, <<"https://httpbin.org/get">>, #{return_metrics => false}),
     false = maps:is_key(metrics, Res).
+
+http2_get(_) ->
+    {ok, #{status := 200, body := Body}} =
+        katipo:get(?POOL, <<"https://nghttp2.org/httpbin/get?a=%21%40%23%24%25%5E%26%2A%28%29_%2B">>,
+                   #{http_version => curl_http_version_2_prior_knowledge, verbose => true}),
+    Json = jsx:decode(Body),
+    [{<<"a">>, <<"!@#$%^&*()_+">>}] = proplists:get_value(<<"args">>, Json).
 
 repeat_until_true(Fun) ->
     try

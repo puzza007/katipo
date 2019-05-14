@@ -39,6 +39,8 @@
 #define K_CURLOPT_UNIX_SOCKET_PATH 19
 #define K_CURLOPT_LOCK_DATA_SSL_SESSION 20
 #define K_CURLOPT_DOH_URL 21
+#define K_CURLOPT_HTTP_VERSION 22
+#define K_CURLOPT_VERBOSE 23
 
 #define K_CURLAUTH_BASIC 100
 #define K_CURLAUTH_DIGEST 101
@@ -110,6 +112,8 @@ typedef struct _EasyOpts {
   char *curlopt_unix_socket_path;
   long curlopt_lock_data_ssl_session;
   char *curlopt_doh_url;
+  long curlopt_http_version;
+  long curlopt_verbose;
 } EasyOpts;
 
 static const char *curl_error_code(CURLcode error) {
@@ -742,12 +746,14 @@ static void new_conn(long method, char *url, struct curl_slist *req_headers,
 
   curl_easy_setopt(conn->easy, CURLOPT_URL, conn->url);
   curl_easy_setopt(conn->easy, CURLOPT_HTTPHEADER, conn->req_headers);
-  // curl_easy_setopt(conn->easy, CURLOPT_HTTP_VERSION, CURL_HTTP_VERSION_2_0);
+  if (eopts.curlopt_http_version) {
+    curl_easy_setopt(conn->easy, CURLOPT_HTTP_VERSION, eopts.curlopt_http_version);
+  }
   curl_easy_setopt(conn->easy, CURLOPT_WRITEFUNCTION, write_cb);
   curl_easy_setopt(conn->easy, CURLOPT_WRITEDATA, conn);
   curl_easy_setopt(conn->easy, CURLOPT_HEADERFUNCTION, header_cb);
   curl_easy_setopt(conn->easy, CURLOPT_HEADERDATA, conn);
-  // curl_easy_setopt(conn->easy, CURLOPT_VERBOSE, 1L);
+  curl_easy_setopt(conn->easy, CURLOPT_VERBOSE, eopts.curlopt_verbose);
   curl_easy_setopt(conn->easy, CURLOPT_ERRORBUFFER, conn->error);
   curl_easy_setopt(conn->easy, CURLOPT_PRIVATE, conn);
   curl_easy_setopt(conn->easy, CURLOPT_ACCEPT_ENCODING, "gzip,deflate");
@@ -987,6 +993,8 @@ static void erl_input(struct bufferevent *ev, void *arg) {
     eopts.curlopt_unix_socket_path = NULL;
     eopts.curlopt_lock_data_ssl_session = 0;
     eopts.curlopt_doh_url = NULL;
+    eopts.curlopt_http_version = 0;
+    eopts.curlopt_verbose = 0;
 
     if (ei_decode_list_header(buf, &index, &num_eopts)) {
       errx(2, "Couldn't decode eopts length");
@@ -1039,6 +1047,12 @@ static void erl_input(struct bufferevent *ev, void *arg) {
           break;
         case K_CURLOPT_LOCK_DATA_SSL_SESSION:
           eopts.curlopt_lock_data_ssl_session = eopt_long;
+          break;
+        case K_CURLOPT_HTTP_VERSION:
+          eopts.curlopt_http_version = eopt_long;
+          break;
+        case K_CURLOPT_VERBOSE:
+          eopts.curlopt_verbose = eopt_long;
           break;
         default:
           errx(2, "Unknown eopt long value %ld", eopt);
@@ -1126,10 +1140,11 @@ static void erlang_init(GlobalInfo *global) {
 int main(int argc, char **argv) {
   GlobalInfo global;
   int option_index = 0;
-  int pipelining_flag = 0;
   int c;
+  long pipelining = 0;
+
   struct option long_options[] = {
-    { "pipelining", no_argument, &pipelining_flag, 1 },
+    { "pipelining", required_argument, 0, 'p' },
     { "max-pipeline-length", required_argument, 0, 'a' },
     { "max-total-connections", required_argument, 0, 'c' },
     { 0, 0, 0, 0 }
@@ -1161,11 +1176,17 @@ int main(int argc, char **argv) {
   curl_multi_setopt(global.multi, CURLMOPT_TIMERDATA, &global);
 
   while (1) {
-    c = getopt_long(argc, argv, "ac:", long_options, &option_index);
+    c = getopt_long(argc, argv, "pac:", long_options, &option_index);
     if (c == -1)
       break;
     switch (c) {
-      case 0:
+      case 'p':
+        pipelining = atoi(optarg);
+        if (pipelining < 0 || pipelining > 2) {
+          errx(2, "Bad pipelining arg '%ld'\n", pipelining);
+        }
+        curl_multi_setopt(global.multi, CURLMOPT_PIPELINING,
+                          atoi(optarg));
         break;
       case 'a':
         curl_multi_setopt(global.multi, CURLMOPT_MAX_PIPELINE_LENGTH,
@@ -1179,8 +1200,6 @@ int main(int argc, char **argv) {
         errx(2, "Unknown option '%c'\n", c);
     }
   }
-
-  curl_multi_setopt(global.multi, CURLMOPT_PIPELINING, pipelining_flag);
 
   erlang_init(&global);
 

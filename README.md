@@ -16,7 +16,7 @@ Beta
 ```erlang
 {ok, _} = application:ensure_all_started(katipo).
 Pool = api_server,
-{ok, _} = katipo_pool:start(Pool, 2, [{pipelining, true}]).
+{ok, _} = katipo_pool:start(Pool, 2, [{pipelining, multiplex}]).
 Url = <<"https://example.com">>.
 ReqHeaders = [{<<"User-Agent">>, <<"katipo">>}].
 Opts = #{headers => ReqHeaders,
@@ -36,7 +36,7 @@ Or passing the entire request as a map
 ```erlang
 {ok, _} = application:ensure_all_started(katipo).
 Pool = api_server,
-{ok, _} = katipo_pool:start(Pool, 2, [{pipelining, true}]).
+{ok, _} = katipo_pool:start(Pool, 2, [{pipelining, multiplex}]).
 ReqHeaders = [{<<"User-Agent">>, <<"katipo">>}].
 Req = #{url => <<"https://example.com">>.
         method => post,
@@ -57,7 +57,7 @@ Session interface. Cookies handled automatically and options merged. Inspired by
 ```erlang
 {ok, _} = application:ensure_all_started(katipo).
 Pool = api_server,
-{ok, _} = katipo_pool:start(Pool, 2, [{pipelining, true}]).
+{ok, _} = katipo_pool:start(Pool, 2, [{pipelining, multiplex}]).
 ReqHeaders = [{<<"User-Agent">>, <<"katipo">>}].
 Opts = #{url => <<"https://example.com">>.
          method => post,
@@ -122,6 +122,7 @@ katipo:Method(Pool :: atom(), URL :: binary(), ReqOptions :: map()).
 | `unix_socket_path`      | `binary()`                    | `undefined` | [docs](https://curl.haxx.se/libcurl/c/CURLOPT_UNIX_SOCKET_PATH.html) curl >= 7.40.0 |
 | `lock_data_ssl_session` | `boolean()`                   | `false`     | [docs](https://curl.haxx.se/libcurl/c/curl_share_setopt.html) curl >= 7.23.0        |
 | `doh_url`               | `binary()`                    | `undefined` | [docs](https://curl.haxx.se/libcurl/c/CURLOPT_DOH_URL.html) curl >= 7.62.0          |
+| `http_version`          | `curl_http_version_none` <br> `curl_http_version_1_0` <br> `curl_http_version_1_1` <br> `curl_http_version_2_0` <br> `curl_http_version_2tls` <br> `curl_http_version_2_prior_knowledge` | `curl_http_version_none` | [docs](https://curl.haxx.se/libcurl/c/CURLOPT_HTTP_VERSION.html) curl >= 7.62.0          |
 
 #### Responses
 
@@ -137,11 +138,11 @@ katipo:Method(Pool :: atom(), URL :: binary(), ReqOptions :: map()).
 
 #### Pool Options
 
-| Option                  | Type                | Default      | Note                                                                       |
-|:------------------------|:--------------------|:-------------|:---------------------------------------------------------------------------|
-| `pipelining`            | `boolean()`         | `false`      | HTTP pipelining                                                            |
-| `max_pipeline_length`   | `non_neg_integer()` | 100          |                                                                            |
-| `max_total_connections` | `non_neg_integer()` | 0 (no limit) | [docs](https://curl.haxx.se/libcurl/c/CURLMOPT_MAX_TOTAL_CONNECTIONS.html) |
+| Option                  | Type                          | Default      | Note                                                                                           |
+|:------------------------|:------------------------------|:-------------|:-----------------------------------------------------------------------------------------------|
+| `pipelining`            | `nothing | http1 | multiplex` | `nothing`    | HTTP pipelining [CURLMOPT_PIPELINING](https://curl.haxx.se/libcurl/c/CURLMOPT_PIPELINING.html) |
+| `max_pipeline_length`   | `non_neg_integer()`           | 100          |                                                                                                |
+| `max_total_connections` | `non_neg_integer()`           | 0 (no limit) | [docs](https://curl.haxx.se/libcurl/c/CURLMOPT_MAX_TOTAL_CONNECTIONS.html)                     |
 
 #### Metrics
 
