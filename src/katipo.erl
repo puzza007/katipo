@@ -398,10 +398,14 @@ start_link(CurlOpts) when is_list(CurlOpts) ->
 
 init([CurlOpts]) ->
     process_flag(trap_exit, true),
-    Args = get_mopts(CurlOpts),
-    Prog = filename:join([code:priv_dir(katipo), "katipo"]),
-    Port = open_port({spawn, Prog ++ " " ++ Args}, [{packet, 4}, binary]),
-    {ok, #state{port=Port, reqs=#{}}}.
+    case get_mopts(CurlOpts) of
+        {ok, Args} ->
+            Prog = filename:join([code:priv_dir(katipo), "katipo"]),
+            Port = open_port({spawn, Prog ++ " " ++ Args}, [{packet, 4}, binary]),
+            {ok, #state{port=Port, reqs=#{}}};
+        {error, Error} ->
+            {stop, Error}
+    end.
 
 handle_call(#req{method = Method,
                  url = Url,
@@ -539,7 +543,13 @@ encode_body(Body) when is_list(Body) ->
 
 get_mopts(Opts) ->
     L = lists:filtermap(fun mopt_supported/1, Opts),
-    string:join(L, " ").
+    LengthOpts = length(Opts),
+    case length(L) of
+        LengthOpts ->
+            {ok, string:join(L, " ")};
+        _ ->
+            {error, {bad_opts, Opts}}
+    end.
 
 -spec mopt_supported({curlmopt(), any()}) -> false | {true, any()}.
 mopt_supported({max_pipeline_length, Val})

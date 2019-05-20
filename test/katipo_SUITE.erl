@@ -603,7 +603,7 @@ pool_opts(_) ->
                 {max_pipeline_length, 5},
                 {max_total_connections, 10},
                 {ignore_junk_opt, hithere}],
-    {ok, _} = katipo_pool:start(PoolName, PoolSize, PoolOpts),
+    {error, _} = katipo_pool:start(PoolName, PoolSize, PoolOpts),
     ok = katipo_pool:stop(PoolName).
 
 verify_host_verify_peer_ok(_) ->
