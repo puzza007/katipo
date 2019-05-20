@@ -493,12 +493,10 @@ lock_data_ssl_session_false(_) ->
 doh_url(_) ->
     case katipo:doh_url_available() of
         true ->
-            {ok, #{status := 301, headers := Headers}} =
+            {ok, #{status := 301}} =
                 katipo:get(?POOL, <<"https://google.com">>,
-                           #{doh_url => <<"https://1.1.1.1/dns-query">>}),
-            {ok, #{status := 301, headers := Headers}} =
-                katipo:get(?POOL, <<"https://google.com">>,
-                           #{doh_url => <<"https://1.1.1.1">>});
+                           #{doh_url => <<"https://1.1.1.1/dns-query">>,
+                             verbose => true});
         false ->
             ok
     end.
