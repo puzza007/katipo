@@ -823,30 +823,14 @@ static void new_conn(long method, char *url, struct curl_slist *req_headers,
     curl_easy_setopt(conn->easy, CURLOPT_SHARE, global->shobject);
   }
 
-  if (eopts.curlopt_capath != NULL) {
-    free(eopts.curlopt_capath);
-  }
-  if (eopts.curlopt_cacert != NULL) {
-    free(eopts.curlopt_cacert);
-  }
-  if (eopts.curlopt_username != NULL) {
-    free(eopts.curlopt_username);
-  }
-  if (eopts.curlopt_password != NULL) {
-    free(eopts.curlopt_password);
-  }
-  if (eopts.curlopt_proxy != NULL) {
-    free(eopts.curlopt_proxy);
-  }
-  if (eopts.curlopt_interface != NULL) {
-    free(eopts.curlopt_interface);
-  }
-  if (eopts.curlopt_unix_socket_path != NULL) {
-    free(eopts.curlopt_unix_socket_path);
-  }
-  if (eopts.curlopt_doh_url != NULL) {
-    free(eopts.curlopt_doh_url);
-  }
+  free(eopts.curlopt_capath);
+  free(eopts.curlopt_cacert);
+  free(eopts.curlopt_username);
+  free(eopts.curlopt_password);
+  free(eopts.curlopt_proxy);
+  free(eopts.curlopt_interface);
+  free(eopts.curlopt_unix_socket_path);
+  free(eopts.curlopt_doh_url);
 
   set_method(method, conn);
   rc = curl_multi_add_handle(global->multi, conn->easy);
