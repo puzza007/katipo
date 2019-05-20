@@ -349,16 +349,17 @@ statuses(_) ->
 cookies(_) ->
     Url = <<"https://httpbin.org/cookies/set?cname=cvalue">>,
     Opts = #{followlocation => true},
-    {ok, #{status := 200, cookiejar := CookieJar, body := Body}} = katipo:get(?POOL, Url, Opts),
+    {ok, #{status := 200, body := Body}} = katipo:get(?POOL, Url, Opts),
     Json = jsx:decode(Body),
-    [{<<"cname">>, <<"cvalue">>}] = proplists:get_value(<<"cookies">>, Json),
-    [<<"httpbin.org\tFALSE\t/\tFALSE\t0\tcname\tcvalue">>] = CookieJar.
+    [{<<"cname">>, <<"cvalue">>}] = proplists:get_value(<<"cookies">>, Json).
 
 cookies_delete(_) ->
-    Url = <<"https://httpbin.org/cookies/delete?cname">>,
-    CookieJar = [<<"httpbin.org\tFALSE\t/\tTRUE\t0\tcname\tcvalue">>],
-    {ok, #{status := 200, cookiejar := [_], body := Body}} =
-        katipo:get(?POOL, Url, #{cookiejar => CookieJar, followlocation => true}),
+    GetUrl = <<"https://httpbin.org/cookies/set?cname=cvalue">>,
+    Opts = #{followlocation => true},
+    {ok, #{status := 200, cookiejar := CookieJar}} = katipo:get(?POOL, GetUrl, Opts),
+    DeleteUrl = <<"https://httpbin.org/cookies/delete?cname">>,
+    {ok, #{status := 200, body := Body}} =
+        katipo:get(?POOL, DeleteUrl, #{cookiejar => CookieJar, followlocation => true}),
     Json = jsx:decode(Body),
     [{}] = proplists:get_value(<<"cookies">>, Json).
 
@@ -679,8 +680,7 @@ session_new(_) ->
         katipo_session:req(Req, Session),
     {state, ?POOL, #{cookiejar := CookieJar}} = Session2,
     Json = jsx:decode(Body),
-    [{<<"cname">>, <<"cvalue">>}] = proplists:get_value(<<"cookies">>, Json),
-    [<<"httpbin.org\tFALSE\t/\tFALSE\t0\tcname\tcvalue">>] = CookieJar.
+    [{<<"cname">>, <<"cvalue">>}] = proplists:get_value(<<"cookies">>, Json).
 
 session_new_bad_opts(_) ->
     {error, #{code := bad_opts}} =

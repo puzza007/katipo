@@ -191,6 +191,7 @@ rebar3 compile
 ### TODO
 
 * A more structured way to ifdef features based on curl version
+* Better session interface
 
 [travis_ci]: https://travis-ci.org/puzza007/katipo
 [travis_ci_image]: https://travis-ci.org/puzza007/katipo.png
