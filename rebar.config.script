@@ -19,8 +19,8 @@ CurlOptUnixSocketPath = case CurlVerInt >= 468992 of
                                 []
                         end.
 
-%% CURLOPT_DOHURL since 7.59.0 (473856)
-CurlOptDOHURL = case CurlVerInt >= 473856 of
+%% CURLOPT_DOHURL since 7.62.0 (474624)
+CurlOptDOHURL = case CurlVerInt >= 474624 of
                             true ->
                                 [{d, doh_url_available}];
                             false ->

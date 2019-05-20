@@ -38,6 +38,26 @@
 -export([unix_socket_path_available/0]).
 -export([doh_url_available/0]).
 
+-ifdef(tcp_fastopen_available).
+-define(TCP_FASTOPEN_AVAILABLE, true).
+-else.
+-define(TCP_FASTOPEN_AVAILABLE, false).
+-endif.
+
+-ifdef(unix_socket_path_available).
+-define(UNIX_SOCKET_PATH_AVAILABLE, true).
+-else.
+-define(UNIX_SOCKET_PATH_AVAILABLE, false).
+-endif.
+
+-ifdef(doh_url_available).
+-define(DOH_URL_AVAILABLE, true).
+-define(SSL_CACERT_ERROR_CODE, peer_failed_verification).
+-else.
+-define(DOH_URL_AVAILABLE, false).
+-define(SSL_CACERT_ERROR_CODE, ssl_cert).
+-endif.
+
 -record(state, {port :: port(),
                 reqs = #{} :: map()}).
 
@@ -151,7 +171,9 @@
         obsolete57 |
         ssl_certproblem |
         ssl_cipher |
-        ssl_cacert |
+        %% Gone since 7.62.0
+        %% TODO: more structured way to do version-dependent stuff
+        ?SSL_CACERT_ERROR_CODE |
         bad_content_encoding |
         ldap_invalid_url |
         filesize_exceeded |
@@ -282,29 +304,11 @@
           verbose = ?VERBOSE_FALSE :: ?VERBOSE_FALSE | ?VERBOSE_TRUE
          }).
 
--ifdef(tcp_fastopen_available).
--define(TCP_FASTOPEN_AVAILABLE, true).
--else.
--define(TCP_FASTOPEN_AVAILABLE, false).
--endif.
-
 tcp_fastopen_available() ->
     ?TCP_FASTOPEN_AVAILABLE.
 
--ifdef(unix_socket_path_available).
--define(UNIX_SOCKET_PATH_AVAILABLE, true).
--else.
--define(UNIX_SOCKET_PATH_AVAILABLE, false).
--endif.
-
 unix_socket_path_available() ->
     ?UNIX_SOCKET_PATH_AVAILABLE.
-
--ifdef(doh_url_available).
--define(DOH_URL_AVAILABLE, true).
--else.
--define(DOH_URL_AVAILABLE, false).
--endif.
 
 doh_url_available() ->
     ?DOH_URL_AVAILABLE.

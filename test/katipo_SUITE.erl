@@ -614,12 +614,21 @@ verify_host_verify_peer_ok(_) ->
     [{ok, _} = katipo:get(?POOL, <<"https://google.com">>, O) || O <- Opts].
 
 verify_host_verify_peer_error(_) ->
-    {error, #{code := ssl_cacert}} =
+    {error, #{code := Code}} =
          katipo:get(?POOL, <<"https://localhost:8443">>,
                     #{ssl_verifyhost => true, ssl_verifypeer => true}),
-    {error, #{code := ssl_cacert}} =
+    %% TODO: this could be made to reflect the ifdef from katipo.c...
+    ok = case Code of
+             ssl_cacert -> ok;
+             peer_failed_verification -> ok
+         end,
+    {error, #{code := Code}} =
          katipo:get(?POOL, <<"https://localhost:8443">>,
                     #{ssl_verifyhost => false, ssl_verifypeer => true}),
+    ok = case Code of
+             ssl_cacert -> ok;
+             peer_failed_verification -> ok
+         end,
     {ok, #{status := 200}} =
         katipo:get(?POOL, <<"https://localhost:8443">>,
                    #{ssl_verifyhost => true, ssl_verifypeer => false}),
