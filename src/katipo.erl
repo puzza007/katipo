@@ -38,6 +38,26 @@
 -export([unix_socket_path_available/0]).
 -export([doh_url_available/0]).
 
+-ifdef(tcp_fastopen_available).
+-define(TCP_FASTOPEN_AVAILABLE, true).
+-else.
+-define(TCP_FASTOPEN_AVAILABLE, false).
+-endif.
+
+-ifdef(unix_socket_path_available).
+-define(UNIX_SOCKET_PATH_AVAILABLE, true).
+-else.
+-define(UNIX_SOCKET_PATH_AVAILABLE, false).
+-endif.
+
+-ifdef(doh_url_available).
+-define(DOH_URL_AVAILABLE, true).
+-define(SSL_CACERT_ERROR_CODE, peer_failed_verification).
+-else.
+-define(DOH_URL_AVAILABLE, false).
+-define(SSL_CACERT_ERROR_CODE, ssl_cert).
+-endif.
+
 -record(state, {port :: port(),
                 reqs = #{} :: map()}).
 
@@ -66,6 +86,8 @@
 -define(unix_socket_path, 19).
 -define(lock_data_ssl_session, 20).
 -define(doh_url, 21).
+-define(http_version, 22).
+-define(verbose, 23).
 
 -define(DEFAULT_REQ_TIMEOUT, 30000).
 -define(FOLLOWLOCATION_TRUE, 1).
@@ -81,6 +103,8 @@
 -define(TCP_FASTOPEN_TRUE, 1).
 -define(LOCK_DATA_SSL_SESSION_FALSE, 0).
 -define(LOCK_DATA_SSL_SESSION_TRUE, 1).
+-define(VERBOSE_TRUE, 1).
+-define(VERBOSE_FALSE, 0).
 
 -define(METHODS, [get, post, put, head, options, patch, delete]).
 
@@ -147,7 +171,9 @@
         obsolete57 |
         ssl_certproblem |
         ssl_cipher |
-        ssl_cacert |
+        %% Gone since 7.62.0
+        %% TODO: more structured way to do version-dependent stuff
+        ?SSL_CACERT_ERROR_CODE |
         bad_content_encoding |
         ldap_invalid_url |
         filesize_exceeded |
@@ -221,8 +247,15 @@
                               message := error_msg()}}.
 -type http_auth() :: basic | digest.
 -type http_auth_int() :: ?CURLAUTH_UNDEFINED | ?CURLAUTH_BASIC | ?CURLAUTH_DIGEST.
+-type pipelining() :: nothing | http1 | multiplex.
+-type curlopt_http_version() :: curl_http_version_none |
+                                curl_http_version_1_0 |
+                                curl_http_version_1_1 |
+                                curl_http_version_2_0 |
+                                curl_http_version_2tls |
+                                curl_http_version_2_prior_knowledge.
 -type curlmopts() :: [{max_pipeline_length, non_neg_integer()} |
-                      {pipelining, boolean()} |
+                      {pipelining, pipelining()} |
                       {max_total_connections, non_neg_integer()}].
 
 -export_type([method/0]).
@@ -266,32 +299,16 @@
           unix_socket_path = undefined :: undefined | binary(),
           lock_data_ssl_session = ?LOCK_DATA_SSL_SESSION_FALSE ::
             ?LOCK_DATA_SSL_SESSION_FALSE | ?LOCK_DATA_SSL_SESSION_TRUE,
-          doh_url = undefined :: undefined | doh_url()
+          doh_url = undefined :: undefined | doh_url(),
+          http_version = curl_http_version_none :: curlopt_http_version(),
+          verbose = ?VERBOSE_FALSE :: ?VERBOSE_FALSE | ?VERBOSE_TRUE
          }).
-
--ifdef(tcp_fastopen_available).
--define(TCP_FASTOPEN_AVAILABLE, true).
--else.
--define(TCP_FASTOPEN_AVAILABLE, false).
--endif.
 
 tcp_fastopen_available() ->
     ?TCP_FASTOPEN_AVAILABLE.
 
--ifdef(unix_socket_path_available).
--define(UNIX_SOCKET_PATH_AVAILABLE, true).
--else.
--define(UNIX_SOCKET_PATH_AVAILABLE, false).
--endif.
-
 unix_socket_path_available() ->
     ?UNIX_SOCKET_PATH_AVAILABLE.
-
--ifdef(doh_url_available).
--define(DOH_URL_AVAILABLE, true).
--else.
--define(DOH_URL_AVAILABLE, false).
--endif.
 
 doh_url_available() ->
     ?DOH_URL_AVAILABLE.
@@ -381,10 +398,14 @@ start_link(CurlOpts) when is_list(CurlOpts) ->
 
 init([CurlOpts]) ->
     process_flag(trap_exit, true),
-    Args = get_mopts(CurlOpts),
-    Prog = filename:join([code:priv_dir(katipo), "katipo"]),
-    Port = open_port({spawn, Prog ++ " " ++ Args}, [{packet, 4}, binary]),
-    {ok, #state{port=Port, reqs=#{}}}.
+    case get_mopts(CurlOpts) of
+        {ok, Args} ->
+            Prog = filename:join([code:priv_dir(katipo), "katipo"]),
+            Port = open_port({spawn, Prog ++ " " ++ Args}, [{packet, 4}, binary]),
+            {ok, #state{port=Port, reqs=#{}}};
+        {error, Error} ->
+            {stop, Error}
+    end.
 
 handle_call(#req{method = Method,
                  url = Url,
@@ -408,7 +429,9 @@ handle_call(#req{method = Method,
                  interface = Interface,
                  unix_socket_path = UnixSocketPath,
                  lock_data_ssl_session = LockDataSslSession,
-                 doh_url = DOHURL},
+                 doh_url = DOHURL,
+                 http_version = HTTPVersion,
+                 verbose = Verbose},
              From,
              State=#state{port=Port, reqs=Reqs}) ->
     {Self, Ref} = From,
@@ -428,7 +451,9 @@ handle_call(#req{method = Method,
             {?interface, Interface},
             {?unix_socket_path, UnixSocketPath},
             {?lock_data_ssl_session, LockDataSslSession},
-            {?doh_url, DOHURL}],
+            {?doh_url, DOHURL},
+            {?http_version, HTTPVersion},
+            {?verbose, Verbose}],
     Command = {Self, Ref, Method, Url, Headers, CookieJar, Body, Opts},
     true = port_command(Port, term_to_binary(Command)),
     Tref = erlang:start_timer(Timeout, self(), {req_timeout, From}),
@@ -518,14 +543,24 @@ encode_body(Body) when is_list(Body) ->
 
 get_mopts(Opts) ->
     L = lists:filtermap(fun mopt_supported/1, Opts),
-    string:join(L, " ").
+    LengthOpts = length(Opts),
+    case length(L) of
+        LengthOpts ->
+            {ok, string:join(L, " ")};
+        _ ->
+            {error, {bad_opts, Opts}}
+    end.
 
 -spec mopt_supported({curlmopt(), any()}) -> false | {true, any()}.
 mopt_supported({max_pipeline_length, Val})
   when is_integer(Val) andalso Val >= 0 ->
     {true, "--max-pipeline-length " ++ integer_to_list(Val)};
-mopt_supported({pipelining, true}) ->
-    {true, "--pipelining"};
+mopt_supported({pipelining, nothing}) ->
+    {true, "--pipelining 0"};
+mopt_supported({pipelining, http1}) ->
+    {true, "--pipelining 1"};
+mopt_supported({pipelining, multiplex}) ->
+    {true, "--pipelining 2"};
 mopt_supported({max_total_connections, Val})
   when is_integer(Val) andalso Val >= 0 ->
     {true, "--max-total-connections " ++ integer_to_list(Val)};
@@ -605,6 +640,22 @@ opt(lock_data_ssl_session, false, {Req, Errors}) ->
     {Req#req{lock_data_ssl_session=?LOCK_DATA_SSL_SESSION_FALSE}, Errors};
 opt(doh_url, DOHURL, {Req, Errors}) when ?DOH_URL_AVAILABLE andalso is_binary(DOHURL) ->
     {Req#req{doh_url=DOHURL}, Errors};
+opt(http_version, curl_http_version_none, {Req, Errors}) ->
+    {Req#req{http_version=0}, Errors};
+opt(http_version, curl_http_version_1_0, {Req, Errors}) ->
+    {Req#req{http_version=1}, Errors};
+opt(http_version, curl_http_version_1_1, {Req, Errors}) ->
+    {Req#req{http_version=2}, Errors};
+opt(http_version, curl_http_version_2_0, {Req, Errors}) ->
+    {Req#req{http_version=3}, Errors};
+opt(http_version, curl_http_version_2tls, {Req, Errors}) ->
+    {Req#req{http_version=4}, Errors};
+opt(http_version, curl_http_version_2_prior_knowledge, {Req, Errors}) ->
+    {Req#req{http_version=5}, Errors};
+opt(verbose, true, {Req, Errors}) ->
+    {Req#req{verbose=?VERBOSE_TRUE}, Errors};
+opt(verbose, false, {Req, Errors}) ->
+    {Req#req{verbose=?VERBOSE_FALSE}, Errors};
 opt(K, V, {Req, Errors}) ->
     {Req, [{K, V} | Errors]}.
 

@@ -146,7 +146,9 @@ groups() ->
       [max_total_connections]},
      {metrics, [],
       [metrics_true,
-       metrics_false]}].
+       metrics_false]},
+     {http2, [parallel],
+      [http2_get]}].
 
 all() ->
     [{group, http},
@@ -155,7 +157,8 @@ all() ->
      {group, proxy},
      {group, session},
      {group, port},
-     {group, metrics}].
+     {group, metrics},
+     {group, http2}].
 
 get(_) ->
     {ok, #{status := 200, body := Body}} =
@@ -346,16 +349,17 @@ statuses(_) ->
 cookies(_) ->
     Url = <<"https://httpbin.org/cookies/set?cname=cvalue">>,
     Opts = #{followlocation => true},
-    {ok, #{status := 200, cookiejar := CookieJar, body := Body}} = katipo:get(?POOL, Url, Opts),
+    {ok, #{status := 200, body := Body}} = katipo:get(?POOL, Url, Opts),
     Json = jsx:decode(Body),
-    [{<<"cname">>, <<"cvalue">>}] = proplists:get_value(<<"cookies">>, Json),
-    [<<"httpbin.org\tFALSE\t/\tFALSE\t0\tcname\tcvalue">>] = CookieJar.
+    [{<<"cname">>, <<"cvalue">>}] = proplists:get_value(<<"cookies">>, Json).
 
 cookies_delete(_) ->
-    Url = <<"https://httpbin.org/cookies/delete?cname">>,
-    CookieJar = [<<"httpbin.org\tFALSE\t/\tTRUE\t0\tcname\tcvalue">>],
-    {ok, #{status := 200, cookiejar := [_], body := Body}} =
-        katipo:get(?POOL, Url, #{cookiejar => CookieJar, followlocation => true}),
+    GetUrl = <<"https://httpbin.org/cookies/set?cname=cvalue">>,
+    Opts = #{followlocation => true},
+    {ok, #{status := 200, cookiejar := CookieJar}} = katipo:get(?POOL, GetUrl, Opts),
+    DeleteUrl = <<"https://httpbin.org/cookies/delete?cname">>,
+    {ok, #{status := 200, body := Body}} =
+        katipo:get(?POOL, DeleteUrl, #{cookiejar => CookieJar, followlocation => true}),
     Json = jsx:decode(Body),
     [{}] = proplists:get_value(<<"cookies">>, Json).
 
@@ -489,12 +493,10 @@ lock_data_ssl_session_false(_) ->
 doh_url(_) ->
     case katipo:doh_url_available() of
         true ->
-            {ok, #{status := 301, headers := Headers}} =
+            {ok, #{status := 301}} =
                 katipo:get(?POOL, <<"https://google.com">>,
-                           #{doh_url => <<"https://1.1.1.1/dns-query">>}),
-            {ok, #{status := 301, headers := Headers}} =
-                katipo:get(?POOL, <<"https://google.com">>,
-                           #{doh_url => <<"https://1.1.1.1">>});
+                           #{doh_url => <<"https://1.1.1.1/dns-query">>,
+                             verbose => true});
         false ->
             ok
     end.
@@ -596,11 +598,11 @@ port_late_response(_) ->
 pool_opts(_) ->
     PoolName = pool_opts,
     PoolSize = 1,
-    PoolOpts = [{pipelining, true},
+    PoolOpts = [{pipelining, multiplex},
                 {max_pipeline_length, 5},
                 {max_total_connections, 10},
                 {ignore_junk_opt, hithere}],
-    {ok, _} = katipo_pool:start(PoolName, PoolSize, PoolOpts),
+    {error, _} = katipo_pool:start(PoolName, PoolSize, PoolOpts),
     ok = katipo_pool:stop(PoolName).
 
 verify_host_verify_peer_ok(_) ->
@@ -611,12 +613,21 @@ verify_host_verify_peer_ok(_) ->
     [{ok, _} = katipo:get(?POOL, <<"https://google.com">>, O) || O <- Opts].
 
 verify_host_verify_peer_error(_) ->
-    {error, #{code := ssl_cacert}} =
+    {error, #{code := Code}} =
          katipo:get(?POOL, <<"https://localhost:8443">>,
                     #{ssl_verifyhost => true, ssl_verifypeer => true}),
-    {error, #{code := ssl_cacert}} =
+    %% TODO: this could be made to reflect the ifdef from katipo.c...
+    ok = case Code of
+             ssl_cacert -> ok;
+             peer_failed_verification -> ok
+         end,
+    {error, #{code := Code}} =
          katipo:get(?POOL, <<"https://localhost:8443">>,
                     #{ssl_verifyhost => false, ssl_verifypeer => true}),
+    ok = case Code of
+             ssl_cacert -> ok;
+             peer_failed_verification -> ok
+         end,
     {ok, #{status := 200}} =
         katipo:get(?POOL, <<"https://localhost:8443">>,
                    #{ssl_verifyhost => true, ssl_verifypeer => false}),
@@ -667,8 +678,7 @@ session_new(_) ->
         katipo_session:req(Req, Session),
     {state, ?POOL, #{cookiejar := CookieJar}} = Session2,
     Json = jsx:decode(Body),
-    [{<<"cname">>, <<"cvalue">>}] = proplists:get_value(<<"cookies">>, Json),
-    [<<"httpbin.org\tFALSE\t/\tFALSE\t0\tcname\tcvalue">>] = CookieJar.
+    [{<<"cname">>, <<"cvalue">>}] = proplists:get_value(<<"cookies">>, Json).
 
 session_new_bad_opts(_) ->
     {error, #{code := bad_opts}} =
@@ -772,6 +782,13 @@ metrics_false(_) ->
     {ok, #{status := 200} = Res} =
         katipo:head(?POOL, <<"https://httpbin.org/get">>, #{return_metrics => false}),
     false = maps:is_key(metrics, Res).
+
+http2_get(_) ->
+    {ok, #{status := 200, body := Body}} =
+        katipo:get(?POOL, <<"https://nghttp2.org/httpbin/get?a=%21%40%23%24%25%5E%26%2A%28%29_%2B">>,
+                   #{http_version => curl_http_version_2_prior_knowledge, verbose => true}),
+    Json = jsx:decode(Body),
+    [{<<"a">>, <<"!@#$%^&*()_+">>}] = proplists:get_value(<<"args">>, Json).
 
 repeat_until_true(Fun) ->
     try
