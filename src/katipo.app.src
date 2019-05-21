@@ -11,7 +11,6 @@
    ]},
   {env, [{mod_metrics, noop}]},
   {modules, []},
-  {maintainers, ["Paul Oliver"]},
   {licenses, ["MIT"]},
   {links, [{"Github", "https://github.com/puzza007/katipo"}]},
   {files, ["c_src/Makefile",
