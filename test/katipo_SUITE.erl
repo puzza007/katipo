@@ -19,6 +19,13 @@ init_per_suite(Config) ->
 end_per_suite(_Config) ->
     ok = application:stop(katipo).
 
+init_per_group(http, Config) ->
+    application:ensure_all_started(cowboy),
+    Filename = tempfile:name("katipo_test_"),
+    Dispatch = cowboy_router:compile([{'_', [{"/unix", get_handler, []}]}]),
+    {ok, _} = cowboy:start_clear(unix_socket, [{ip, {local, Filename}},
+                                               {port, 0}], #{env => #{dispatch => Dispatch}}),
+    [{unix_socket_file, Filename} | Config];
 init_per_group(session, Config) ->
     application:ensure_all_started(katipo),
     Config;
@@ -43,6 +50,10 @@ init_per_group(proxy, Config) ->
 init_per_group(_, Config) ->
     Config.
 
+end_per_group(http, Config) ->
+    Filename = ?config(unix_socket_file, Config),
+    _ = file:delete(Filename),
+    Config;
 end_per_group(pool, Config) ->
     application:stop(meck),
     Config;
@@ -425,10 +436,11 @@ interface_unknown(_) ->
     {error, #{code := interface_failed}} =
         katipo:get(?POOL, <<"https://httpbin.org/get">>, #{interface => <<"cannot_be_an_interface">>}).
 
-unix_socket_path(_) ->
-    case katipo:get(?POOL, <<"http://localhost/images/json">>, #{unix_socket_path => <<"/var/run/docker.sock">>}) of
+unix_socket_path(Config) ->
+    Filename = list_to_binary(?config(unix_socket_file, Config)),
+    case katipo:get(?POOL, <<"http://localhost/unix">>, #{unix_socket_path => Filename}) of
         {ok, #{status := 200, headers := Headers}} ->
-            <<"Docker/",_/binary>> = proplists:get_value(<<"Server">>, Headers);
+            <<"Cowboy">> = proplists:get_value(<<"server">>, Headers);
         {error, #{code := bad_opts}} ->
             ct:pal("unix_socket_path not supported by installed version of curl"),
             ok
