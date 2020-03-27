@@ -382,7 +382,7 @@ req(PoolName, Opts)
             Req2 = Req#req{timeout=Timeout},
             Ts = os:timestamp(),
             {Result, {Response, Metrics}} =
-                wpool:call(PoolName, Req2, best_worker, infinity),
+                wpool:call(PoolName, Req2, random_worker, infinity),
             TotalUs = timer:now_diff(os:timestamp(), Ts),
             Metrics2 = katipo_metrics:notify({Result, Response}, Metrics, TotalUs),
             Response2 = maybe_return_metrics(Req2, Metrics2, Response),
