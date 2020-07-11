@@ -6,14 +6,15 @@ language: erlang
 
 install:
   - ORIG_DIR=$PWD
+  - CURL_VERSION=7.71.1
   - wget https://github.com/erlang/rebar3/releases/download/3.10.0/rebar3 && chmod 755 rebar3
-  - wget https://github.com/curl/curl/releases/download/curl-7_64_1/curl-7.64.1.tar.gz && tar xf curl-7.64.1.tar.gz
-  - cd curl-7.64.1 && ./configure && make && sudo make install
+  - wget https://curl.haxx.se/download/curl-$CURL_VERSION.tar.gz && tar xf curl-$CURL_VERSION.tar.gz
+  - cd curl-$CURL_VERSION && ./configure && make && sudo make install
   - cd $ORIG_DIR
 
 otp_release:
-  - 20.3
-  - 21.3
+  - 22.3.4
+  - 23.0
 
 script:
   - export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/usr/local/lib
