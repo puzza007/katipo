@@ -177,12 +177,6 @@ get(_) ->
     Json = jsx:decode(Body),
     [{<<"a">>, <<"!@#$%^&*()_+">>}] = proplists:get_value(<<"args">>, Json).
 
-get_http(_) ->
-    {ok, #{status := 200, body := Body}} =
-        katipo:get(?POOL, <<"http://httpbin.org/get?a=%21%40%23%24%25%5E%26%2A%28%29_%2B">>),
-    Json = jsx:decode(Body),
-    [{<<"a">>, <<"!@#$%^&*()_+">>}] = proplists:get_value(<<"args">>, Json).
-
 get_req(_) ->
     {ok, #{status := 200, body := Body}} =
         katipo:req(?POOL, #{url => <<"https://nghttp2.org/httpbin/get?a=%21%40%23%24%25%5E%26%2A%28%29_%2B">>}),
@@ -305,7 +299,7 @@ headers(_) ->
     Expected =  [{<<"Accept">>,<<"*/*">>},
                  {<<"Accept-Encoding">>,<<"gzip,deflate">>},
                  {<<"Header1">>,<<"!@#$%^&*()">>},
-                 {<<"Host">>,<<"httpbin.org">>}],
+                 {<<"Host">>,<<"nghttp2.org">>}],
     [] = Expected -- proplists:get_value(<<"headers">>, Json).
 
 header_remove(_) ->
@@ -314,7 +308,7 @@ header_remove(_) ->
         katipo:get(?POOL, <<"https://nghttp2.org/httpbin/get">>, #{headers => Headers}),
     Json = jsx:decode(Body),
     Expected =  [{<<"Accept">>,<<"*/*">>},
-                 {<<"Host">>,<<"httpbin.org">>}],
+                 {<<"Host">>,<<"nghttp2.org">>}],
     [] = Expected -- proplists:get_value(<<"headers">>, Json).
 
 gzip(_) ->
@@ -724,7 +718,7 @@ session_new_headers(_) ->
     Expected =  [{<<"Accept">>,<<"*/*">>},
                  {<<"Accept-Encoding">>,<<"gzip,deflate">>},
                  {<<"Header1">>,<<"!@#$%^&*()">>},
-                 {<<"Host">>,<<"httpbin.org">>}],
+                 {<<"Host">>,<<"nghttp2.org">>}],
     [] = Expected -- proplists:get_value(<<"headers">>, Json).
 
 session_update(_) ->
@@ -740,7 +734,7 @@ session_update(_) ->
     Expected =  [{<<"Accept">>,<<"*/*">>},
                  {<<"Accept-Encoding">>,<<"gzip,deflate">>},
                  {<<"Header1">>,<<"!@#$%^&*()">>},
-                 {<<"Host">>,<<"httpbin.org">>}],
+                 {<<"Host">>,<<"nghttp2.org">>}],
     [] = Expected -- proplists:get_value(<<"headers">>, Json).
 
 session_update_bad_opts(_) ->
