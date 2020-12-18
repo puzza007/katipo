@@ -173,7 +173,7 @@ all() ->
 
 get(_) ->
     {ok, #{status := 200, body := Body}} =
-        katipo:get(?POOL, <<"https://httpbin.org/get?a=%21%40%23%24%25%5E%26%2A%28%29_%2B">>),
+        katipo:get(?POOL, <<"https://nghttp2.org/httpbin/get?a=%21%40%23%24%25%5E%26%2A%28%29_%2B">>),
     Json = jsx:decode(Body),
     [{<<"a">>, <<"!@#$%^&*()_+">>}] = proplists:get_value(<<"args">>, Json).
 
@@ -185,17 +185,17 @@ get_http(_) ->
 
 get_req(_) ->
     {ok, #{status := 200, body := Body}} =
-        katipo:req(?POOL, #{url => <<"https://httpbin.org/get?a=%21%40%23%24%25%5E%26%2A%28%29_%2B">>}),
+        katipo:req(?POOL, #{url => <<"https://nghttp2.org/httpbin/get?a=%21%40%23%24%25%5E%26%2A%28%29_%2B">>}),
     Json = jsx:decode(Body),
     [{<<"a">>, <<"!@#$%^&*()_+">>}] = proplists:get_value(<<"args">>, Json).
 
 head(_) ->
     {ok, #{status := 200}} =
-        katipo:head(?POOL, <<"https://httpbin.org/get">>).
+        katipo:head(?POOL, <<"https://nghttp2.org/httpbin/get">>).
 
 post_data(_) ->
     {ok, #{status := 200, body := Body}} =
-        katipo:post(?POOL, <<"https://httpbin.org/post">>,
+        katipo:post(?POOL, <<"https://nghttp2.org/httpbin/post">>,
                     #{headers => [{<<"Content-Type">>, <<"application/json">>}],
                       body => <<"!@#$%^&*()">>}),
     Json = jsx:decode(Body),
@@ -203,7 +203,7 @@ post_data(_) ->
 
 post_iodata(_) ->
     {ok, #{status := 200, body := Body}} =
-        katipo:post(?POOL, <<"https://httpbin.org/post">>,
+        katipo:post(?POOL, <<"https://nghttp2.org/httpbin/post">>,
                     #{headers => [{<<"Content-Type">>, <<"application/json">>}],
                       body => [<<"!@#$%">>, <<"^&*()">>]}),
     Json = jsx:decode(Body),
@@ -211,20 +211,20 @@ post_iodata(_) ->
 
 post_arity_2(_) ->
     {ok, #{status := 200, body := Body}} =
-        katipo:post(?POOL, <<"https://httpbin.org/post">>),
+        katipo:post(?POOL, <<"https://nghttp2.org/httpbin/post">>),
     Json = jsx:decode(Body),
     undefined = proplists:get_value(<<>>, Json).
 
 post_qs(_) ->
     QsVals = [{<<"foo">>, <<"bar">>}, {<<"baz">>, true}],
     {ok, #{status := 200, body := Body}} =
-        katipo:post(?POOL, <<"https://httpbin.org/post">>, #{body => QsVals}),
+        katipo:post(?POOL, <<"https://nghttp2.org/httpbin/post">>, #{body => QsVals}),
     Json = jsx:decode(Body),
     [] = [{<<"baz">>,<<>>},{<<"foo">>,<<"bar">>}] -- proplists:get_value(<<"form">>, Json).
 
 post_req(_) ->
     {ok, #{status := 200, body := Body}} =
-        katipo:req(?POOL, #{url => <<"https://httpbin.org/post">>,
+        katipo:req(?POOL, #{url => <<"https://nghttp2.org/httpbin/post">>,
                      method => post,
                      headers => [{<<"Content-Type">>, <<"application/json">>}],
                      body => <<"!@#$%^&*()">>}),
@@ -250,57 +250,57 @@ bad_method(_) ->
 put_data(_) ->
     Headers = [{<<"Content-Type">>, <<"application/json">>}],
     {ok, #{status := 200, body := Body}} =
-        katipo:put(?POOL, <<"https://httpbin.org/put">>,
+        katipo:put(?POOL, <<"https://nghttp2.org/httpbin/put">>,
                    #{headers => Headers, body => <<"!@#$%^&*()">>}),
     Json = jsx:decode(Body),
     <<"!@#$%^&*()">> = proplists:get_value(<<"data">>, Json).
 
 put_arity_2(_) ->
     {ok, #{status := 200, body := Body}} =
-        katipo:put(?POOL, <<"https://httpbin.org/put">>),
+        katipo:put(?POOL, <<"https://nghttp2.org/httpbin/put">>),
     Json = jsx:decode(Body),
     undefined = proplists:get_value(<<>>, Json).
 
 put_qs(_) ->
     QsVals = [{<<"foo">>, <<"bar">>}, {<<"baz">>, true}],
     {ok, #{status := 200, body := Body}} =
-        katipo:put(?POOL, <<"https://httpbin.org/put">>, #{body => QsVals}),
+        katipo:put(?POOL, <<"https://nghttp2.org/httpbin/put">>, #{body => QsVals}),
     Json = jsx:decode(Body),
     [] = [{<<"baz">>,<<>>},{<<"foo">>,<<"bar">>}] -- proplists:get_value(<<"form">>, Json).
 
 patch_data(_) ->
     Headers = [{<<"Content-Type">>, <<"application/json">>}],
     {ok, #{status := 200, body := Body}} =
-        katipo:patch(?POOL, <<"https://httpbin.org/patch">>,
+        katipo:patch(?POOL, <<"https://nghttp2.org/httpbin/patch">>,
                    #{headers => Headers, body => <<"!@#$%^&*()">>}),
     Json = jsx:decode(Body),
     <<"!@#$%^&*()">> = proplists:get_value(<<"data">>, Json).
 
 patch_arity_2(_) ->
     {ok, #{status := 200, body := Body}} =
-        katipo:patch(?POOL, <<"https://httpbin.org/patch">>),
+        katipo:patch(?POOL, <<"https://nghttp2.org/httpbin/patch">>),
     Json = jsx:decode(Body),
     <<>> = proplists:get_value(<<"data">>, Json).
 
 patch_qs(_) ->
     QsVals = [{<<"foo">>, <<"bar">>}, {<<"baz">>, true}],
     {ok, #{status := 200, body := Body}} =
-        katipo:patch(?POOL, <<"https://httpbin.org/patch">>, #{body => QsVals}),
+        katipo:patch(?POOL, <<"https://nghttp2.org/httpbin/patch">>, #{body => QsVals}),
     Json = jsx:decode(Body),
     [] = [{<<"baz">>,<<>>},{<<"foo">>,<<"bar">>}] -- proplists:get_value(<<"form">>, Json).
 
 options(_) ->
-    {ok, #{status := 200, headers := Headers}} = katipo:options(?POOL, <<"https://httpbin.org">>),
+    {ok, #{status := 200, headers := Headers}} = katipo:options(?POOL, <<"https://nghttp2.org/httpbin">>),
     <<"GET, POST, PUT, DELETE, PATCH, OPTIONS">> =
         proplists:get_value(<<"Access-Control-Allow-Methods">>, Headers).
 
 delete(_) ->
-    {ok, #{status := 200}} = katipo:delete(?POOL, <<"https://httpbin.org/delete">>).
+    {ok, #{status := 200}} = katipo:delete(?POOL, <<"https://nghttp2.org/httpbin/delete">>).
 
 headers(_) ->
     Headers = [{<<"header1">>, <<"!@#$%^&*()">>}],
     {ok, #{status := 200, body := Body}} =
-        katipo:get(?POOL, <<"https://httpbin.org/gzip">>, #{headers => Headers}),
+        katipo:get(?POOL, <<"https://nghttp2.org/httpbin/gzip">>, #{headers => Headers}),
     Json = jsx:decode(Body),
     Expected =  [{<<"Accept">>,<<"*/*">>},
                  {<<"Accept-Encoding">>,<<"gzip,deflate">>},
@@ -311,46 +311,46 @@ headers(_) ->
 header_remove(_) ->
     Headers = [{<<"Accept-Encoding">>, <<>>}],
     {ok, #{status := 200, body := Body}} =
-        katipo:get(?POOL, <<"https://httpbin.org/get">>, #{headers => Headers}),
+        katipo:get(?POOL, <<"https://nghttp2.org/httpbin/get">>, #{headers => Headers}),
     Json = jsx:decode(Body),
     Expected =  [{<<"Accept">>,<<"*/*">>},
                  {<<"Host">>,<<"httpbin.org">>}],
     [] = Expected -- proplists:get_value(<<"headers">>, Json).
 
 gzip(_) ->
-    {ok, #{status := 200, body := Body}} = katipo:get(?POOL, <<"https://httpbin.org/gzip">>),
+    {ok, #{status := 200, body := Body}} = katipo:get(?POOL, <<"https://nghttp2.org/httpbin/gzip">>),
     Json = jsx:decode(Body),
     true = proplists:get_value(<<"gzipped">>, Json).
 
 deflate(_) ->
-    {ok, #{status := 200, body := Body}} = katipo:get(?POOL, <<"https://httpbin.org/deflate">>),
+    {ok, #{status := 200, body := Body}} = katipo:get(?POOL, <<"https://nghttp2.org/httpbin/deflate">>),
     Json = jsx:decode(Body),
     true = proplists:get_value(<<"deflated">>, Json).
 
 bytes(_) ->
-    {ok, #{status := 200, body := Body}} = katipo:get(?POOL, <<"https://httpbin.org/bytes/1024?seed=9999">>),
+    {ok, #{status := 200, body := Body}} = katipo:get(?POOL, <<"https://nghttp2.org/httpbin/bytes/1024?seed=9999">>),
     1024 = byte_size(Body),
     <<168,123,193,120,18,120,65,73,67,119,198,61,39,1,24,169>> = crypto:hash(md5, Body).
 
 stream_bytes(_) ->
-    {ok, #{status := 200, body := Body}} = katipo:get(?POOL, <<"https://httpbin.org/bytes/1024?seed=9999&chunk_size=8">>),
+    {ok, #{status := 200, body := Body}} = katipo:get(?POOL, <<"https://nghttp2.org/httpbin/bytes/1024?seed=9999&chunk_size=8">>),
     1024 = byte_size(Body),
     <<168,123,193,120,18,120,65,73,67,119,198,61,39,1,24,169>> = crypto:hash(md5, Body).
 
 utf8(_) ->
-    {ok, #{status := 200, body := Body}} = katipo:get(?POOL, <<"https://httpbin.org/encoding/utf8">>),
+    {ok, #{status := 200, body := Body}} = katipo:get(?POOL, <<"https://nghttp2.org/httpbin/encoding/utf8">>),
     case xmerl_ucs:from_utf8(Body) of
         [_|_] -> ok
     end.
 
 stream(_) ->
-    {ok, #{status := 200, body := Body}} = katipo:get(?POOL, <<"https://httpbin.org/stream/20">>),
+    {ok, #{status := 200, body := Body}} = katipo:get(?POOL, <<"https://nghttp2.org/httpbin/stream/20">>),
     20 = length(binary:split(Body, <<"\n">>, [global, trim])).
 
 statuses(_) ->
     MFAs = [begin
                 B = integer_to_binary(S),
-                Url = <<"https://httpbin.org/status/",B/binary>>,
+                Url = <<"https://nghttp2.org/httpbin/status/",B/binary>>,
                 {katipo, get, [?POOL, Url]}
             end || S <- http_status_codes()],
     Results = rpc:parallel_eval(MFAs),
@@ -358,24 +358,24 @@ statuses(_) ->
     Results2 = http_status_codes().
 
 cookies(_) ->
-    Url = <<"https://httpbin.org/cookies/set?cname=cvalue">>,
+    Url = <<"https://nghttp2.org/httpbin/cookies/set?cname=cvalue">>,
     Opts = #{followlocation => true},
     {ok, #{status := 200, body := Body}} = katipo:get(?POOL, Url, Opts),
     Json = jsx:decode(Body),
     [{<<"cname">>, <<"cvalue">>}] = proplists:get_value(<<"cookies">>, Json).
 
 cookies_delete(_) ->
-    GetUrl = <<"https://httpbin.org/cookies/set?cname=cvalue">>,
+    GetUrl = <<"https://nghttp2.org/httpbin/cookies/set?cname=cvalue">>,
     Opts = #{followlocation => true},
     {ok, #{status := 200, cookiejar := CookieJar}} = katipo:get(?POOL, GetUrl, Opts),
-    DeleteUrl = <<"https://httpbin.org/cookies/delete?cname">>,
+    DeleteUrl = <<"https://nghttp2.org/httpbin/cookies/delete?cname">>,
     {ok, #{status := 200, body := Body}} =
         katipo:get(?POOL, DeleteUrl, #{cookiejar => CookieJar, followlocation => true}),
     Json = jsx:decode(Body),
     [{}] = proplists:get_value(<<"cookies">>, Json).
 
 cookies_bad_cookie_jar(_) ->
-    Url = <<"https://httpbin.org/cookies/delete?cname">>,
+    Url = <<"https://nghttp2.org/httpbin/cookies/delete?cname">>,
     CookieJar = ["has to be a binary"],
     Message = <<"[{cookiejar,[\"has to be a binary\"]}]">>,
     {error, #{code := bad_opts, message := Message}} =
@@ -383,7 +383,7 @@ cookies_bad_cookie_jar(_) ->
 
 %% TODO
 redirect_to(_) ->
-    {ok, #{status := 302}} = katipo:get(?POOL, <<"https://httpbin.org/redirect-to?url=https://google.com">>).
+    {ok, #{status := 302}} = katipo:get(?POOL, <<"https://nghttp2.org/httpbin/redirect-to?url=https://google.com">>).
 
 connecttimeout_ms(_) ->
     {error, #{code := operation_timedout}} =
@@ -391,15 +391,15 @@ connecttimeout_ms(_) ->
 
 followlocation_true(_) ->
     {ok, #{status := 200, headers := Headers}} =
-        katipo:get(?POOL, <<"https://httpbin.org/redirect/6">>, #{followlocation => true}),
+        katipo:get(?POOL, <<"https://nghttp2.org/httpbin/redirect/6">>, #{followlocation => true}),
     1 = length(proplists:get_all_values(<<"Server">>, Headers)).
 
 followlocation_false(_) ->
     {ok, #{status := 302}} =
-        katipo:get(?POOL, <<"https://httpbin.org/redirect/6">>, #{followlocation => false}).
+        katipo:get(?POOL, <<"https://nghttp2.org/httpbin/redirect/6">>, #{followlocation => false}).
 
 tcp_fastopen_true(_) ->
-    case katipo:get(?POOL, <<"https://httpbin.org/get">>, #{tcp_fastopen => true}) of
+    case katipo:get(?POOL, <<"https://nghttp2.org/httpbin/get">>, #{tcp_fastopen => true}) of
         {ok, #{}} ->
             ok;
         {error, #{code := bad_opts}} ->
@@ -409,7 +409,7 @@ tcp_fastopen_true(_) ->
 
 
 tcp_fastopen_false(_) ->
-    case katipo:get(?POOL, <<"https://httpbin.org/get">>, #{tcp_fastopen => false}) of
+    case katipo:get(?POOL, <<"https://nghttp2.org/httpbin/get">>, #{tcp_fastopen => false}) of
         {ok, #{}} ->
             ok;
         {error, #{code := bad_opts}} ->
@@ -430,11 +430,11 @@ interface(_) ->
                         erlang:error({unknown_operating_system, fixme})
                 end,
     {ok, #{}} =
-        katipo:get(?POOL, <<"https://httpbin.org/get">>, #{interface => Interface}).
+        katipo:get(?POOL, <<"https://nghttp2.org/httpbin/get">>, #{interface => Interface}).
 
 interface_unknown(_) ->
     {error, #{code := interface_failed}} =
-        katipo:get(?POOL, <<"https://httpbin.org/get">>, #{interface => <<"cannot_be_an_interface">>}).
+        katipo:get(?POOL, <<"https://nghttp2.org/httpbin/get">>, #{interface => <<"cannot_be_an_interface">>}).
 
 unix_socket_path(Config) ->
     Filename = list_to_binary(?config(unix_socket_file, Config)),
@@ -458,17 +458,17 @@ unix_socket_path_cant_connect(_) ->
 maxredirs(_) ->
     Opts = #{followlocation => true, maxredirs => 2},
     {error, #{code := too_many_redirects, message := <<"Maximum (2) redirects followed">>}} =
-        katipo:get(?POOL, <<"https://httpbin.org/redirect/6">>, Opts).
+        katipo:get(?POOL, <<"https://nghttp2.org/httpbin/redirect/6">>, Opts).
 
 basic_unauthorised(_) ->
     {ok, #{status := 401}} =
-        katipo:get(?POOL, <<"https://httpbin.org/basic-auth/johndoe/p455w0rd">>).
+        katipo:get(?POOL, <<"https://nghttp2.org/httpbin/basic-auth/johndoe/p455w0rd">>).
 
 basic_authorised(_) ->
     Username = <<"johndoe">>,
     Password = <<"p455w0rd">>,
     {ok, #{status := 200, body := Body}} =
-        katipo:get(?POOL, <<"https://httpbin.org/basic-auth/johndoe/p455w0rd">>,
+        katipo:get(?POOL, <<"https://nghttp2.org/httpbin/basic-auth/johndoe/p455w0rd">>,
                   #{http_auth => basic, username => Username, password => Password}),
     Json = jsx:decode(Body),
     true = proplists:get_value(<<"authenticated">>, Json),
@@ -476,13 +476,13 @@ basic_authorised(_) ->
 
 digest_unauthorised(_) ->
     {ok, #{status := 401}} =
-        katipo:get(?POOL, <<"https://httpbin.org/digest-auth/auth/johndoe/p455w0rd">>).
+        katipo:get(?POOL, <<"https://nghttp2.org/httpbin/digest-auth/auth/johndoe/p455w0rd">>).
 
 digest_authorised(_) ->
     Username = <<"johndoe">>,
     Password = <<"p455w0rd">>,
     {ok, #{status := 200, body := Body}} =
-        katipo:get(?POOL, <<"https://httpbin.org/digest-auth/auth/johndoe/p455w0rd">>,
+        katipo:get(?POOL, <<"https://nghttp2.org/httpbin/digest-auth/auth/johndoe/p455w0rd">>,
                   #{http_auth => digest, username => Username, password => Password}),
     Json = jsx:decode(Body),
     true = proplists:get_value(<<"authenticated">>, Json),
@@ -490,14 +490,14 @@ digest_authorised(_) ->
 
 lock_data_ssl_session_true(_) ->
     {ok, #{status := 200, body := Body}} =
-        katipo:get(?POOL, <<"https://httpbin.org/get?a=%21%40%23%24%25%5E%26%2A%28%29_%2B">>,
+        katipo:get(?POOL, <<"https://nghttp2.org/httpbin/get?a=%21%40%23%24%25%5E%26%2A%28%29_%2B">>,
                   #{lock_data_ssl_session => true}),
     Json = jsx:decode(Body),
     [{<<"a">>, <<"!@#$%^&*()_+">>}] = proplists:get_value(<<"args">>, Json).
 
 lock_data_ssl_session_false(_) ->
     {ok, #{status := 200, body := Body}} =
-        katipo:get(?POOL, <<"https://httpbin.org/get?a=%21%40%23%24%25%5E%26%2A%28%29_%2B">>,
+        katipo:get(?POOL, <<"https://nghttp2.org/httpbin/get?a=%21%40%23%24%25%5E%26%2A%28%29_%2B">>,
                   #{lock_data_ssl_session => false}),
     Json = jsx:decode(Body),
     [{<<"a">>, <<"!@#$%^&*()_+">>}] = proplists:get_value(<<"args">>, Json).
@@ -515,19 +515,19 @@ doh_url(_) ->
 
 badopts(_) ->
     {error, #{code := bad_opts, message := Message}} =
-        katipo:get(?POOL, <<"https://httpbin.org/get">>, #{timeout_ms => <<"wrong">>, what => not_even_close}),
+        katipo:get(?POOL, <<"https://nghttp2.org/httpbin/get">>, #{timeout_ms => <<"wrong">>, what => not_even_close}),
     {ok, Tokens, _} = erl_scan:string(binary_to_list(Message) ++ "."),
     {ok, L} = erl_parse:parse_term(Tokens),
     [] = L -- [{what, not_even_close}, {timeout_ms, <<"wrong">>}].
 
 proxy_couldnt_connect(_) ->
-    Url = <<"https://httpbin.org/get">>,
+    Url = <<"https://nghttp2.org/httpbin/get">>,
     {error, #{code := couldnt_connect}} =
         katipo:get(?POOL, Url, #{proxy => <<"http://localhost:3128">>}).
 
 timeout_ms(_) ->
     {error, #{code := operation_timedout}} =
-        katipo:get(?POOL, <<"https://httpbin.org/delay/1">>, #{timeout_ms => 500}).
+        katipo:get(?POOL, <<"https://nghttp2.org/httpbin/delay/1">>, #{timeout_ms => 500}).
 
 couldnt_resolve_host(_) ->
     {error, #{code := couldnt_resolve_host,
@@ -575,7 +575,7 @@ worker_death(_) ->
           end,
     true = repeat_until_true(Fun2),
     Fun3 = fun() ->
-                   {ok, #{status := 200}} = katipo:get(?POOL, <<"https://httpbin.org/get">>),
+                   {ok, #{status := 200}} = katipo:get(?POOL, <<"https://nghttp2.org/httpbin/get">>),
                    true
            end,
     true = repeat_until_true(Fun3).
@@ -594,7 +594,7 @@ port_death(_) ->
                   case sys:get_state(WorkerPid2) of
                       {state, _, katipo, {state, Port2, _}, _} when Port =/= Port2 ->
                           {ok, #{status := 200}} =
-                              katipo:get(PoolName, <<"https://httpbin.org/get">>),
+                              katipo:get(PoolName, <<"https://nghttp2.org/httpbin/get">>),
                           true
                   end
           end,
@@ -604,7 +604,7 @@ port_late_response(_) ->
     ok = meck:new(katipo, [passthrough]),
     meck:expect(katipo, get_timeout, fun(_) -> 100 end),
     {error, #{code := operation_timedout, message := <<>>}} =
-        katipo:get(?POOL, <<"https://httpbin.org/delay/1">>),
+        katipo:get(?POOL, <<"https://nghttp2.org/httpbin/delay/1">>),
     meck:unload(katipo).
 
 pool_opts(_) ->
@@ -684,7 +684,7 @@ proxy_post_data(_) ->
 
 session_new(_) ->
     {ok, Session} = katipo_session:new(?POOL),
-    Url = <<"https://httpbin.org/cookies/set?cname=cvalue">>,
+    Url = <<"https://nghttp2.org/httpbin/cookies/set?cname=cvalue">>,
     Req = #{url => Url, followlocation => true},
     {{ok, #{status := 200, cookiejar := CookieJar, body := Body}}, Session2} =
         katipo_session:req(Req, Session),
@@ -697,7 +697,7 @@ session_new_bad_opts(_) ->
         katipo_session:new(?POOL, #{timeout_ms => <<"wrong">>, what => not_even_close}).
 
 session_new_cookies(_) ->
-    Url = <<"https://httpbin.org/cookies/delete?cname">>,
+    Url = <<"https://nghttp2.org/httpbin/cookies/delete?cname">>,
     CookieJar = [<<"httpbin.org\tFALSE\t/\tTRUE\t0\tcname\tcvalue">>,
                  <<"httpbin.org\tFALSE\t/\tTRUE\t0\tcname2\tcvalue2">>],
     Req = #{url => Url, cookiejar => CookieJar, followlocation => true},
@@ -706,18 +706,18 @@ session_new_cookies(_) ->
         katipo_session:req(#{}, Session),
     Json = jsx:decode(Body),
     [{<<"cname2">>, <<"cvalue2">>}] = proplists:get_value(<<"cookies">>, Json),
-    Url2 = <<"https://httpbin.org/cookies/delete?cname2">>,
+    Url2 = <<"https://nghttp2.org/httpbin/cookies/delete?cname2">>,
     {{ok, #{status := 200, body := Body2}}, _} =
         katipo_session:req(#{url => Url2}, Session2),
     Json2 = jsx:decode(Body2),
     [{}] = proplists:get_value(<<"cookies">>, Json2).
 
 session_new_headers(_) ->
-    Req = #{url => <<"https://httpbin.org/cookies/delete?cname">>,
+    Req = #{url => <<"https://nghttp2.org/httpbin/cookies/delete?cname">>,
             headers => [{<<"header1">>, <<"dontcare">>}]},
     {ok, Session} = katipo_session:new(?POOL, Req),
     {{ok, #{status := 200, body := Body}}, _Session2} =
-        katipo_session:req(#{url => <<"https://httpbin.org/gzip">>,
+        katipo_session:req(#{url => <<"https://nghttp2.org/httpbin/gzip">>,
                              headers => [{<<"header1">>, <<"!@#$%^&*()">>}]},
                            Session),
     Json = jsx:decode(Body),
@@ -728,10 +728,10 @@ session_new_headers(_) ->
     [] = Expected -- proplists:get_value(<<"headers">>, Json).
 
 session_update(_) ->
-    Req = #{url => <<"https://httpbin.org/cookies/delete?cname">>,
+    Req = #{url => <<"https://nghttp2.org/httpbin/cookies/delete?cname">>,
             headers => [{<<"header1">>, <<"dontcare">>}]},
     {ok, Session} = katipo_session:new(?POOL, Req),
-    Req2 = #{url => <<"https://httpbin.org/gzip">>,
+    Req2 = #{url => <<"https://nghttp2.org/httpbin/gzip">>,
              headers => [{<<"header1">>, <<"!@#$%^&*()">>}]},
     {ok, Session2} = katipo_session:update(Req2, Session),
     {{ok, #{status := 200, body := Body}}, _Session3} =
@@ -754,7 +754,7 @@ max_total_connections(_) ->
     Self = self(),
     Fun = fun() ->
                   {ok, #{status := 200}} =
-                      katipo:get(PoolName, <<"https://httpbin.org/delay/5">>),
+                      katipo:get(PoolName, <<"https://nghttp2.org/httpbin/delay/5">>),
                   Self ! ok
           end,
     spawn(Fun),
@@ -781,7 +781,7 @@ metrics_true(_) ->
                              ok
                      end),
     {ok, #{status := 200, metrics := Metrics}} =
-        katipo:head(?POOL, <<"https://httpbin.org/get">>, #{return_metrics => true}),
+        katipo:head(?POOL, <<"https://nghttp2.org/httpbin/get">>, #{return_metrics => true}),
     10 = meck:num_calls(metrics, update_or_create, 3),
     MetricKeys = [K || {K, _} <- Metrics],
     ExpectedMetricKeys = [curl_time,total_time,namelookup_time,connect_time,
@@ -792,7 +792,7 @@ metrics_true(_) ->
 
 metrics_false(_) ->
     {ok, #{status := 200} = Res} =
-        katipo:head(?POOL, <<"https://httpbin.org/get">>, #{return_metrics => false}),
+        katipo:head(?POOL, <<"https://nghttp2.org/httpbin/get">>, #{return_metrics => false}),
     false = maps:is_key(metrics, Res).
 
 http2_get(_) ->
