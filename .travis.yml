@@ -12,8 +12,7 @@ install:
   - cd $ORIG_DIR
 
 otp_release:
-  - 20.3
-  - 21.3
+  - 23.0
 
 script:
   - export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/usr/local/lib
