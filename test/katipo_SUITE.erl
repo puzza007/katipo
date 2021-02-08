@@ -506,8 +506,7 @@ doh_url(_) ->
         true ->
             {ok, #{status := 301}} =
                 katipo:get(?POOL, <<"https://google.com">>,
-                           #{doh_url => <<"https://1.1.1.1/dns-query">>,
-                             verbose => true});
+                           #{doh_url => <<"https://1.1.1.1/dns-query">>});
         false ->
             ok
     end.
@@ -797,7 +796,7 @@ metrics_false(_) ->
 http2_get(_) ->
     {ok, #{status := 200, body := Body}} =
         katipo:get(?POOL, <<"https://nghttp2.org/httpbin/get?a=%21%40%23%24%25%5E%26%2A%28%29_%2B">>,
-                   #{http_version => curl_http_version_2_prior_knowledge, verbose => true}),
+                   #{http_version => curl_http_version_2_prior_knowledge}),
     Json = jsx:decode(Body),
     [{<<"a">>, <<"!@#$%^&*()_+">>}] = proplists:get_value(<<"args">>, Json).
 
