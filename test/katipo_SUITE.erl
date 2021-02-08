@@ -292,7 +292,7 @@ patch_qs(_) ->
 options(_) ->
     {ok, #{status := 200, headers := Headers}} = katipo:options(?POOL, <<"https://httpbin.org">>),
     <<"GET, POST, PUT, DELETE, PATCH, OPTIONS">> =
-        proplists:get_value(<<"Access-Control-Allow-Methods">>, Headers).
+        proplists:get_value(<<"access-control-allow-methods">>, Headers).
 
 delete(_) ->
     {ok, #{status := 200}} = katipo:delete(?POOL, <<"https://httpbin.org/delete">>).
@@ -383,20 +383,19 @@ cookies_bad_cookie_jar(_) ->
 
 %% TODO
 redirect_to(_) ->
-    {ok, #{status := 302}} = katipo:get(?POOL, <<"https://httpbin.org/redirect-to?url=https://google.com">>).
+    {ok, #{status := 302}} = katipo:get(?POOL, <<"https://nghttp2.org/httpbin/redirect-to?url=https://google.com">>).
 
 connecttimeout_ms(_) ->
     {error, #{code := operation_timedout}} =
         katipo:get(?POOL, <<"http://google.com">>, #{connecttimeout_ms => 1}).
 
 followlocation_true(_) ->
-    {ok, #{status := 200, headers := Headers}} =
-        katipo:get(?POOL, <<"https://httpbin.org/redirect/6">>, #{followlocation => true}),
-    1 = length(proplists:get_all_values(<<"Server">>, Headers)).
+    {ok, #{status := 200}} =
+        katipo:get(?POOL, <<"https://nghttp2.org/httpbin/redirect/6">>, #{followlocation => true}).
 
 followlocation_false(_) ->
     {ok, #{status := 302}} =
-        katipo:get(?POOL, <<"https://httpbin.org/redirect/6">>, #{followlocation => false}).
+        katipo:get(?POOL, <<"https://nghttp2.org/httpbin/redirect/6">>, #{followlocation => false}).
 
 tcp_fastopen_true(_) ->
     case katipo:get(?POOL, <<"https://httpbin.org/get">>, #{tcp_fastopen => true}) of
@@ -458,7 +457,7 @@ unix_socket_path_cant_connect(_) ->
 maxredirs(_) ->
     Opts = #{followlocation => true, maxredirs => 2},
     {error, #{code := too_many_redirects, message := <<"Maximum (2) redirects followed">>}} =
-        katipo:get(?POOL, <<"https://httpbin.org/redirect/6">>, Opts).
+        katipo:get(?POOL, <<"https://nghttp2.org/httpbin/redirect/6">>, Opts).
 
 basic_unauthorised(_) ->
     {ok, #{status := 401}} =
