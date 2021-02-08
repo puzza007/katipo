@@ -749,7 +749,7 @@ session_update_bad_opts(_) ->
 
 max_total_connections(_) ->
     PoolName = max_total_connections,
-    {ok, _} = katipo_pool:start(PoolName, 1, [{max_total_connections, 1}]),
+    {ok, _} = katipo_pool:start(PoolName, 1, [{pipelining, nothing}, {max_total_connections, 1}]),
     Self = self(),
     Fun = fun() ->
                   {ok, #{status := 200}} =
