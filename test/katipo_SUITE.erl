@@ -291,8 +291,9 @@ patch_qs(_) ->
 
 options(_) ->
     {ok, #{status := 200, headers := Headers}} = katipo:options(?POOL, <<"https://httpbin.org">>),
+    LowerHeaders = [{string:lowercase(K), V} || {K, V} <- Headers],
     <<"GET, POST, PUT, DELETE, PATCH, OPTIONS">> =
-        proplists:get_value(<<"access-control-allow-methods">>, Headers).
+        proplists:get_value(<<"access-control-allow-methods">>, LowerHeaders).
 
 delete(_) ->
     {ok, #{status := 200}} = katipo:delete(?POOL, <<"https://httpbin.org/delete">>).
