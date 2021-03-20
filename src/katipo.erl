@@ -37,6 +37,7 @@
 -export([tcp_fastopen_available/0]).
 -export([unix_socket_path_available/0]).
 -export([doh_url_available/0]).
+-export([sslkey_blob_available/0]).
 
 -ifdef(tcp_fastopen_available).
 -define(TCP_FASTOPEN_AVAILABLE, true).
@@ -56,6 +57,12 @@
 -else.
 -define(DOH_URL_AVAILABLE, false).
 -define(SSL_CACERT_ERROR_CODE, ssl_cert).
+-endif.
+
+-ifdef(sslkey_blob_available).
+-define(SSLKEY_BLOB_AVAILABLE, true).
+-else.
+-define(SSLKEY_BLOB_AVAILABLE, false).
 -endif.
 
 -record(state, {port :: port(),
@@ -88,6 +95,10 @@
 -define(doh_url, 21).
 -define(http_version, 22).
 -define(verbose, 23).
+-define(sslcert, 24).
+-define(sslkey, 25).
+-define(sslkey_blob, 26).
+-define(keypasswd, 27).
 
 -define(DEFAULT_REQ_TIMEOUT, 30000).
 -define(FOLLOWLOCATION_TRUE, 1).
@@ -301,7 +312,11 @@
             ?LOCK_DATA_SSL_SESSION_FALSE | ?LOCK_DATA_SSL_SESSION_TRUE,
           doh_url = undefined :: undefined | doh_url(),
           http_version = curl_http_version_none :: curlopt_http_version(),
-          verbose = ?VERBOSE_FALSE :: ?VERBOSE_FALSE | ?VERBOSE_TRUE
+          verbose = ?VERBOSE_FALSE :: ?VERBOSE_FALSE | ?VERBOSE_TRUE,
+          sslcert = undefined :: undefined | binary() | file:name_all(),
+          sslkey = undefined :: undefined | binary() | file:name_all(),
+          sslkey_blob = undefined :: undefined | binary(),
+          keypasswd = undefined :: undefined | binary()
          }).
 
 tcp_fastopen_available() ->
@@ -312,6 +327,9 @@ unix_socket_path_available() ->
 
 doh_url_available() ->
     ?DOH_URL_AVAILABLE.
+
+sslkey_blob_available() ->
+    ?SSLKEY_BLOB_AVAILABLE.
 
 -dialyzer({nowarn_function, opt/3}).
 
@@ -431,7 +449,11 @@ handle_call(#req{method = Method,
                  lock_data_ssl_session = LockDataSslSession,
                  doh_url = DOHURL,
                  http_version = HTTPVersion,
-                 verbose = Verbose},
+                 verbose = Verbose,
+                 sslcert = SSLCert,
+                 sslkey = SSLKey,
+                 sslkey_blob = SSLKeyBlob,
+                 keypasswd = KeyPasswd},
              From,
              State=#state{port=Port, reqs=Reqs}) ->
     {Self, Ref} = From,
@@ -453,7 +475,11 @@ handle_call(#req{method = Method,
             {?lock_data_ssl_session, LockDataSslSession},
             {?doh_url, DOHURL},
             {?http_version, HTTPVersion},
-            {?verbose, Verbose}],
+            {?verbose, Verbose},
+            {?sslcert, SSLCert},
+            {?sslkey, SSLKey},
+            {?sslkey_blob, SSLKeyBlob},
+            {?keypasswd, KeyPasswd}],
     Command = {Self, Ref, Method, Url, Headers, CookieJar, Body, Opts},
     true = port_command(Port, term_to_binary(Command)),
     Tref = erlang:start_timer(Timeout, self(), {req_timeout, From}),
@@ -656,6 +682,15 @@ opt(verbose, true, {Req, Errors}) ->
     {Req#req{verbose=?VERBOSE_TRUE}, Errors};
 opt(verbose, false, {Req, Errors}) ->
     {Req#req{verbose=?VERBOSE_FALSE}, Errors};
+opt(sslcert, Cert, {Req, Errors}) when is_binary(Cert) ->
+    {Req#req{sslcert=Cert}, Errors};
+opt(sslkey, Key, {Req, Errors}) when is_binary(Key) ->
+    {Req#req{sslkey=Key}, Errors};
+opt(sslkey_blob, Key, {Req, Errors})
+  when ?SSLKEY_BLOB_AVAILABLE andalso is_binary(Key) ->
+    {Req#req{sslkey_blob=Key}, Errors};
+opt(keypasswd, Pass, {Req, Errors}) when is_binary(Pass) ->
+    {Req#req{keypasswd=Pass}, Errors};
 opt(K, V, {Req, Errors}) ->
     {Req, [{K, V} | Errors]}.
 

@@ -41,6 +41,10 @@
 #define K_CURLOPT_DOH_URL 21
 #define K_CURLOPT_HTTP_VERSION 22
 #define K_CURLOPT_VERBOSE 23
+#define K_CURLOPT_SSLCERT 24
+#define K_CURLOPT_SSLKEY 25
+#define K_CURLOPT_SSLKEY_BLOB 26
+#define K_CURLOPT_KEYPASSWD 27
 
 #define K_CURLAUTH_BASIC 100
 #define K_CURLAUTH_DIGEST 101
@@ -114,6 +118,11 @@ typedef struct _EasyOpts {
   char *curlopt_doh_url;
   long curlopt_http_version;
   long curlopt_verbose;
+  char *curlopt_sslcert;
+  char *curlopt_sslkey;
+  char *curlopt_sslkey_blob;
+  long curlopt_sslkey_blob_size;
+  char *curlopt_keypasswd;
 } EasyOpts;
 
 static const char *curl_error_code(CURLcode error) {
@@ -822,6 +831,37 @@ static void new_conn(long method, char *url, struct curl_slist *req_headers,
   if (eopts.curlopt_lock_data_ssl_session) {
     curl_easy_setopt(conn->easy, CURLOPT_SHARE, global->shobject);
   }
+  if (eopts.curlopt_sslcert != NULL) {
+    curl_easy_setopt(conn->easy, CURLOPT_SSLCERT,
+                     eopts.curlopt_sslcert);
+  }
+  if (eopts.curlopt_sslkey != NULL) {
+    curl_easy_setopt(conn->easy, CURLOPT_SSLKEY,
+                     eopts.curlopt_sslkey);
+  }
+  #if LIBCURL_VERSION_NUM >= 0x074700 /* Available since 7.71.0 */
+  if (eopts.curlopt_sslkey_blob != NULL) {
+    struct curl_blob blob;
+    blob.data = eopts.curlopt_sslkey_blob;
+    blob.len = eopts.curlopt_sslkey_blob_size;
+    blob.flags = CURL_BLOB_COPY;
+    curl_easy_setopt(conn->easy, CURLOPT_SSLKEY_BLOB, &blob);
+    curl_easy_setopt(conn->easy, CURLOPT_SSLKEYTYPE, "DER");
+  }
+  #endif
+  #if LIBCURL_VERSION_NUM < 0x070902 /* Renamed in 7.9.2 */
+  #define CURLOPT_KEYPASSWD CURLOPT_SSLCERTPASSWD
+  #elif LIBCURL_VERSION_NUM < 0x071004 /* and again in 7.16.4 */
+  #define CURLOPT_KEYPASSWD CURLOPT_SSLKEYPASSWD
+  #endif
+  if (eopts.curlopt_keypasswd != NULL) {
+    curl_easy_setopt(conn->easy, CURLOPT_KEYPASSWD,
+                     eopts.curlopt_keypasswd);
+  } else if (eopts.curlopt_sslkey != NULL || eopts.curlopt_sslkey_blob != NULL) {
+    /* This is to suppress an "Enter PEM pass phrase" prompt if the key requires
+       a passphrase and none was provided */
+    curl_easy_setopt(conn->easy, CURLOPT_KEYPASSWD, "");
+  }
 
   free(eopts.curlopt_capath);
   free(eopts.curlopt_cacert);
@@ -831,6 +871,10 @@ static void new_conn(long method, char *url, struct curl_slist *req_headers,
   free(eopts.curlopt_interface);
   free(eopts.curlopt_unix_socket_path);
   free(eopts.curlopt_doh_url);
+  free(eopts.curlopt_sslcert);
+  free(eopts.curlopt_sslkey);
+  free(eopts.curlopt_sslkey_blob);
+  free(eopts.curlopt_keypasswd);
 
   set_method(method, conn);
   rc = curl_multi_add_handle(global->multi, conn->easy);
@@ -984,6 +1028,11 @@ static void erl_input(struct bufferevent *ev, void *arg) {
     eopts.curlopt_doh_url = NULL;
     eopts.curlopt_http_version = 0;
     eopts.curlopt_verbose = 0;
+    eopts.curlopt_sslcert = NULL;
+    eopts.curlopt_sslkey = NULL;
+    eopts.curlopt_sslkey_blob = NULL;
+    eopts.curlopt_sslkey_blob_size = 0;
+    eopts.curlopt_keypasswd = NULL;
 
     if (ei_decode_list_header(buf, &index, &num_eopts)) {
       errx(2, "Couldn't decode eopts length");
@@ -1077,6 +1126,19 @@ static void erl_input(struct bufferevent *ev, void *arg) {
           break;
         case K_CURLOPT_DOH_URL:
           eopts.curlopt_doh_url = eopt_binary;
+          break;
+        case K_CURLOPT_SSLCERT:
+          eopts.curlopt_sslcert = eopt_binary;
+          break;
+        case K_CURLOPT_SSLKEY:
+          eopts.curlopt_sslkey = eopt_binary;
+          break;
+        case K_CURLOPT_SSLKEY_BLOB:
+          eopts.curlopt_sslkey_blob = eopt_binary;
+          eopts.curlopt_sslkey_blob_size = size;
+          break;
+        case K_CURLOPT_KEYPASSWD:
+          eopts.curlopt_keypasswd = eopt_binary;
           break;
         default:
           errx(2, "Unknown eopt binary value %ld", eopt);

@@ -44,6 +44,17 @@ init_per_group(https, Config) ->
                                 {keyfile, filename:join(DataDir, "server.key")}],
                                #{env => #{dispatch => Dispatch}}),
     [{cacert_file, list_to_binary(CACert)} | Config];
+init_per_group(https_mutual, Config) ->
+    DataDir = ?config(data_dir, Config),
+    Cert = filename:join(DataDir, "badssl.com-client.pem"),
+    Key = filename:join(DataDir, "badssl.com-client.key"),
+    {ok, PemBin} = file:read_file(Key),
+    [KeyPem] = public_key:pem_decode(PemBin),
+    KeyDecoded = public_key:pem_entry_decode(KeyPem, <<"badssl.com">>),
+    KeyDer = public_key:der_encode('RSAPrivateKey', KeyDecoded),
+    [{cert_file, list_to_binary(Cert)},
+     {key_file, list_to_binary(Key)},
+     {decrypted_key_der, KeyDer} | Config];
 init_per_group(proxy, Config) ->
     application:ensure_all_started(http_proxy),
     Config;
@@ -143,6 +154,8 @@ groups() ->
        verify_host_verify_peer_error,
        cacert_self_signed,
        badssl]},
+     {https_mutual, [],
+      [badssl_client_cert]},
      {proxy, [],
       [proxy_get,
        proxy_post_data]},
@@ -165,6 +178,7 @@ all() ->
     [{group, http},
      {group, pool},
      {group, https},
+     {group, https_mutual},
      {group, proxy},
      {group, session},
      {group, port},
@@ -661,6 +675,47 @@ badssl(_) ->
         katipo:get(?POOL, <<"https://self-signed.badssl.com/">>),
     {error, _} =
         katipo:get(?POOL, <<"https://untrusted-root.badssl.com/">>).
+
+badssl_client_cert(Config) ->
+    {ok, #{status := 400}} =
+        katipo:get(?POOL, <<"https://client.badssl.com">>,
+                   #{ssl_verifyhost => true,
+                     ssl_verifypeer => true}),
+    CertFile = ?config(cert_file, Config),
+    KeyFile = ?config(key_file, Config),
+    %% Certificate provided but no key
+    {error, #{code := ssl_certproblem}} =
+        katipo:get(?POOL, <<"https://client.badssl.com">>,
+                   #{ssl_verifyhost => true,
+                     ssl_verifypeer => true,
+                     sslcert => CertFile}),
+    %% This key requires a passphrase
+    {error, #{code := ssl_certproblem}} =
+        katipo:get(?POOL, <<"https://client.badssl.com">>,
+                   #{ssl_verifyhost => true,
+                     ssl_verifypeer => true,
+                     sslcert => CertFile,
+                     sslkey => KeyFile}),
+    {ok, #{status := 200}} =
+        katipo:get(?POOL, <<"https://client.badssl.com">>,
+                   #{ssl_verifyhost => true,
+                     ssl_verifypeer => true,
+                     sslcert => CertFile,
+                     sslkey => KeyFile,
+                     keypasswd => <<"badssl.com">>}),
+    case katipo:sslkey_blob_available() of
+        true ->
+            KeyDer = ?config(decrypted_key_der, Config),
+            {ok, #{status := 200}} =
+                katipo:get(?POOL, <<"https://client.badssl.com">>,
+                        #{ssl_verifyhost => true,
+                            ssl_verifypeer => true,
+                            sslcert => CertFile,
+                            sslkey_blob => KeyDer});
+        false ->
+            ok
+    end,
+    ok.
 
 proxy_get(_) ->
     Url = <<"http://httpbin.org/get?a=%21%40%23%24%25%5E%26%2A%28%29_%2B">>,
