@@ -1,33 +1,12 @@
-sudo: required
-dist: xenial
-group: edge
+language: nix
+nix: 2.3.10
 
-language: erlang
-
-install:
-  - ORIG_DIR=$PWD
-  - wget https://github.com/erlang/rebar3/releases/download/3.10.0/rebar3 && chmod 755 rebar3
-  - wget https://github.com/curl/curl/releases/download/curl-7_64_1/curl-7.64.1.tar.gz && tar xf curl-7.64.1.tar.gz
-  - cd curl-7.64.1 && ./configure && make && sudo make install
-  - cd $ORIG_DIR
-
-otp_release:
-  - 23.0
+env:
+  - NIX_PATH=nixpkgs=https://github.com/NixOS/nixpkgs/archive/f5e8bdd07d1afaabf6b37afc5497b1e498b8046f.tar.gz
 
 script:
-  - export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/usr/local/lib
-  - ./rebar3 update && ./rebar3 ct && ./rebar3 dialyzer && ./rebar3 coveralls send
-
-before_install:
-  - sudo ifconfig
-  - sudo apt-get update -q
-  - sudo apt-get install -qy build-essential libssl-dev libnghttp2-dev
+  - nix-shell -p rebar3 libevent curl --run 'rebar3 update && rebar3 ct && rebar3 dialyzer && rebar3 coveralls send'
 
 cache:
   directories:
     - $HOME/.cache/rebar3/
-
-addons:
-  apt:
-    packages:
-      - libevent-dev
