@@ -1,11 +1,11 @@
 {"1.2.0",
 [{<<"metrics">>,{pkg,<<"metrics">>,<<"2.5.0">>},0},
- {<<"worker_pool">>,{pkg,<<"worker_pool">>,<<"3.1.1">>},0}]}.
+ {<<"worker_pool">>,{pkg,<<"worker_pool">>,<<"4.0.3">>},0}]}.
 [
 {pkg_hash,[
  {<<"metrics">>, <<"268D218D56529CB5F070D74BBFC3AF64C668379B5B18FAFDA88959442F790C57">>},
- {<<"worker_pool">>, <<"A9BF27CFF366999784A3F0657F016CE3A57901490858CCA3FB3BE1208BF2110D">>}]},
+ {<<"worker_pool">>, <<"729D98AF0EEF31D10A6027C5AF2EDD4EA7D6CF91E96B03C189BB47F6FDE9667C">>}]},
 {pkg_hash_ext,[
  {<<"metrics">>, <<"AE061938C8C3BDE97D17BE9A792B63E15C1E1EFFE16598AB87A62384F5F3714B">>},
- {<<"worker_pool">>, <<"355B6680F2C16C02FA916F66BF9C7460780A36AD6562F181AED6B690585FF1D5">>}]}
+ {<<"worker_pool">>, <<"2F2ABFD3F64931B8DF345D7EFE80A357EDC785848C39319225CA328F44BC7192">>}]}
 ].
