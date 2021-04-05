@@ -142,7 +142,8 @@ groups() ->
        lock_data_ssl_session_false,
        doh_url,
        badopts,
-       proxy_couldnt_connect]},
+       proxy_couldnt_connect,
+       protocol_restriction]},
      {pool, [],
       [pool_start_stop,
        worker_death,
@@ -537,6 +538,9 @@ proxy_couldnt_connect(_) ->
     Url = <<"https://httpbin.org/get">>,
     {error, #{code := couldnt_connect}} =
         katipo:get(?POOL, Url, #{proxy => <<"http://localhost:3128">>}).
+
+protocol_restriction(_) ->
+    {error, #{code := unsupported_protocol}} = katipo:get(?POOL, <<"dict.org">>).
 
 timeout_ms(_) ->
     {error, #{code := operation_timedout}} =
