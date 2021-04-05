@@ -2,7 +2,7 @@ language: nix
 nix: 2.3.10
 
 env:
-  - NIX_PATH=nixpkgs=https://github.com/NixOS/nixpkgs/archive/f5e8bdd07d1afaabf6b37afc5497b1e498b8046f.tar.gz
+  - NIX_PATH=nixpkgs=https://github.com/NixOS/nixpkgs/archive/83c63225fedbc5151e6487b4fe15c0968140c4cf.tar.gz
 
 script:
   - nix-shell -p rebar3 libevent curl --run 'rebar3 update && rebar3 ct && rebar3 dialyzer && rebar3 coveralls send'
