@@ -148,7 +148,8 @@ groups() ->
        worker_death,
        port_death,
        port_late_response,
-       pool_opts]},
+       pool_opts,
+       max_pipeline_length]},
      {https, [parallel],
       [verify_host_verify_peer_ok,
        verify_host_verify_peer_error,
@@ -628,6 +629,15 @@ pool_opts(_) ->
                 {max_total_connections, 10},
                 {ignore_junk_opt, hithere}],
     {error, _} = katipo_pool:start(PoolName, PoolSize, PoolOpts),
+    ok = katipo_pool:stop(PoolName).
+
+max_pipeline_length(_) ->
+    PoolName = pool_opts,
+    PoolSize = 1,
+    PoolOpts = [{pipelining, multiplex},
+                {max_pipeline_length, 5},
+                {max_total_connections, 10}],
+    {ok, _} = katipo_pool:start(PoolName, PoolSize, PoolOpts),
     ok = katipo_pool:stop(PoolName).
 
 verify_host_verify_peer_ok(_) ->
