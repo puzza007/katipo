@@ -16,6 +16,7 @@
   {files, ["c_src/Makefile",
            "c_src/katipo.c",
            "rebar.config",
+           "rebar.config.script",
            "rebar.lock",
            "src/katipo.app.src",
            "src/katipo.erl",
