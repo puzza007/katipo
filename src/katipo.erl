@@ -244,7 +244,7 @@
 -type headers() :: [header()].
 -opaque cookiejar() :: [binary()].
 -type doh_url() :: binary().
--type qs_vals() :: [{binary(), binary() | true}].
+-type qs_vals() :: [{unicode:chardata(), unicode:chardata() | true}].
 -type req_body() :: iodata() | qs_vals().
 -type body() :: binary().
 -type request() :: map().
@@ -408,7 +408,9 @@ req(PoolName, Opts)
         {error, _} = Error ->
             ok = katipo_metrics:notify_error(),
             Error
-    end.
+    end;
+req(_PoolName, Opts) ->
+    {error, #{code => bad_opts, message => Opts}}.
 
 start_link(CurlOpts) when is_list(CurlOpts) ->
     Args = [CurlOpts],
@@ -559,13 +561,19 @@ parse_header(Line) when is_binary(Line) ->
         [K, V] -> {K, V}
     end.
 
--spec encode_body(req_body()) -> body().
+-spec encode_body(req_body()) -> {ok, iodata()} | {error, {atom(), term()}}.
 encode_body([{_, _}|_] = KVs) ->
-    katipo_cow_qs:qs(KVs);
-encode_body(Body) when is_binary(Body) ->
-    Body;
-encode_body(Body) when is_list(Body) ->
-    iolist_to_binary(Body).
+    case uri_string:compose_query(KVs) of
+        {error, Reason, Message} ->
+            {error, {Reason, Message}};
+        Body ->
+            {ok, Body}
+    end;
+%% iodata
+encode_body(Body) when is_binary(Body) orelse is_list(Body) ->
+    {ok, Body};
+encode_body(Body) ->
+    {error, Body}.
 
 get_mopts(Opts) ->
     L = lists:filtermap(fun mopt_supported/1, Opts),
@@ -616,7 +624,12 @@ opt(cookiejar, CookieJar, {Req, Errors}) when is_list(CookieJar) ->
             {Req, [{cookiejar, CookieJar} | Errors]}
     end;
 opt(body, Body, {Req, Errors}) ->
-    {Req#req{body=encode_body(Body)}, Errors};
+    case encode_body(Body) of
+        {error, Error} ->
+            {Req, [{body, Error} | Errors]};
+        {ok, Encoded} ->
+            {Req#req{body=Encoded}, Errors}
+    end;
 opt(connecttimeout_ms, Ms, {Req, Errors}) when is_integer(Ms) andalso Ms > 0 ->
     {Req#req{connecttimeout_ms=Ms}, Errors};
 opt(followlocation, true, {Req, Errors}) ->
