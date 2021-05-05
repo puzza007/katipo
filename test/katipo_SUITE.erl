@@ -95,8 +95,10 @@ groups() ->
        get_http,
        get_req,
        head,
-       post_data,
-       post_iodata,
+       post_body_binary,
+       post_body_iolist,
+       post_body_qs_vals,
+       post_body_bad,
        post_arity_2,
        post_qs,
        post_req,
@@ -209,7 +211,7 @@ head(_) ->
     {ok, #{status := 200}} =
         katipo:head(?POOL, <<"https://httpbin.org/get">>).
 
-post_data(_) ->
+post_body_binary(_) ->
     {ok, #{status := 200, body := Body}} =
         katipo:post(?POOL, <<"https://httpbin.org/post">>,
                     #{headers => [{<<"Content-Type">>, <<"application/json">>}],
@@ -217,13 +219,29 @@ post_data(_) ->
     Json = jsx:decode(Body),
     <<"!@#$%^&*()">> = proplists:get_value(<<"data">>, Json).
 
-post_iodata(_) ->
+post_body_iolist(_) ->
+    {ok, #{status := 200, body := Body}} =
+        katipo:post(?POOL, <<"https://httpbin.org/post">>,
+                    #{headers => [{<<"Content-Type">>, <<"application/json">>}],
+                      body => ["foo", $b, $a, $r, <<"baz">>]}),
+    Json = jsx:decode(Body),
+    <<"foobarbaz">> = proplists:get_value(<<"data">>, Json).
+
+post_body_qs_vals(_) ->
     {ok, #{status := 200, body := Body}} =
         katipo:post(?POOL, <<"https://httpbin.org/post">>,
                     #{headers => [{<<"Content-Type">>, <<"application/json">>}],
                       body => [<<"!@#$%">>, <<"^&*()">>]}),
     Json = jsx:decode(Body),
     <<"!@#$%^&*()">> = proplists:get_value(<<"data">>, Json).
+
+post_body_bad(_) ->
+    Message = [{body, should_not_be_an_atom}],
+    BinaryMessage = iolist_to_binary(io_lib:format("~p", [Message])),
+    {error, #{code := bad_opts, message := BinaryMessage}} =
+        katipo:post(?POOL, <<"https://httpbin.org/post">>,
+                    #{headers => [{<<"Content-Type">>, <<"application/json">>}],
+                      body => should_not_be_an_atom}).
 
 post_arity_2(_) ->
     {ok, #{status := 200, body := Body}} =

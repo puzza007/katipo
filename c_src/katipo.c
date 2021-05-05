@@ -910,7 +910,7 @@ static void erl_input(struct bufferevent *ev, void *arg) {
   int num_cookies;
   int i;
   char *post_data;
-  long post_data_size;
+  int post_data_size;
   EasyOpts eopts;
   int num_eopts;
   long eopt;
@@ -1009,7 +1009,7 @@ static void erl_input(struct bufferevent *ev, void *arg) {
 
     post_data = (char *)malloc(size);
 
-    if (ei_decode_binary(buf, &index, post_data, &post_data_size)) {
+    if (ei_decode_iodata(buf, &index, &post_data_size, post_data)) {
       errx(2, "Couldn't read req body size");
     }
 
