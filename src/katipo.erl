@@ -99,6 +99,7 @@
 -define(sslkey, 25).
 -define(sslkey_blob, 26).
 -define(keypasswd, 27).
+-define(userpwd, 28).
 
 -define(DEFAULT_REQ_TIMEOUT, 30000).
 -define(FOLLOWLOCATION_TRUE, 1).
@@ -110,6 +111,7 @@
 -define(CURLAUTH_BASIC, 100).
 -define(CURLAUTH_DIGEST, 101).
 -define(CURLAUTH_UNDEFINED, 102).
+-define(CURLAUTH_NTLM, 103).
 -define(TCP_FASTOPEN_FALSE, 0).
 -define(TCP_FASTOPEN_TRUE, 1).
 -define(LOCK_DATA_SSL_SESSION_FALSE, 0).
@@ -256,8 +258,8 @@
                            metrics => proplists:proplist()}} |
                     {error, #{code := error_code(),
                               message := error_msg()}}.
--type http_auth() :: basic | digest.
--type http_auth_int() :: ?CURLAUTH_UNDEFINED | ?CURLAUTH_BASIC | ?CURLAUTH_DIGEST.
+-type http_auth() :: basic | digest | ntlm.
+-type http_auth_int() :: ?CURLAUTH_UNDEFINED | ?CURLAUTH_BASIC | ?CURLAUTH_DIGEST | ?CURLAUTH_NTLM.
 -type pipelining() :: nothing | http1 | multiplex.
 -type curlopt_http_version() :: curl_http_version_none |
                                 curl_http_version_1_0 |
@@ -316,7 +318,8 @@
           sslcert = undefined :: undefined | binary() | file:name_all(),
           sslkey = undefined :: undefined | binary() | file:name_all(),
           sslkey_blob = undefined :: undefined | binary(),
-          keypasswd = undefined :: undefined | binary()
+          keypasswd = undefined :: undefined | binary(),
+          userpwd = undefined :: undefined | binary()
          }).
 
 tcp_fastopen_available() ->
@@ -455,7 +458,8 @@ handle_call(#req{method = Method,
                  sslcert = SSLCert,
                  sslkey = SSLKey,
                  sslkey_blob = SSLKeyBlob,
-                 keypasswd = KeyPasswd},
+                 keypasswd = KeyPasswd,
+                 userpwd = UserPwd},
              From,
              State=#state{port=Port, reqs=Reqs}) ->
     {Self, Ref} = From,
@@ -481,7 +485,8 @@ handle_call(#req{method = Method,
             {?sslcert, SSLCert},
             {?sslkey, SSLKey},
             {?sslkey_blob, SSLKeyBlob},
-            {?keypasswd, KeyPasswd}],
+            {?keypasswd, KeyPasswd},
+            {?userpwd, UserPwd}],
     Command = {Self, Ref, Method, Url, Headers, CookieJar, Body, Opts},
     true = port_command(Port, term_to_binary(Command)),
     Tref = erlang:start_timer(Timeout, self(), {req_timeout, From}),
@@ -656,6 +661,8 @@ opt(http_auth, basic, {Req, Errors}) ->
     {Req#req{http_auth=?CURLAUTH_BASIC}, Errors};
 opt(http_auth, digest, {Req, Errors}) ->
     {Req#req{http_auth=?CURLAUTH_DIGEST}, Errors};
+opt(http_auth, ntlm, {Req, Errors}) ->
+    {Req#req{http_auth=?CURLAUTH_NTLM}, Errors};
 opt(username, Username, {Req, Errors}) when is_binary(Username) ->
     {Req#req{username=Username}, Errors};
 opt(password, Password, {Req, Errors}) when is_binary(Password) ->
@@ -704,6 +711,8 @@ opt(sslkey_blob, Key, {Req, Errors})
     {Req#req{sslkey_blob=Key}, Errors};
 opt(keypasswd, Pass, {Req, Errors}) when is_binary(Pass) ->
     {Req#req{keypasswd=Pass}, Errors};
+opt(userpwd, UserPwd, {Req, Errors}) when is_binary(UserPwd) ->
+    {Req#req{userpwd=UserPwd}, Errors};
 opt(K, V, {Req, Errors}) ->
     {Req, [{K, V} | Errors]}.
 

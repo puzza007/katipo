@@ -45,10 +45,12 @@
 #define K_CURLOPT_SSLKEY 25
 #define K_CURLOPT_SSLKEY_BLOB 26
 #define K_CURLOPT_KEYPASSWD 27
+#define K_CURLOPT_USERPWD 28
 
 #define K_CURLAUTH_BASIC 100
 #define K_CURLAUTH_DIGEST 101
 #define K_CURLAUTH_UNDEFINED 102
+#define K_CURLAUTH_NTLM 103
 
 struct bufferevent *to_erlang;
 struct bufferevent *from_erlang;
@@ -123,6 +125,7 @@ typedef struct _EasyOpts {
   char *curlopt_sslkey_blob;
   long curlopt_sslkey_blob_size;
   char *curlopt_keypasswd;
+  char *curlopt_userpwd;
 } EasyOpts;
 
 static const char *curl_error_code(CURLcode error) {
@@ -867,6 +870,11 @@ static void new_conn(long method, char *url, struct curl_slist *req_headers,
     curl_easy_setopt(conn->easy, CURLOPT_KEYPASSWD, "");
   }
 
+  if (eopts.curlopt_userpwd != NULL) {
+    curl_easy_setopt(conn->easy, CURLOPT_USERPWD,
+                     eopts.curlopt_userpwd);
+  }
+
   free(eopts.curlopt_capath);
   free(eopts.curlopt_cacert);
   free(eopts.curlopt_username);
@@ -879,6 +887,7 @@ static void new_conn(long method, char *url, struct curl_slist *req_headers,
   free(eopts.curlopt_sslkey);
   free(eopts.curlopt_sslkey_blob);
   free(eopts.curlopt_keypasswd);
+  free(eopts.curlopt_userpwd);
 
   set_method(method, conn);
   rc = curl_multi_add_handle(global->multi, conn->easy);
@@ -1037,6 +1046,7 @@ static void erl_input(struct bufferevent *ev, void *arg) {
     eopts.curlopt_sslkey_blob = NULL;
     eopts.curlopt_sslkey_blob_size = 0;
     eopts.curlopt_keypasswd = NULL;
+    eopts.curlopt_userpwd = NULL;
 
     if (ei_decode_list_header(buf, &index, &num_eopts)) {
       errx(2, "Couldn't decode eopts length");
@@ -1083,6 +1093,8 @@ static void erl_input(struct bufferevent *ev, void *arg) {
             eopts.curlopt_http_auth = CURLAUTH_BASIC;
           } else if (eopt_long == K_CURLAUTH_DIGEST) {
             eopts.curlopt_http_auth = CURLAUTH_DIGEST;
+          } else if (eopt_long == K_CURLAUTH_NTLM) {
+            eopts.curlopt_http_auth = CURLAUTH_NTLM;
           } else if (eopt_long != K_CURLAUTH_UNDEFINED) {
             errx(2, "Unknown curlopt_http_auth value %ld", eopt_long);
           }
@@ -1143,6 +1155,9 @@ static void erl_input(struct bufferevent *ev, void *arg) {
           break;
         case K_CURLOPT_KEYPASSWD:
           eopts.curlopt_keypasswd = eopt_binary;
+          break;
+        case K_CURLOPT_USERPWD:
+          eopts.curlopt_userpwd = eopt_binary;
           break;
         default:
           errx(2, "Unknown eopt binary value %ld", eopt);
