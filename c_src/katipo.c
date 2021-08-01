@@ -890,6 +890,7 @@ static void erl_input(struct bufferevent *ev, void *arg) {
   size_t data_read;
   char *buf;
   int index;
+  int index_prev;
   int version;
   int arity;
   int erl_type;
@@ -1007,11 +1008,19 @@ static void erl_input(struct bufferevent *ev, void *arg) {
       errx(2, "Couldn't read req body size");
     }
 
-    post_data = (char *)malloc(size);
+    index_prev = index;
 
-    if (ei_decode_iodata(buf, &index, &post_data_size, post_data)) {
+    if (ei_decode_iodata(buf, &index, &post_data_size, NULL)) {
       errx(2, "Couldn't read req body size");
     }
+
+    index = index_prev;
+    post_data = (char *)malloc(post_data_size);
+
+    if (ei_decode_iodata(buf, &index, &post_data_size, post_data)) {
+      errx(2, "Couldn't read req body");
+    }
+
 
     eopts.curlopt_connecttimeout_ms = 30000;
     eopts.curlopt_followlocation = 0;
