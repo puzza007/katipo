@@ -20,7 +20,8 @@ start(PoolName, PoolSize, WorkerOpts)
     Args = [WorkerOpts],
 
     PoolOpts = [{worker, {katipo, Args}},
-                {workers, PoolSize}],
+                {workers, PoolSize},
+                {pool_sup_shutdown, infinity}],
 
     wpool:start_sup_pool(PoolName, PoolOpts).
 
