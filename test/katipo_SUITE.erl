@@ -55,9 +55,6 @@ init_per_group(https_mutual, Config) ->
     [{cert_file, list_to_binary(Cert)},
      {key_file, list_to_binary(Key)},
      {decrypted_key_der, KeyDer} | Config];
-init_per_group(proxy, Config) ->
-    application:ensure_all_started(http_proxy),
-    Config;
 init_per_group(_, Config) ->
     Config.
 
@@ -68,24 +65,12 @@ end_per_group(http, Config) ->
 end_per_group(pool, Config) ->
     application:stop(meck),
     Config;
-end_per_group(proxy, Config) ->
-    application:stop(http_proxy),
-    Config;
 end_per_group(_, Config) ->
     Config.
 
-init_per_testcase(TestCase, Config)
-  when TestCase == proxy_get orelse TestCase == proxy_post_data ->
-    {ok, HttpProxyService} = http_proxy:start(3128, []),
-    [{http_proxy, HttpProxyService} | Config];
 init_per_testcase(_, Config) ->
     Config.
 
-end_per_testcase(TestCase, Config)
-  when TestCase == proxy_get orelse TestCase == proxy_post_data ->
-    HttpProxyService = ?config(http_proxy, Config),
-    ok = http_proxy:stop(HttpProxyService),
-    proplists:delete(http_proxy, Config);
 end_per_testcase(_, Config) ->
     Config.
 
@@ -160,9 +145,6 @@ groups() ->
        badssl]},
      {https_mutual, [],
       [badssl_client_cert]},
-     {proxy, [],
-      [proxy_get,
-       proxy_post_data]},
      {session, [parallel],
       [session_new,
        session_new_bad_opts,
@@ -183,7 +165,6 @@ all() ->
      {group, pool},
      {group, https},
      {group, https_mutual},
-     {group, proxy},
      {group, session},
      {group, port},
      {group, metrics},
@@ -748,23 +729,6 @@ badssl_client_cert(Config) ->
             ok
     end,
     ok.
-
-proxy_get(_) ->
-    Url = <<"http://httpbin.org/get?a=%21%40%23%24%25%5E%26%2A%28%29_%2B">>,
-    {ok, #{status := 200, body := Body}} =
-        katipo:get(?POOL, Url, #{proxy => <<"http://localhost:3128">>}),
-    Json = jsx:decode(Body),
-    [{<<"a">>, <<"!@#$%^&*()_+">>}] = proplists:get_value(<<"args">>, Json).
-
-proxy_post_data(_) ->
-    Url = <<"http://httpbin.org/post">>,
-    {ok, #{status := 200, body := Body}} =
-        katipo:post(?POOL, Url,
-                    #{headers => [{<<"Content-Type">>, <<"application/json">>}],
-                      body => <<"!@#$%^&*()">>,
-                      proxy => <<"http://localhost:3128">>}),
-    Json = jsx:decode(Body),
-    <<"!@#$%^&*()">> = proplists:get_value(<<"data">>, Json).
 
 %% session
 
