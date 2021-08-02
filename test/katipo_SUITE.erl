@@ -86,6 +86,7 @@ groups() ->
        post_body_bad,
        post_arity_2,
        post_qs,
+       post_qs_invalid,
        post_req,
        url_missing,
        bad_method,
@@ -240,6 +241,11 @@ post_qs(_) ->
         katipo:post(?POOL, <<"https://httpbin.org/post">>, #{body => QsVals}),
     Json = jsx:decode(Body),
     [] = [{<<"baz">>,<<>>},{<<"foo">>,<<"bar">>}] -- proplists:get_value(<<"form">>, Json).
+
+post_qs_invalid(_) ->
+    QsVals = [{hi, <<"bar">>}],
+    {error, #{code := bad_opts}} =
+        katipo:post(?POOL, <<"https://httpbin.org/post">>, #{body => QsVals}).
 
 post_req(_) ->
     {ok, #{status := 200, body := Body}} =
