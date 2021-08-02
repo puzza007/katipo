@@ -121,16 +121,19 @@ groups() ->
        unix_socket_path_cant_connect,
        timeout_ms,
        maxredirs,
-       basic_unauthorised,
-       basic_authorised,
-       digest_unauthorised,
-       digest_authorised,
        lock_data_ssl_session_true,
        lock_data_ssl_session_false,
        doh_url,
        badopts,
        proxy_couldnt_connect,
        protocol_restriction]},
+     {digest, [],
+      [basic_authorised,
+       basic_authorised_userpwd,
+       basic_unauthorised,
+       digest_authorised,
+       digest_authorised_userpwd,
+       digest_unauthorised]},
      {pool, [],
       [pool_start_stop,
        worker_death,
@@ -162,6 +165,7 @@ groups() ->
 
 all() ->
     [{group, http},
+     {group, digest},
      {group, pool},
      {group, https},
      {group, https_mutual},
@@ -489,6 +493,16 @@ basic_authorised(_) ->
     true = proplists:get_value(<<"authenticated">>, Json),
     Username = proplists:get_value(<<"user">>, Json).
 
+basic_authorised_userpwd(_) ->
+    Username = <<"johndoe">>,
+    Password = <<"p455w0rd">>,
+    {ok, #{status := 200, body := Body}} =
+        katipo:get(?POOL, <<"https://httpbin.org/basic-auth/johndoe/p455w0rd">>,
+                  #{http_auth => basic, userpwd => <<Username/binary,":",Password/binary>>}),
+    Json = jsx:decode(Body),
+    true = proplists:get_value(<<"authenticated">>, Json),
+    Username = proplists:get_value(<<"user">>, Json).
+
 digest_unauthorised(_) ->
     {ok, #{status := 401}} =
         katipo:get(?POOL, <<"https://httpbin.org/digest-auth/auth/johndoe/p455w0rd">>).
@@ -499,6 +513,16 @@ digest_authorised(_) ->
     {ok, #{status := 200, body := Body}} =
         katipo:get(?POOL, <<"https://httpbin.org/digest-auth/auth/johndoe/p455w0rd">>,
                   #{http_auth => digest, username => Username, password => Password}),
+    Json = jsx:decode(Body),
+    true = proplists:get_value(<<"authenticated">>, Json),
+    Username = proplists:get_value(<<"user">>, Json).
+
+digest_authorised_userpwd(_) ->
+    Username = <<"johndoe">>,
+    Password = <<"p455w0rd">>,
+    {ok, #{status := 200, body := Body}} =
+        katipo:get(?POOL, <<"https://httpbin.org/digest-auth/auth/johndoe/p455w0rd">>,
+                  #{http_auth => digest, userpwd => <<Username/binary,":",Password/binary>>}),
     Json = jsx:decode(Body),
     true = proplists:get_value(<<"authenticated">>, Json),
     Username = proplists:get_value(<<"user">>, Json).
