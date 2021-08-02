@@ -124,13 +124,14 @@ groups() ->
        basic_unauthorised,
        basic_authorised,
        digest_unauthorised,
-       digest_authorised,
        lock_data_ssl_session_true,
        lock_data_ssl_session_false,
        doh_url,
        badopts,
        proxy_couldnt_connect,
        protocol_restriction]},
+     {digest, [],
+      [digest_authorised]},
      {pool, [],
       [pool_start_stop,
        worker_death,
@@ -162,6 +163,7 @@ groups() ->
 
 all() ->
     [{group, http},
+     {group, digest},
      {group, pool},
      {group, https},
      {group, https_mutual},
