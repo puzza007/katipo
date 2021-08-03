@@ -62,8 +62,8 @@ Opts = #{url => <<"https://example.com">>.
          headers => ReqHeaders,
          connecttimeout_ms => 5000,
          proxy => <<"http://127.0.0.1:9000">>,
-         sslverifyhost => false,
-         sslverifypeer => false}.
+         ssl_verifyhost => false,
+         ssl_verifypeer => false}.
 {ok, Session} = katipo_session:new(Pool, Opts).
 {{ok, #{status := 200}}, Session2} =
     katipo_session:req(#{body => <<"some data">>}, Session).
