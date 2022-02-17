@@ -51,6 +51,7 @@
 #define K_CURLAUTH_DIGEST 101
 #define K_CURLAUTH_UNDEFINED 102
 #define K_CURLAUTH_NTLM 103
+#define K_CURLAUTH_NEGOTIATE 104
 
 struct bufferevent *to_erlang;
 struct bufferevent *from_erlang;
@@ -1104,6 +1105,8 @@ static void erl_input(struct bufferevent *ev, void *arg) {
             eopts.curlopt_http_auth = CURLAUTH_DIGEST;
           } else if (eopt_long == K_CURLAUTH_NTLM) {
             eopts.curlopt_http_auth = CURLAUTH_NTLM;
+          } else if (eopt_long == K_CURLAUTH_NEGOTIATE) {
+            eopts.curlopt_http_auth = CURLAUTH_NEGOTIATE;  
           } else if (eopt_long != K_CURLAUTH_UNDEFINED) {
             errx(2, "Unknown curlopt_http_auth value %ld", eopt_long);
           }
