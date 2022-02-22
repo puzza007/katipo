@@ -112,6 +112,7 @@
 -define(CURLAUTH_DIGEST, 101).
 -define(CURLAUTH_UNDEFINED, 102).
 -define(CURLAUTH_NTLM, 103).
+-define(CURLAUTH_NEGOTIATE, 104).
 -define(TCP_FASTOPEN_FALSE, 0).
 -define(TCP_FASTOPEN_TRUE, 1).
 -define(LOCK_DATA_SSL_SESSION_FALSE, 0).
@@ -258,8 +259,8 @@
                            metrics => proplists:proplist()}} |
                     {error, #{code := error_code(),
                               message := error_msg()}}.
--type http_auth() :: basic | digest | ntlm.
--type http_auth_int() :: ?CURLAUTH_UNDEFINED | ?CURLAUTH_BASIC | ?CURLAUTH_DIGEST | ?CURLAUTH_NTLM.
+-type http_auth() :: basic | digest | ntlm | negotiate.
+-type http_auth_int() :: ?CURLAUTH_UNDEFINED | ?CURLAUTH_BASIC | ?CURLAUTH_DIGEST | ?CURLAUTH_NTLM | ?CURLAUTH_NEGOTIATE.
 -type pipelining() :: nothing | http1 | multiplex.
 -type curlopt_http_version() :: curl_http_version_none |
                                 curl_http_version_1_0 |
@@ -663,6 +664,8 @@ opt(http_auth, digest, {Req, Errors}) ->
     {Req#req{http_auth=?CURLAUTH_DIGEST}, Errors};
 opt(http_auth, ntlm, {Req, Errors}) ->
     {Req#req{http_auth=?CURLAUTH_NTLM}, Errors};
+opt(http_auth, negotiate, {Req, Errors}) ->
+    {Req#req{http_auth=?CURLAUTH_NEGOTIATE}, Errors};
 opt(username, Username, {Req, Errors}) when is_binary(Username) ->
     {Req#req{username=Username}, Errors};
 opt(password, Password, {Req, Errors}) when is_binary(Password) ->
