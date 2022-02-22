@@ -99,33 +99,33 @@ katipo:Method(Pool :: atom(), URL :: binary(), ReqOptions :: map()).
 
 #### Request options
 
-| Option                  | Type                          | Default     | Notes                                                                               |
-|:------------------------|:------------------------------|:------------|:------------------------------------------------------------------------------------|
-| `headers`               | `[{binary(), iodata()}]`      | `[]`        |                                                                                     |
-| `cookiejar`             | opaque (returned in response) | `[]`        |                                                                                     |
-| `body`                  | `iodata()`                    | `<<>>`      |                                                                                     |
-| `connecttimeout_ms`     | `pos_integer()`               | 30000       | [docs](https://curl.haxx.se/libcurl/c/CURLOPT_CONNECTTIMEOUT.html)                  |
-| `followlocation`        | `boolean()`                   | `false`     | [docs](https://curl.haxx.se/libcurl/c/CURLOPT_FOLLOWLOCATION.html)                  |
-| `ssl_verifyhost`        | `boolean()`                   | `true`      | [docs](https://curl.haxx.se/libcurl/c/CURLOPT_SSL_VERIFYHOST.html)                  |
-| `ssl_verifypeer`        | `boolean()`                   | `true`      | [docs](https://curl.haxx.se/libcurl/c/CURLOPT_SSL_VERIFYPEER.html)                  |
-| `capath`                | `binary()`                    | `undefined` |                                                                                     |
-| `cacert`                | `binary()`                    | `undefined` |                                                                                     |
-| `timeout_ms`            | `pos_integer()`               | 30000       |                                                                                     |
-| `maxredirs`             | `non_neg_integer()`           | 9           |                                                                                     |
-| `proxy`                 | `binary()`                    | `undefined` | [docs](https://curl.haxx.se/libcurl/c/CURLOPT_PROXY.html)                           |
-| `return_metrics`        | `boolean()`                   | `false`     |                                                                                     |
-| `tcp_fastopen`          | `boolean()`                   | `false`     | [docs](https://curl.haxx.se/libcurl/c/CURLOPT_TCP_FASTOPEN.html) curl >= 7.49.0     |
-| `interface`             | `binary()`                    | `undefined` | [docs](https://curl.haxx.se/libcurl/c/CURLOPT_INTERFACE.html)                       |
-| `unix_socket_path`      | `binary()`                    | `undefined` | [docs](https://curl.haxx.se/libcurl/c/CURLOPT_UNIX_SOCKET_PATH.html) curl >= 7.40.0 |
-| `lock_data_ssl_session` | `boolean()`                   | `false`     | [docs](https://curl.haxx.se/libcurl/c/curl_share_setopt.html) curl >= 7.23.0        |
-| `doh_url`               | `binary()`                    | `undefined` | [docs](https://curl.haxx.se/libcurl/c/CURLOPT_DOH_URL.html) curl >= 7.62.0          |
+| Option                  | Type                                | Default     | Notes                                                                               |
+|:------------------------|:------------------------------------|:------------|:------------------------------------------------------------------------------------|
+| `headers`               | `[{binary(), iodata()}]`            | `[]`        |                                                                                     |
+| `cookiejar`             | opaque (returned in response)       | `[]`        |                                                                                     |
+| `body`                  | `iodata()`                          | `<<>>`      |                                                                                     |
+| `connecttimeout_ms`     | `pos_integer()`                     | 30000       | [docs](https://curl.haxx.se/libcurl/c/CURLOPT_CONNECTTIMEOUT.html)                  |
+| `followlocation`        | `boolean()`                         | `false`     | [docs](https://curl.haxx.se/libcurl/c/CURLOPT_FOLLOWLOCATION.html)                  |
+| `ssl_verifyhost`        | `boolean()`                         | `true`      | [docs](https://curl.haxx.se/libcurl/c/CURLOPT_SSL_VERIFYHOST.html)                  |
+| `ssl_verifypeer`        | `boolean()`                         | `true`      | [docs](https://curl.haxx.se/libcurl/c/CURLOPT_SSL_VERIFYPEER.html)                  |
+| `capath`                | `binary()`                          | `undefined` |                                                                                     |
+| `cacert`                | `binary()`                          | `undefined` |                                                                                     |
+| `timeout_ms`            | `pos_integer()`                     | 30000       |                                                                                     |
+| `maxredirs`             | `non_neg_integer()`                 | 9           |                                                                                     |
+| `proxy`                 | `binary()`                          | `undefined` | [docs](https://curl.haxx.se/libcurl/c/CURLOPT_PROXY.html)                           |
+| `return_metrics`        | `boolean()`                         | `false`     |                                                                                     |
+| `tcp_fastopen`          | `boolean()`                         | `false`     | [docs](https://curl.haxx.se/libcurl/c/CURLOPT_TCP_FASTOPEN.html) curl >= 7.49.0     |
+| `interface`             | `binary()`                          | `undefined` | [docs](https://curl.haxx.se/libcurl/c/CURLOPT_INTERFACE.html)                       |
+| `unix_socket_path`      | `binary()`                          | `undefined` | [docs](https://curl.haxx.se/libcurl/c/CURLOPT_UNIX_SOCKET_PATH.html) curl >= 7.40.0 |
+| `lock_data_ssl_session` | `boolean()`                         | `false`     | [docs](https://curl.haxx.se/libcurl/c/curl_share_setopt.html) curl >= 7.23.0        |
+| `doh_url`               | `binary()`                          | `undefined` | [docs](https://curl.haxx.se/libcurl/c/CURLOPT_DOH_URL.html) curl >= 7.62.0          |
 | `http_version`          | `curl_http_version_none` <br> `curl_http_version_1_0` <br> `curl_http_version_1_1` <br> `curl_http_version_2_0` <br> `curl_http_version_2tls` <br> `curl_http_version_2_prior_knowledge` | `curl_http_version_none` | [docs](https://curl.haxx.se/libcurl/c/CURLOPT_HTTP_VERSION.html) curl >= 7.62.0 |
-| `sslcert`               | `binary()`                    | `undefined` | [docs](https://curl.haxx.se/libcurl/c/CURLOPT_SSLCERT.html)                         |
-| `sslkey`                | `binary()`                    | `undefined` | [docs](https://curl.haxx.se/libcurl/c/CURLOPT_SSLKEY.html)                          |
-| `sslkey_blob`           | `binary()` (DER format)       | `undefined` | [docs](https://curl.haxx.se/libcurl/c/CURLOPT_SSLKEY_BLOB.html) curl >= 7.71.0      |
-| `keypasswd`             | `binary()`                    | `undefined` | [docs](https://curl.haxx.se/libcurl/c/CURLOPT_KEYPASSWD.html)                       |
-| `http_auth`             | `basic | digest | ntlm`       | `undefined` | [docs](https://curl.haxx.se/libcurl/c/CURLOPT_HTTPAUTH.html)                        |
-| `userpwd`               | `binary()`                    | `undefined` | [docs](https://curl.haxx.se/libcurl/c/CURLOPT_USERPWD.html)                         |
+| `sslcert`               | `binary()`                          | `undefined` | [docs](https://curl.haxx.se/libcurl/c/CURLOPT_SSLCERT.html)                         |
+| `sslkey`                | `binary()`                          | `undefined` | [docs](https://curl.haxx.se/libcurl/c/CURLOPT_SSLKEY.html)                          |
+| `sslkey_blob`           | `binary()` (DER format)             | `undefined` | [docs](https://curl.haxx.se/libcurl/c/CURLOPT_SSLKEY_BLOB.html) curl >= 7.71.0      |
+| `keypasswd`             | `binary()`                          | `undefined` | [docs](https://curl.haxx.se/libcurl/c/CURLOPT_KEYPASSWD.html)                       |
+| `http_auth`             | `basic | digest | ntlm | negotiate` | `undefined` | [docs](https://curl.haxx.se/libcurl/c/CURLOPT_HTTPAUTH.html)                        |
+| `userpwd`               | `binary()`                          | `undefined` | [docs](https://curl.haxx.se/libcurl/c/CURLOPT_USERPWD.html)                         |
 
 #### Responses
 
@@ -195,6 +195,3 @@ rebar3 compile
 
 * A more structured way to ifdef features based on curl version
 * Better session interface
-
-[travis_ci]: https://travis-ci.org/puzza007/katipo
-[travis_ci_image]: https://travis-ci.org/puzza007/katipo.png
