@@ -12,7 +12,6 @@
 -export([handle_info/2]).
 -export([terminate/2]).
 -export([code_change/3]).
-
 -export([req/2]).
 -export([get/2]).
 -export([get/3]).
@@ -246,11 +245,77 @@
 -type header() :: {binary(), iodata()}.
 -type headers() :: [header()].
 -opaque cookiejar() :: [binary()].
--type doh_url() :: binary().
 -type qs_vals() :: [{unicode:chardata(), unicode:chardata() | true}].
 -type req_body() :: iodata() | qs_vals().
 -type body() :: binary().
--type request() :: map().
+-type connecttimeout_ms() :: pos_integer(). %% See [https://curl.haxx.se/libcurl/c/CURLOPT_CONNECTTIMEOUT.html]
+-type ssl_verifyhost() :: boolean(). %% See [https://curl.haxx.se/libcurl/c/CURLOPT_SSL_VERIFYHOST.html]
+-type ssl_verifypeer() :: boolean(). %% See [https://curl.haxx.se/libcurl/c/CURLOPT_SSL_VERIFYPEER.html]
+-type proxy() :: binary(). %% See [https://curl.haxx.se/libcurl/c/CURLOPT_PROXY.html]
+-type tcp_fastopen() :: boolean(). %% See [https://curl.haxx.se/libcurl/c/CURLOPT_TCP_FASTOPEN.html]
+-type interface() :: binary(). %% See [https://curl.haxx.se/libcurl/c/CURLOPT_INTERFACE.html]
+-type unix_socket_path() :: binary(). %% See [https://curl.haxx.se/libcurl/c/CURLOPT_UNIX_SOCKET_PATH.html]
+-type doh_url() :: binary(). %% See [https://curl.haxx.se/libcurl/c/CURLOPT_DOH_URL.html]
+-type sslcert() :: binary(). %% See [https://curl.haxx.se/libcurl/c/CURLOPT_SSLCERT.html]
+-type sslkey() :: binary(). %% See [https://curl.haxx.se/libcurl/c/CURLOPT_SSLKEY.html]
+-type sslkey_blob() :: binary(). %% See [https://curl.haxx.se/libcurl/c/CURLOPT_SSLKEY_BLOB.html]
+-type userpwd() :: binary(). %% See [https://curl.haxx.se/libcurl/c/CURLOPT_USERPWD.html]
+-type request() :: #{url := binary(),
+                    method := method(),
+                    headers => headers(),
+                    cookiejar => cookiejar(),
+                    body => req_body(),
+                    connecttimeout_ms => connecttimeout_ms(),
+                    followlocation => boolean(),
+                    ssl_verifyhost => ssl_verifyhost(),
+                    ssl_verifypeer => ssl_verifypeer(),
+                    capath => binary(),
+                    cacert => binary(),
+                    timeout_ms => pos_integer(),
+                    maxredirs => non_neg_integer(),
+                    http_auth => http_auth(),
+                    username => binary(),
+                    password => binary(),
+                    proxy => proxy(),
+                    return_metrics => boolean(),
+                    tcp_fastopen => tcp_fastopen(),
+                    interface => interface(),
+                    unix_socket_path => unix_socket_path(),
+                    lock_data_ssl_session => boolean(),
+                    doh_url => doh_url(),
+                    http_version => curlopt_http_version(),
+                    verbose => boolean(),
+                    sslcert => sslcert(),
+                    sslkey => sslkey(),
+                    sslkey_blob => sslkey_blob(),
+                    userpwd => userpwd()}.
+-type opts() :: #{headers => headers(),
+                    cookiejar => cookiejar(),
+                    body => req_body(),
+                    connecttimeout_ms => connecttimeout_ms(),
+                    followlocation => boolean(),
+                    ssl_verifyhost => ssl_verifyhost(),
+                    ssl_verifypeer => ssl_verifypeer(),
+                    capath => binary(),
+                    cacert => binary(),
+                    timeout_ms => pos_integer(),
+                    maxredirs => non_neg_integer(),
+                    http_auth => http_auth(),
+                    username => binary(),
+                    password => binary(),
+                    proxy => proxy(),
+                    return_metrics => boolean(),
+                    tcp_fastopen => tcp_fastopen(),
+                    interface => interface(),
+                    unix_socket_path => unix_socket_path(),
+                    lock_data_ssl_session => boolean(),
+                    doh_url => doh_url(),
+                    http_version => curlopt_http_version(),
+                    verbose => boolean(),
+                    sslcert => sslcert(),
+                    sslkey => sslkey(),
+                    sslkey_blob => sslkey_blob(),
+                    userpwd => userpwd()}.
 -type metrics() :: proplists:proplist().
 -type response() :: {ok, #{status := status(),
                            headers := headers(),
@@ -268,6 +333,8 @@
                                 curl_http_version_2_0 |
                                 curl_http_version_2tls |
                                 curl_http_version_2_prior_knowledge.
+%% HTTP protocol version to use
+%% see [https://curl.se/libcurl/c/CURLOPT_HTTP_VERSION.html]
 -type curlmopts() :: [{max_pipeline_length, non_neg_integer()} |
                       {pipelining, pipelining()} |
                       {max_total_connections, non_neg_integer()}].
@@ -287,6 +354,18 @@
 -export_type([response/0]).
 -export_type([http_auth/0]).
 -export_type([curlmopts/0]).
+-export_type([connecttimeout_ms/0]).
+-export_type([ssl_verifyhost/0]).
+-export_type([ssl_verifypeer/0]).
+-export_type([proxy/0]).
+-export_type([tcp_fastopen/0]).
+-export_type([interface/0]).
+-export_type([unix_socket_path/0]).
+-export_type([doh_url/0]).
+-export_type([sslcert/0]).
+-export_type([sslkey/0]).
+-export_type([sslkey_blob/0]).
+-export_type([userpwd/0]).
 
 -record(req, {
           method = ?get :: method_int(),
@@ -323,76 +402,88 @@
           userpwd = undefined :: undefined | binary()
          }).
 
+%% @private
 tcp_fastopen_available() ->
     ?TCP_FASTOPEN_AVAILABLE.
 
+%% @private
 unix_socket_path_available() ->
     ?UNIX_SOCKET_PATH_AVAILABLE.
 
+%% @private
 doh_url_available() ->
     ?DOH_URL_AVAILABLE.
 
+%% @private
 sslkey_blob_available() ->
     ?SSLKEY_BLOB_AVAILABLE.
 
 -dialyzer({nowarn_function, opt/3}).
 
+%% @equiv get(Poolname, Url, #{})
 -spec get(katipo_pool:name(), url()) -> response().
 get(PoolName, Url) ->
-    get(PoolName, Url, #{}).
+    req(PoolName, #{url => Url, method => get}).
 
--spec get(katipo_pool:name(), url(), request()) -> response().
+-spec get(katipo_pool:name(), url(), opts()) -> response().
 get(PoolName, Url, Opts) ->
     req(PoolName, Opts#{url => Url, method => get}).
 
+%% @equiv post(Poolname, Url, #{})
 -spec post(katipo_pool:name(), url()) -> response().
 post(PoolName, Url) ->
-    post(PoolName, Url, #{}).
+    req(PoolName, #{url => Url, method => post}).
 
--spec post(katipo_pool:name(), url(), request()) -> response().
+-spec post(katipo_pool:name(), url(), opts()) -> response().
 post(PoolName, Url, Opts) ->
     req(PoolName, Opts#{url => Url, method => post}).
 
+%% @equiv put(Poolname, Url, #{})
 -spec put(katipo_pool:name(), url()) -> response().
 put(PoolName, Url) ->
-    put(PoolName, Url, #{}).
+    req(PoolName, #{url => Url, method => put}).
 
--spec put(katipo_pool:name(), url(), request()) -> response().
+-spec put(katipo_pool:name(), url(), opts()) -> response().
 put(PoolName, Url, Opts) ->
     req(PoolName, Opts#{url => Url, method => put}).
 
+%% @equiv head(Poolname, Url, #{})
 -spec head(katipo_pool:name(), url()) -> response().
 head(PoolName, Url) ->
-    head(PoolName, Url, #{}).
+    req(PoolName, #{url => Url, method => head}).
 
--spec head(katipo_pool:name(), url(), request()) -> response().
+-spec head(katipo_pool:name(), url(), opts()) -> response().
 head(PoolName, Url, Opts) ->
     req(PoolName, Opts#{url => Url, method => head}).
 
+%% @equiv options(Poolname, Url, #{})
 -spec options(katipo_pool:name(), url()) -> response().
 options(PoolName, Url) ->
-    options(PoolName, Url, #{}).
+    req(PoolName, #{url => Url, method => options}).
 
--spec options(katipo_pool:name(), url(), request()) -> response().
+-spec options(katipo_pool:name(), url(), opts()) -> response().
 options(PoolName, Url, Opts) ->
     req(PoolName, Opts#{url => Url, method => options}).
 
+%% @equiv patch(Poolname, Url, #{})
 -spec patch(katipo_pool:name(), url()) -> response().
 patch(PoolName, Url) ->
-    patch(PoolName, Url, #{}).
+    req(PoolName, #{url => Url, method => patch}).
 
--spec patch(katipo_pool:name(), url(), request()) -> response().
+-spec patch(katipo_pool:name(), url(), opts()) -> response().
 patch(PoolName, Url, Opts) ->
     req(PoolName, Opts#{url => Url, method => patch}).
 
+%% @equiv delete(Poolname, Url, #{})
 -spec delete(katipo_pool:name(), url()) -> response().
 delete(PoolName, Url) ->
-    delete(PoolName, Url, #{}).
+    req(PoolName, #{url => Url, method => delete}).
 
--spec delete(katipo_pool:name(), url(), request()) -> response().
+-spec delete(katipo_pool:name(), url(), opts()) -> response().
 delete(PoolName, Url, Opts) ->
     req(PoolName, Opts#{url => Url, method => delete}).
 
+%% @private
 -spec req(katipo_pool:name(), request()) -> response().
 req(PoolName, Opts)
   when is_map(Opts) ->
@@ -412,14 +503,14 @@ req(PoolName, Opts)
         {error, _} = Error ->
             ok = katipo_metrics:notify_error(),
             Error
-    end;
-req(_PoolName, Opts) ->
-    {error, #{code => bad_opts, message => Opts}}.
+    end.
 
+%% @private
 start_link(CurlOpts) when is_list(CurlOpts) ->
     Args = [CurlOpts],
     gen_server:start_link(?MODULE, Args, []).
 
+%% @private
 init([CurlOpts]) ->
     process_flag(trap_exit, true),
     case get_mopts(CurlOpts) of
@@ -431,6 +522,7 @@ init([CurlOpts]) ->
             {stop, Error}
     end.
 
+%% @private
 handle_call(#req{method = Method,
                  url = Url,
                  headers = Headers,
@@ -494,10 +586,12 @@ handle_call(#req{method = Method,
     Reqs2 = maps:put(From, Tref, Reqs),
     {noreply, State#state{reqs=Reqs2}}.
 
+%% @private
 handle_cast(Msg, State) ->
     error_logger:error_msg("Unexpected cast: ~p", [Msg]),
     {noreply, State}.
 
+%% @private
 handle_info({Port, {data, Data}}, State=#state{port=Port, reqs=Reqs}) ->
     {Result, {From, Response}} =
         case binary_to_term(Data) of
@@ -536,10 +630,12 @@ handle_info({'EXIT', Port, Reason}, State=#state{port=Port}) ->
     error_logger:error_msg("Port ~p died with reason: ~p", [Port, Reason]),
     {stop, port_died, State}.
 
+%% @private
 terminate(_Reason, #state{port=Port}) ->
     true = port_close(Port),
     ok.
 
+%% @private
 code_change(_OldVsn, State, _Extra) ->
     {ok, State}.
 
@@ -607,6 +703,7 @@ mopt_supported({max_total_connections, Val})
 mopt_supported({_, _}) ->
     false.
 
+%% @private
 -spec get_timeout(#req{}) -> pos_integer().
 get_timeout(#req{connecttimeout_ms=ConnMs, timeout_ms=ReqMs}) ->
     max(ConnMs, ReqMs).
@@ -728,6 +825,7 @@ process_opts(Opts) ->
             {error, error_map(bad_opts, Errors)}
     end.
 
+%% @private
 -spec check_opts(request()) -> ok | {error, map()}.
 check_opts(Opts) when is_map(Opts) ->
     case process_opts(Opts) of

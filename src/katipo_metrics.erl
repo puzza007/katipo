@@ -1,3 +1,4 @@
+%% @hidden
 -module(katipo_metrics).
 
 -export([init/0]).

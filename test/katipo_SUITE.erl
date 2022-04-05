@@ -26,9 +26,6 @@ init_per_group(http, Config) ->
     {ok, _} = cowboy:start_clear(unix_socket, [{ip, {local, Filename}},
                                                {port, 0}], #{env => #{dispatch => Dispatch}}),
     [{unix_socket_file, Filename} | Config];
-init_per_group(session, Config) ->
-    application:ensure_all_started(katipo),
-    Config;
 init_per_group(pool, Config) ->
     application:ensure_all_started(meck),
     Config;
@@ -151,13 +148,6 @@ groups() ->
        badssl]},
      {https_mutual, [],
       [badssl_client_cert]},
-     {session, [parallel],
-      [session_new,
-       session_new_bad_opts,
-       session_new_cookies,
-       session_new_headers,
-       session_update,
-       session_update_bad_opts]},
      {port, [],
       [max_total_connections]},
      {metrics, [],
@@ -172,7 +162,6 @@ all() ->
      {group, pool},
      {group, https},
      {group, https_mutual},
-     {group, session},
      {group, port},
      {group, metrics},
      {group, http2}].
@@ -761,74 +750,6 @@ badssl_client_cert(Config) ->
             ok
     end,
     ok.
-
-%% session
-
-session_new(_) ->
-    {ok, Session} = katipo_session:new(?POOL),
-    Url = <<"https://httpbin.org/cookies/set?cname=cvalue">>,
-    Req = #{url => Url, followlocation => true},
-    {{ok, #{status := 200, cookiejar := CookieJar, body := Body}}, Session2} =
-        katipo_session:req(Req, Session),
-    {state, ?POOL, #{cookiejar := CookieJar}} = Session2,
-    Json = jsx:decode(Body),
-    [{<<"cname">>, <<"cvalue">>}] = proplists:get_value(<<"cookies">>, Json).
-
-session_new_bad_opts(_) ->
-    {error, #{code := bad_opts}} =
-        katipo_session:new(?POOL, #{timeout_ms => <<"wrong">>, what => not_even_close}).
-
-session_new_cookies(_) ->
-    Url = <<"https://httpbin.org/cookies/delete?cname">>,
-    CookieJar = [<<"httpbin.org\tFALSE\t/\tTRUE\t0\tcname\tcvalue">>,
-                 <<"httpbin.org\tFALSE\t/\tTRUE\t0\tcname2\tcvalue2">>],
-    Req = #{url => Url, cookiejar => CookieJar, followlocation => true},
-    {ok, Session} = katipo_session:new(?POOL, Req),
-    {{ok, #{status := 200, body := Body}}, Session2} =
-        katipo_session:req(#{}, Session),
-    Json = jsx:decode(Body),
-    [{<<"cname2">>, <<"cvalue2">>}] = proplists:get_value(<<"cookies">>, Json),
-    Url2 = <<"https://httpbin.org/cookies/delete?cname2">>,
-    {{ok, #{status := 200, body := Body2}}, _} =
-        katipo_session:req(#{url => Url2}, Session2),
-    Json2 = jsx:decode(Body2),
-    [{}] = proplists:get_value(<<"cookies">>, Json2).
-
-session_new_headers(_) ->
-    Req = #{url => <<"https://httpbin.org/cookies/delete?cname">>,
-            headers => [{<<"header1">>, <<"dontcare">>}]},
-    {ok, Session} = katipo_session:new(?POOL, Req),
-    {{ok, #{status := 200, body := Body}}, _Session2} =
-        katipo_session:req(#{url => <<"https://httpbin.org/gzip">>,
-                             headers => [{<<"header1">>, <<"!@#$%^&*()">>}]},
-                           Session),
-    Json = jsx:decode(Body),
-    Expected =  [{<<"Accept">>,<<"*/*">>},
-                 {<<"Accept-Encoding">>,<<"gzip,deflate">>},
-                 {<<"Header1">>,<<"!@#$%^&*()">>},
-                 {<<"Host">>,<<"httpbin.org">>}],
-    [] = Expected -- proplists:get_value(<<"headers">>, Json).
-
-session_update(_) ->
-    Req = #{url => <<"https://httpbin.org/cookies/delete?cname">>,
-            headers => [{<<"header1">>, <<"dontcare">>}]},
-    {ok, Session} = katipo_session:new(?POOL, Req),
-    Req2 = #{url => <<"https://httpbin.org/gzip">>,
-             headers => [{<<"header1">>, <<"!@#$%^&*()">>}]},
-    {ok, Session2} = katipo_session:update(Req2, Session),
-    {{ok, #{status := 200, body := Body}}, _Session3} =
-        katipo_session:req(#{}, Session2),
-    Json = jsx:decode(Body),
-    Expected =  [{<<"Accept">>,<<"*/*">>},
-                 {<<"Accept-Encoding">>,<<"gzip,deflate">>},
-                 {<<"Header1">>,<<"!@#$%^&*()">>},
-                 {<<"Host">>,<<"httpbin.org">>}],
-    [] = Expected -- proplists:get_value(<<"headers">>, Json).
-
-session_update_bad_opts(_) ->
-    {ok, Session} = katipo_session:new(?POOL),
-    {error, #{code := bad_opts}} =
-        katipo_session:update(#{timeout_ms => <<"wrong">>, what => not_even_close}, Session).
 
 max_total_connections(_) ->
     PoolName = max_total_connections,
