@@ -2,7 +2,7 @@
 
 -behaviour(gen_server).
 
--compile({no_auto_import,[put/2]}).
+-compile({no_auto_import, [put/2]}).
 
 -export([start_link/1]).
 
@@ -67,38 +67,38 @@
 -record(state, {port :: port(),
                 reqs = #{} :: map()}).
 
--define(get, 0).
--define(post, 1).
--define(put, 2).
--define(head, 3).
--define(options, 4).
--define(patch, 5).
--define(delete, 6).
+-define(GET, 0).
+-define(POST, 1).
+-define(PUT, 2).
+-define(HEAD, 3).
+-define(OPTIONS, 4).
+-define(PATCH, 5).
+-define(DELETE, 6).
 
--define(connecttimeout_ms, 5).
--define(followlocation, 6).
--define(ssl_verifyhost, 7).
--define(timeout_ms, 8).
--define(maxredirs, 9).
--define(ssl_verifypeer, 10).
--define(capath, 11).
--define(http_auth, 12).
--define(username, 13).
--define(password, 14).
--define(proxy, 15).
--define(cacert, 16).
--define(tcp_fastopen, 17).
--define(interface, 18).
--define(unix_socket_path, 19).
--define(lock_data_ssl_session, 20).
--define(doh_url, 21).
--define(http_version, 22).
--define(verbose, 23).
--define(sslcert, 24).
--define(sslkey, 25).
--define(sslkey_blob, 26).
--define(keypasswd, 27).
--define(userpwd, 28).
+-define(CONNECTTIMEOUT_MS, 5).
+-define(FOLLOWLOCATION, 6).
+-define(SSL_VERIFYHOST, 7).
+-define(TIMEOUT_MS, 8).
+-define(MAXREDIRS, 9).
+-define(SSL_VERIFYPEER, 10).
+-define(CAPATH, 11).
+-define(HTTP_AUTH, 12).
+-define(USERNAME, 13).
+-define(PASSWORD, 14).
+-define(PROXY, 15).
+-define(CACERT, 16).
+-define(TCP_FASTOPEN, 17).
+-define(INTERFACE, 18).
+-define(UNIX_SOCKET_PATH, 19).
+-define(LOCK_DATA_SSL_SESSION, 20).
+-define(DOH_URL, 21).
+-define(HTTP_VERSION, 22).
+-define(VERBOSE, 23).
+-define(SSLCERT, 24).
+-define(SSLKEY, 25).
+-define(SSLKEY_BLOB, 26).
+-define(KEYPASSWD, 27).
+-define(USERPWD, 28).
 
 -define(DEFAULT_REQ_TIMEOUT, 30000).
 -define(FOLLOWLOCATION_TRUE, 1).
@@ -122,7 +122,7 @@
 -define(METHODS, [get, post, put, head, options, patch, delete]).
 
 -type method() :: get | post | put | head | options | patch | delete.
--type method_int() :: ?get | ?post | ?put | ?head | ?options | ?patch | ?delete.
+-type method_int() :: ?GET | ?POST | ?PUT | ?HEAD | ?OPTIONS | ?PATCH | ?DELETE.
 -type url() :: binary().
 -type error_code() ::
         ok |
@@ -248,18 +248,30 @@
 -type qs_vals() :: [{unicode:chardata(), unicode:chardata() | true}].
 -type req_body() :: iodata() | qs_vals().
 -type body() :: binary().
--type connecttimeout_ms() :: pos_integer(). %% See [https://curl.haxx.se/libcurl/c/CURLOPT_CONNECTTIMEOUT.html]
--type ssl_verifyhost() :: boolean(). %% See [https://curl.haxx.se/libcurl/c/CURLOPT_SSL_VERIFYHOST.html]
--type ssl_verifypeer() :: boolean(). %% See [https://curl.haxx.se/libcurl/c/CURLOPT_SSL_VERIFYPEER.html]
--type proxy() :: binary(). %% See [https://curl.haxx.se/libcurl/c/CURLOPT_PROXY.html]
--type tcp_fastopen() :: boolean(). %% See [https://curl.haxx.se/libcurl/c/CURLOPT_TCP_FASTOPEN.html]
--type interface() :: binary(). %% See [https://curl.haxx.se/libcurl/c/CURLOPT_INTERFACE.html]
--type unix_socket_path() :: binary(). %% See [https://curl.haxx.se/libcurl/c/CURLOPT_UNIX_SOCKET_PATH.html]
--type doh_url() :: binary(). %% See [https://curl.haxx.se/libcurl/c/CURLOPT_DOH_URL.html]
--type sslcert() :: binary(). %% See [https://curl.haxx.se/libcurl/c/CURLOPT_SSLCERT.html]
--type sslkey() :: binary(). %% See [https://curl.haxx.se/libcurl/c/CURLOPT_SSLKEY.html]
--type sslkey_blob() :: binary(). %% See [https://curl.haxx.se/libcurl/c/CURLOPT_SSLKEY_BLOB.html]
--type userpwd() :: binary(). %% See [https://curl.haxx.se/libcurl/c/CURLOPT_USERPWD.html]
+-type connecttimeout_ms() :: pos_integer().
+%% See [https://curl.haxx.se/libcurl/c/CURLOPT_CONNECTTIMEOUT.html]
+-type ssl_verifyhost() :: boolean().
+%% See [https://curl.haxx.se/libcurl/c/CURLOPT_SSL_VERIFYHOST.html]
+-type ssl_verifypeer() :: boolean().
+%% See [https://curl.haxx.se/libcurl/c/CURLOPT_SSL_VERIFYPEER.html]
+-type proxy() :: binary().
+%% See [https://curl.haxx.se/libcurl/c/CURLOPT_PROXY.html]
+-type tcp_fastopen() :: boolean().
+%% See [https://curl.haxx.se/libcurl/c/CURLOPT_TCP_FASTOPEN.html]
+-type interface() :: binary().
+%% See [https://curl.haxx.se/libcurl/c/CURLOPT_INTERFACE.html]
+-type unix_socket_path() :: binary().
+%% See [https://curl.haxx.se/libcurl/c/CURLOPT_UNIX_SOCKET_PATH.html]
+-type doh_url() :: binary().
+%% See [https://curl.haxx.se/libcurl/c/CURLOPT_DOH_URL.html]
+-type sslcert() :: binary().
+%% See [https://curl.haxx.se/libcurl/c/CURLOPT_SSLCERT.html]
+-type sslkey() :: binary().
+%% See [https://curl.haxx.se/libcurl/c/CURLOPT_SSLKEY.html]
+-type sslkey_blob() :: binary().
+%% See [https://curl.haxx.se/libcurl/c/CURLOPT_SSLKEY_BLOB.html]
+-type userpwd() :: binary().
+%% See [https://curl.haxx.se/libcurl/c/CURLOPT_USERPWD.html]
 -type request() :: #{url := binary(),
                     method := method(),
                     headers => headers(),
@@ -325,7 +337,11 @@
                     {error, #{code := error_code(),
                               message := error_msg()}}.
 -type http_auth() :: basic | digest | ntlm | negotiate.
--type http_auth_int() :: ?CURLAUTH_UNDEFINED | ?CURLAUTH_BASIC | ?CURLAUTH_DIGEST | ?CURLAUTH_NTLM | ?CURLAUTH_NEGOTIATE.
+-type http_auth_int() :: ?CURLAUTH_UNDEFINED |
+                         ?CURLAUTH_BASIC |
+                         ?CURLAUTH_DIGEST |
+                         ?CURLAUTH_NTLM |
+                         ?CURLAUTH_NEGOTIATE.
 -type pipelining() :: nothing | http1 | multiplex.
 -type curlopt_http_version() :: curl_http_version_none |
                                 curl_http_version_1_0 |
@@ -368,7 +384,7 @@
 -export_type([userpwd/0]).
 
 -record(req, {
-          method = ?get :: method_int(),
+          method = ?GET :: method_int(),
           url :: undefined | binary(),
           headers = [] :: headers(),
           cookiejar = [] :: cookiejar(),
@@ -401,6 +417,8 @@
           keypasswd = undefined :: undefined | binary(),
           userpwd = undefined :: undefined | binary()
          }).
+
+-type req() :: #req{}.
 
 %% @private
 tcp_fastopen_available() ->
@@ -556,30 +574,30 @@ handle_call(#req{method = Method,
              From,
              State=#state{port=Port, reqs=Reqs}) ->
     {Self, Ref} = From,
-    Opts = [{?connecttimeout_ms, ConnTimeoutMs},
-            {?followlocation, FollowLocation},
-            {?ssl_verifyhost, SslVerifyHost},
-            {?ssl_verifypeer, SslVerifyPeer},
-            {?capath, CAPath},
-            {?cacert, CACert},
-            {?timeout_ms, TimeoutMs},
-            {?maxredirs, MaxRedirs},
-            {?http_auth, HTTPAuth},
-            {?username, Username},
-            {?password, Password},
-            {?proxy, Proxy},
-            {?tcp_fastopen, TCPFastOpen},
-            {?interface, Interface},
-            {?unix_socket_path, UnixSocketPath},
-            {?lock_data_ssl_session, LockDataSslSession},
-            {?doh_url, DOHURL},
-            {?http_version, HTTPVersion},
-            {?verbose, Verbose},
-            {?sslcert, SSLCert},
-            {?sslkey, SSLKey},
-            {?sslkey_blob, SSLKeyBlob},
-            {?keypasswd, KeyPasswd},
-            {?userpwd, UserPwd}],
+    Opts = [{?CONNECTTIMEOUT_MS, ConnTimeoutMs},
+            {?FOLLOWLOCATION, FollowLocation},
+            {?SSL_VERIFYHOST, SslVerifyHost},
+            {?SSL_VERIFYPEER, SslVerifyPeer},
+            {?CAPATH, CAPath},
+            {?CACERT, CACert},
+            {?TIMEOUT_MS, TimeoutMs},
+            {?MAXREDIRS, MaxRedirs},
+            {?HTTP_AUTH, HTTPAuth},
+            {?USERNAME, Username},
+            {?PASSWORD, Password},
+            {?PROXY, Proxy},
+            {?TCP_FASTOPEN, TCPFastOpen},
+            {?INTERFACE, Interface},
+            {?UNIX_SOCKET_PATH, UnixSocketPath},
+            {?LOCK_DATA_SSL_SESSION, LockDataSslSession},
+            {?DOH_URL, DOHURL},
+            {?HTTP_VERSION, HTTPVersion},
+            {?VERBOSE, Verbose},
+            {?SSLCERT, SSLCert},
+            {?SSLKEY, SSLKey},
+            {?SSLKEY_BLOB, SSLKeyBlob},
+            {?KEYPASSWD, KeyPasswd},
+            {?USERPWD, UserPwd}],
     Command = {Self, Ref, Method, Url, Headers, CookieJar, Body, Opts},
     true = port_command(Port, term_to_binary(Command)),
     Tref = erlang:start_timer(Timeout, self(), {req_timeout, From}),
@@ -644,13 +662,13 @@ headers_to_binary(Headers) ->
     [iolist_to_binary([K, <<": ">>, V]) || {K, V} <- Headers].
 
 -spec method_to_int(method()) -> method_int().
-method_to_int(get)     -> ?get;
-method_to_int(post)    -> ?post;
-method_to_int(put)     -> ?put;
-method_to_int(head)    -> ?head;
-method_to_int(options) -> ?options;
-method_to_int(patch)   -> ?patch;
-method_to_int(delete)  -> ?delete.
+method_to_int(get)     -> ?GET;
+method_to_int(post)    -> ?POST;
+method_to_int(put)     -> ?PUT;
+method_to_int(head)    -> ?HEAD;
+method_to_int(options) -> ?OPTIONS;
+method_to_int(patch)   -> ?PATCH;
+method_to_int(delete)  -> ?DELETE.
 
 -spec parse_headers([binary()]) -> headers().
 parse_headers([_StatusLine | Lines]) ->
@@ -704,7 +722,7 @@ mopt_supported({_, _}) ->
     false.
 
 %% @private
--spec get_timeout(#req{}) -> pos_integer().
+-spec get_timeout(req()) -> pos_integer().
 get_timeout(#req{connecttimeout_ms=ConnMs, timeout_ms=ReqMs}) ->
     max(ConnMs, ReqMs).
 
@@ -816,7 +834,7 @@ opt(userpwd, UserPwd, {Req, Errors}) when is_binary(UserPwd) ->
 opt(K, V, {Req, Errors}) ->
     {Req, [{K, V} | Errors]}.
 
--spec process_opts(request()) -> {ok, #req{}} | {error, map()}.
+-spec process_opts(request()) -> {ok, req()} | {error, map()}.
 process_opts(Opts) ->
     case maps:fold(fun opt/3, {#req{}, []}, Opts) of
         {Req=#req{}, []} ->
