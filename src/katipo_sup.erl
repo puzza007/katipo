@@ -1,3 +1,4 @@
+%% @hidden
 -module(katipo_sup).
 
 -behaviour(supervisor).

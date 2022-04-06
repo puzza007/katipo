@@ -49,27 +49,6 @@ Req = #{url => <<"https://example.com">>.
        body := RespBody}} = katipo:req(Pool, Req).
 ```
 
-Session interface. Cookies handled automatically and options merged. Inspired by [Requests sessions](http://docs.python-requests.org/en/latest/user/advanced/#session-objects).
-
-```erlang
-{ok, _} = application:ensure_all_started(katipo).
-Pool = api_server,
-{ok, _} = katipo_pool:start(Pool, 2, [{pipelining, multiplex}]).
-ReqHeaders = [{<<"User-Agent">>, <<"katipo">>}].
-Opts = #{url => <<"https://example.com">>.
-         method => post,
-         headers => ReqHeaders,
-         connecttimeout_ms => 5000,
-         proxy => <<"http://127.0.0.1:9000">>,
-         ssl_verifyhost => false,
-         ssl_verifypeer => false}.
-{ok, Session} = katipo_session:new(Pool, Opts).
-{{ok, #{status := 200}}, Session2} =
-    katipo_session:req(#{body => <<"some data">>}, Session).
-{{ok, #{status := 200}}, Session3} =
-    katipo_session:req(#{body => <<"different payload data">>}, Session2).
-```
-
 ### Why
 
 We wanted a compatible and high-performance HTTP client so took
@@ -124,7 +103,7 @@ katipo:Method(Pool :: atom(), URL :: binary(), ReqOptions :: map()).
 | `sslkey`                | `binary()`                          | `undefined` | [docs](https://curl.haxx.se/libcurl/c/CURLOPT_SSLKEY.html)                          |
 | `sslkey_blob`           | `binary()` (DER format)             | `undefined` | [docs](https://curl.haxx.se/libcurl/c/CURLOPT_SSLKEY_BLOB.html) curl >= 7.71.0      |
 | `keypasswd`             | `binary()`                          | `undefined` | [docs](https://curl.haxx.se/libcurl/c/CURLOPT_KEYPASSWD.html)                       |
-| `http_auth`             | `basic | digest | ntlm | negotiate` | `undefined` | [docs](https://curl.haxx.se/libcurl/c/CURLOPT_HTTPAUTH.html)                        |
+| `http_auth`             | `basic` <br> `digest` <br> `ntlm` <br> `negotiate` | `undefined` | [docs](https://curl.haxx.se/libcurl/c/CURLOPT_HTTPAUTH.html)                        |
 | `userpwd`               | `binary()`                          | `undefined` | [docs](https://curl.haxx.se/libcurl/c/CURLOPT_USERPWD.html)                         |
 
 #### Responses
@@ -143,7 +122,7 @@ katipo:Method(Pool :: atom(), URL :: binary(), ReqOptions :: map()).
 
 | Option                  | Type                          | Default      | Note                                                                                           |
 |:------------------------|:------------------------------|:-------------|:-----------------------------------------------------------------------------------------------|
-| `pipelining`            | `nothing | http1 | multiplex` | `nothing`    | HTTP pipelining [CURLMOPT_PIPELINING](https://curl.haxx.se/libcurl/c/CURLMOPT_PIPELINING.html) |
+| `pipelining`            | `nothing` <br> `http1` <br> `multiplex` | `nothing`    | HTTP pipelining [CURLMOPT_PIPELINING](https://curl.haxx.se/libcurl/c/CURLMOPT_PIPELINING.html) |
 | `max_pipeline_length`   | `non_neg_integer()`           | 100          |                                                                                                |
 | `max_total_connections` | `non_neg_integer()`           | 0 (no limit) | [docs](https://curl.haxx.se/libcurl/c/CURLMOPT_MAX_TOTAL_CONNECTIONS.html)                     |
 
@@ -161,37 +140,20 @@ katipo:Method(Pool :: atom(), URL :: binary(), ReqOptions :: map()).
 * redirect_time
 * starttransfer_time
 
-### Dependencies
+### System dependencies
 
-#### Ubuntu Trusty
+* libevent-dev
+* libcurl4-openssl-dev
+* make
+* curl
+* libssl-dev
+* gcc
 
-```sh
-sudo apt-get install git libwxgtk2.8-0 libwxbase2.8-0 libevent-dev libcurl4-openssl-dev libcurl4-openssl-dev
+## Testing
 
-wget http://packages.erlang-solutions.com/site/esl/esl-erlang/FLAVOUR_1_esl/esl-erlang_18.0-1~ubuntu~trusty_amd64.deb
-
-sudo dpkg -i esl-erlang_18.0-1~ubuntu~trusty_amd64.deb
-```
-#### Fedora
-
-```sh
-sudo dnf install libevent.x86_64 libcurl.x86_64 libevent-devel.x86_64
-```
-
-#### OSX
-
-```sh
-brew install --with-c-ares --with-nghttp2 curl
-brew install libevent
-```
-
-### Building
-
-```sh
-rebar3 compile
-```
+The official Erlang Docker [image](https://hub.docker.com/_/erlang)
+has everything needed to build and test Katipo
 
 ### TODO
 
 * A more structured way to ifdef features based on curl version
-* Better session interface

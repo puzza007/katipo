@@ -26,9 +26,6 @@ init_per_group(http, Config) ->
     {ok, _} = cowboy:start_clear(unix_socket, [{ip, {local, Filename}},
                                                {port, 0}], #{env => #{dispatch => Dispatch}}),
     [{unix_socket_file, Filename} | Config];
-init_per_group(session, Config) ->
-    application:ensure_all_started(katipo),
-    Config;
 init_per_group(pool, Config) ->
     application:ensure_all_started(meck),
     Config;
@@ -151,13 +148,6 @@ groups() ->
        badssl]},
      {https_mutual, [],
       [badssl_client_cert]},
-     {session, [parallel],
-      [session_new,
-       session_new_bad_opts,
-       session_new_cookies,
-       session_new_headers,
-       session_update,
-       session_update_bad_opts]},
      {port, [],
       [max_total_connections]},
      {metrics, [],
@@ -172,7 +162,6 @@ all() ->
      {group, pool},
      {group, https},
      {group, https_mutual},
-     {group, session},
      {group, port},
      {group, metrics},
      {group, http2}].
@@ -180,19 +169,19 @@ all() ->
 get(_) ->
     {ok, #{status := 200, body := Body}} =
         katipo:get(?POOL, <<"https://httpbin.org/get?a=%21%40%23%24%25%5E%26%2A%28%29_%2B">>),
-    Json = jsx:decode(Body),
+    Json = jsx:decode(Body, [{return_maps, false}]),
     [{<<"a">>, <<"!@#$%^&*()_+">>}] = proplists:get_value(<<"args">>, Json).
 
 get_http(_) ->
     {ok, #{status := 200, body := Body}} =
         katipo:get(?POOL, <<"http://httpbin.org/get?a=%21%40%23%24%25%5E%26%2A%28%29_%2B">>),
-    Json = jsx:decode(Body),
+    Json = jsx:decode(Body, [{return_maps, false}]),
     [{<<"a">>, <<"!@#$%^&*()_+">>}] = proplists:get_value(<<"args">>, Json).
 
 get_req(_) ->
     {ok, #{status := 200, body := Body}} =
         katipo:req(?POOL, #{url => <<"https://httpbin.org/get?a=%21%40%23%24%25%5E%26%2A%28%29_%2B">>}),
-    Json = jsx:decode(Body),
+    Json = jsx:decode(Body, [{return_maps, false}]),
     [{<<"a">>, <<"!@#$%^&*()_+">>}] = proplists:get_value(<<"args">>, Json).
 
 head(_) ->
@@ -204,7 +193,7 @@ post_body_binary(_) ->
         katipo:post(?POOL, <<"https://httpbin.org/post">>,
                     #{headers => [{<<"Content-Type">>, <<"application/json">>}],
                       body => <<"!@#$%^&*()">>}),
-    Json = jsx:decode(Body),
+    Json = jsx:decode(Body, [{return_maps, false}]),
     <<"!@#$%^&*()">> = proplists:get_value(<<"data">>, Json).
 
 post_body_iolist(_) ->
@@ -212,7 +201,7 @@ post_body_iolist(_) ->
         katipo:post(?POOL, <<"https://httpbin.org/post">>,
                     #{headers => [{<<"Content-Type">>, <<"application/json">>}],
                       body => ["foo", $b, $a, $r, <<"baz">>]}),
-    Json = jsx:decode(Body),
+    Json = jsx:decode(Body, [{return_maps, false}]),
     <<"foobarbaz">> = proplists:get_value(<<"data">>, Json).
 
 post_body_qs_vals(_) ->
@@ -220,7 +209,7 @@ post_body_qs_vals(_) ->
         katipo:post(?POOL, <<"https://httpbin.org/post">>,
                     #{headers => [{<<"Content-Type">>, <<"application/json">>}],
                       body => [<<"!@#$%">>, <<"^&*()">>]}),
-    Json = jsx:decode(Body),
+    Json = jsx:decode(Body, [{return_maps, false}]),
     <<"!@#$%^&*()">> = proplists:get_value(<<"data">>, Json).
 
 post_body_bad(_) ->
@@ -234,14 +223,14 @@ post_body_bad(_) ->
 post_arity_2(_) ->
     {ok, #{status := 200, body := Body}} =
         katipo:post(?POOL, <<"https://httpbin.org/post">>),
-    Json = jsx:decode(Body),
+    Json = jsx:decode(Body, [{return_maps, false}]),
     undefined = proplists:get_value(<<>>, Json).
 
 post_qs(_) ->
     QsVals = [{<<"foo">>, <<"bar">>}, {<<"baz">>, true}],
     {ok, #{status := 200, body := Body}} =
         katipo:post(?POOL, <<"https://httpbin.org/post">>, #{body => QsVals}),
-    Json = jsx:decode(Body),
+    Json = jsx:decode(Body, [{return_maps, false}]),
     [] = [{<<"baz">>,<<>>},{<<"foo">>,<<"bar">>}] -- proplists:get_value(<<"form">>, Json).
 
 post_qs_invalid(_) ->
@@ -255,7 +244,7 @@ post_req(_) ->
                      method => post,
                      headers => [{<<"Content-Type">>, <<"application/json">>}],
                      body => <<"!@#$%^&*()">>}),
-    Json = jsx:decode(Body),
+    Json = jsx:decode(Body, [{return_maps, false}]),
     <<"!@#$%^&*()">> = proplists:get_value(<<"data">>, Json).
 
 url_missing(_) ->
@@ -279,20 +268,20 @@ put_data(_) ->
     {ok, #{status := 200, body := Body}} =
         katipo:put(?POOL, <<"https://httpbin.org/put">>,
                    #{headers => Headers, body => <<"!@#$%^&*()">>}),
-    Json = jsx:decode(Body),
+    Json = jsx:decode(Body, [{return_maps, false}]),
     <<"!@#$%^&*()">> = proplists:get_value(<<"data">>, Json).
 
 put_arity_2(_) ->
     {ok, #{status := 200, body := Body}} =
         katipo:put(?POOL, <<"https://httpbin.org/put">>),
-    Json = jsx:decode(Body),
+    Json = jsx:decode(Body, [{return_maps, false}]),
     undefined = proplists:get_value(<<>>, Json).
 
 put_qs(_) ->
     QsVals = [{<<"foo">>, <<"bar">>}, {<<"baz">>, true}],
     {ok, #{status := 200, body := Body}} =
         katipo:put(?POOL, <<"https://httpbin.org/put">>, #{body => QsVals}),
-    Json = jsx:decode(Body),
+    Json = jsx:decode(Body, [{return_maps, false}]),
     [] = [{<<"baz">>,<<>>},{<<"foo">>,<<"bar">>}] -- proplists:get_value(<<"form">>, Json).
 
 patch_data(_) ->
@@ -300,20 +289,20 @@ patch_data(_) ->
     {ok, #{status := 200, body := Body}} =
         katipo:patch(?POOL, <<"https://httpbin.org/patch">>,
                    #{headers => Headers, body => <<"!@#$%^&*()">>}),
-    Json = jsx:decode(Body),
+    Json = jsx:decode(Body, [{return_maps, false}]),
     <<"!@#$%^&*()">> = proplists:get_value(<<"data">>, Json).
 
 patch_arity_2(_) ->
     {ok, #{status := 200, body := Body}} =
         katipo:patch(?POOL, <<"https://httpbin.org/patch">>),
-    Json = jsx:decode(Body),
+    Json = jsx:decode(Body, [{return_maps, false}]),
     <<>> = proplists:get_value(<<"data">>, Json).
 
 patch_qs(_) ->
     QsVals = [{<<"foo">>, <<"bar">>}, {<<"baz">>, true}],
     {ok, #{status := 200, body := Body}} =
         katipo:patch(?POOL, <<"https://httpbin.org/patch">>, #{body => QsVals}),
-    Json = jsx:decode(Body),
+    Json = jsx:decode(Body, [{return_maps, false}]),
     [] = [{<<"baz">>,<<>>},{<<"foo">>,<<"bar">>}] -- proplists:get_value(<<"form">>, Json).
 
 options(_) ->
@@ -329,7 +318,7 @@ headers(_) ->
     Headers = [{<<"header1">>, <<"!@#$%^&*()">>}],
     {ok, #{status := 200, body := Body}} =
         katipo:get(?POOL, <<"https://httpbin.org/gzip">>, #{headers => Headers}),
-    Json = jsx:decode(Body),
+    Json = jsx:decode(Body, [{return_maps, false}]),
     Expected =  [{<<"Accept">>,<<"*/*">>},
                  {<<"Accept-Encoding">>,<<"gzip,deflate">>},
                  {<<"Header1">>,<<"!@#$%^&*()">>},
@@ -340,19 +329,19 @@ header_remove(_) ->
     Headers = [{<<"Accept-Encoding">>, <<>>}],
     {ok, #{status := 200, body := Body}} =
         katipo:get(?POOL, <<"https://httpbin.org/get">>, #{headers => Headers}),
-    Json = jsx:decode(Body),
+    Json = jsx:decode(Body, [{return_maps, false}]),
     Expected =  [{<<"Accept">>,<<"*/*">>},
                  {<<"Host">>,<<"httpbin.org">>}],
     [] = Expected -- proplists:get_value(<<"headers">>, Json).
 
 gzip(_) ->
     {ok, #{status := 200, body := Body}} = katipo:get(?POOL, <<"https://httpbin.org/gzip">>),
-    Json = jsx:decode(Body),
+    Json = jsx:decode(Body, [{return_maps, false}]),
     true = proplists:get_value(<<"gzipped">>, Json).
 
 deflate(_) ->
     {ok, #{status := 200, body := Body}} = katipo:get(?POOL, <<"https://httpbin.org/deflate">>),
-    Json = jsx:decode(Body),
+    Json = jsx:decode(Body, [{return_maps, false}]),
     true = proplists:get_value(<<"deflated">>, Json).
 
 bytes(_) ->
@@ -389,7 +378,7 @@ cookies(_) ->
     Url = <<"https://httpbin.org/cookies/set?cname=cvalue">>,
     Opts = #{followlocation => true},
     {ok, #{status := 200, body := Body}} = katipo:get(?POOL, Url, Opts),
-    Json = jsx:decode(Body),
+    Json = jsx:decode(Body, [{return_maps, false}]),
     [{<<"cname">>, <<"cvalue">>}] = proplists:get_value(<<"cookies">>, Json).
 
 cookies_delete(_) ->
@@ -399,7 +388,7 @@ cookies_delete(_) ->
     DeleteUrl = <<"https://httpbin.org/cookies/delete?cname">>,
     {ok, #{status := 200, body := Body}} =
         katipo:get(?POOL, DeleteUrl, #{cookiejar => CookieJar, followlocation => true}),
-    Json = jsx:decode(Body),
+    Json = jsx:decode(Body, [{return_maps, false}]),
     [{}] = proplists:get_value(<<"cookies">>, Json).
 
 cookies_bad_cookie_jar(_) ->
@@ -497,7 +486,7 @@ basic_authorised(_) ->
     {ok, #{status := 200, body := Body}} =
         katipo:get(?POOL, <<"https://httpbin.org/basic-auth/johndoe/p455w0rd">>,
                   #{http_auth => basic, username => Username, password => Password}),
-    Json = jsx:decode(Body),
+    Json = jsx:decode(Body, [{return_maps, false}]),
     true = proplists:get_value(<<"authenticated">>, Json),
     Username = proplists:get_value(<<"user">>, Json).
 
@@ -507,7 +496,7 @@ basic_authorised_userpwd(_) ->
     {ok, #{status := 200, body := Body}} =
         katipo:get(?POOL, <<"https://httpbin.org/basic-auth/johndoe/p455w0rd">>,
                   #{http_auth => basic, userpwd => <<Username/binary,":",Password/binary>>}),
-    Json = jsx:decode(Body),
+    Json = jsx:decode(Body, [{return_maps, false}]),
     true = proplists:get_value(<<"authenticated">>, Json),
     Username = proplists:get_value(<<"user">>, Json).
 
@@ -521,7 +510,7 @@ digest_authorised(_) ->
     {ok, #{status := 200, body := Body}} =
         katipo:get(?POOL, <<"https://httpbin.org/digest-auth/auth/johndoe/p455w0rd">>,
                   #{http_auth => digest, username => Username, password => Password}),
-    Json = jsx:decode(Body),
+    Json = jsx:decode(Body, [{return_maps, false}]),
     true = proplists:get_value(<<"authenticated">>, Json),
     Username = proplists:get_value(<<"user">>, Json).
 
@@ -531,7 +520,7 @@ digest_authorised_userpwd(_) ->
     {ok, #{status := 200, body := Body}} =
         katipo:get(?POOL, <<"https://httpbin.org/digest-auth/auth/johndoe/p455w0rd">>,
                   #{http_auth => digest, userpwd => <<Username/binary,":",Password/binary>>}),
-    Json = jsx:decode(Body),
+    Json = jsx:decode(Body, [{return_maps, false}]),
     true = proplists:get_value(<<"authenticated">>, Json),
     Username = proplists:get_value(<<"user">>, Json).
 
@@ -539,14 +528,14 @@ lock_data_ssl_session_true(_) ->
     {ok, #{status := 200, body := Body}} =
         katipo:get(?POOL, <<"https://httpbin.org/get?a=%21%40%23%24%25%5E%26%2A%28%29_%2B">>,
                   #{lock_data_ssl_session => true}),
-    Json = jsx:decode(Body),
+    Json = jsx:decode(Body, [{return_maps, false}]),
     [{<<"a">>, <<"!@#$%^&*()_+">>}] = proplists:get_value(<<"args">>, Json).
 
 lock_data_ssl_session_false(_) ->
     {ok, #{status := 200, body := Body}} =
         katipo:get(?POOL, <<"https://httpbin.org/get?a=%21%40%23%24%25%5E%26%2A%28%29_%2B">>,
                   #{lock_data_ssl_session => false}),
-    Json = jsx:decode(Body),
+    Json = jsx:decode(Body, [{return_maps, false}]),
     [{<<"a">>, <<"!@#$%^&*()_+">>}] = proplists:get_value(<<"args">>, Json).
 
 doh_url(_) ->
@@ -762,74 +751,6 @@ badssl_client_cert(Config) ->
     end,
     ok.
 
-%% session
-
-session_new(_) ->
-    {ok, Session} = katipo_session:new(?POOL),
-    Url = <<"https://httpbin.org/cookies/set?cname=cvalue">>,
-    Req = #{url => Url, followlocation => true},
-    {{ok, #{status := 200, cookiejar := CookieJar, body := Body}}, Session2} =
-        katipo_session:req(Req, Session),
-    {state, ?POOL, #{cookiejar := CookieJar}} = Session2,
-    Json = jsx:decode(Body),
-    [{<<"cname">>, <<"cvalue">>}] = proplists:get_value(<<"cookies">>, Json).
-
-session_new_bad_opts(_) ->
-    {error, #{code := bad_opts}} =
-        katipo_session:new(?POOL, #{timeout_ms => <<"wrong">>, what => not_even_close}).
-
-session_new_cookies(_) ->
-    Url = <<"https://httpbin.org/cookies/delete?cname">>,
-    CookieJar = [<<"httpbin.org\tFALSE\t/\tTRUE\t0\tcname\tcvalue">>,
-                 <<"httpbin.org\tFALSE\t/\tTRUE\t0\tcname2\tcvalue2">>],
-    Req = #{url => Url, cookiejar => CookieJar, followlocation => true},
-    {ok, Session} = katipo_session:new(?POOL, Req),
-    {{ok, #{status := 200, body := Body}}, Session2} =
-        katipo_session:req(#{}, Session),
-    Json = jsx:decode(Body),
-    [{<<"cname2">>, <<"cvalue2">>}] = proplists:get_value(<<"cookies">>, Json),
-    Url2 = <<"https://httpbin.org/cookies/delete?cname2">>,
-    {{ok, #{status := 200, body := Body2}}, _} =
-        katipo_session:req(#{url => Url2}, Session2),
-    Json2 = jsx:decode(Body2),
-    [{}] = proplists:get_value(<<"cookies">>, Json2).
-
-session_new_headers(_) ->
-    Req = #{url => <<"https://httpbin.org/cookies/delete?cname">>,
-            headers => [{<<"header1">>, <<"dontcare">>}]},
-    {ok, Session} = katipo_session:new(?POOL, Req),
-    {{ok, #{status := 200, body := Body}}, _Session2} =
-        katipo_session:req(#{url => <<"https://httpbin.org/gzip">>,
-                             headers => [{<<"header1">>, <<"!@#$%^&*()">>}]},
-                           Session),
-    Json = jsx:decode(Body),
-    Expected =  [{<<"Accept">>,<<"*/*">>},
-                 {<<"Accept-Encoding">>,<<"gzip,deflate">>},
-                 {<<"Header1">>,<<"!@#$%^&*()">>},
-                 {<<"Host">>,<<"httpbin.org">>}],
-    [] = Expected -- proplists:get_value(<<"headers">>, Json).
-
-session_update(_) ->
-    Req = #{url => <<"https://httpbin.org/cookies/delete?cname">>,
-            headers => [{<<"header1">>, <<"dontcare">>}]},
-    {ok, Session} = katipo_session:new(?POOL, Req),
-    Req2 = #{url => <<"https://httpbin.org/gzip">>,
-             headers => [{<<"header1">>, <<"!@#$%^&*()">>}]},
-    {ok, Session2} = katipo_session:update(Req2, Session),
-    {{ok, #{status := 200, body := Body}}, _Session3} =
-        katipo_session:req(#{}, Session2),
-    Json = jsx:decode(Body),
-    Expected =  [{<<"Accept">>,<<"*/*">>},
-                 {<<"Accept-Encoding">>,<<"gzip,deflate">>},
-                 {<<"Header1">>,<<"!@#$%^&*()">>},
-                 {<<"Host">>,<<"httpbin.org">>}],
-    [] = Expected -- proplists:get_value(<<"headers">>, Json).
-
-session_update_bad_opts(_) ->
-    {ok, Session} = katipo_session:new(?POOL),
-    {error, #{code := bad_opts}} =
-        katipo_session:update(#{timeout_ms => <<"wrong">>, what => not_even_close}, Session).
-
 max_total_connections(_) ->
     PoolName = max_total_connections,
     {ok, _} = katipo_pool:start(PoolName, 1, [{pipelining, nothing}, {max_total_connections, 1}]),
@@ -881,7 +802,7 @@ http2_get(_) ->
     {ok, #{status := 200, body := Body}} =
         katipo:get(?POOL, <<"https://nghttp2.org/httpbin/get?a=%21%40%23%24%25%5E%26%2A%28%29_%2B">>,
                    #{http_version => curl_http_version_2_prior_knowledge}),
-    Json = jsx:decode(Body),
+    Json = jsx:decode(Body, [{return_maps, false}]),
     [{<<"a">>, <<"!@#$%^&*()_+">>}] = proplists:get_value(<<"args">>, Json).
 
 repeat_until_true(Fun) ->

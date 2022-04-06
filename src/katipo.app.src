@@ -1,6 +1,6 @@
 {application, 'katipo',
  [{description, "HTTP client based on libcurl"},
-  {vsn, "1.0.4"},
+  {vsn, "1.1.0"},
   {registered, []},
   {mod, {'katipo_app', []}},
   {applications,
@@ -24,6 +24,5 @@
            "src/katipo_cow_qs.erl",
            "src/katipo_metrics.erl",
            "src/katipo_pool.erl",
-           "src/katipo_session.erl",
            "src/katipo_sup.erl"]}
  ]}.

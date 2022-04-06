@@ -2,7 +2,7 @@
 
 -behaviour(gen_server).
 
--compile({no_auto_import,[put/2]}).
+-compile({no_auto_import, [put/2]}).
 
 -export([start_link/1]).
 
@@ -12,7 +12,6 @@
 -export([handle_info/2]).
 -export([terminate/2]).
 -export([code_change/3]).
-
 -export([req/2]).
 -export([get/2]).
 -export([get/3]).
@@ -68,38 +67,38 @@
 -record(state, {port :: port(),
                 reqs = #{} :: map()}).
 
--define(get, 0).
--define(post, 1).
--define(put, 2).
--define(head, 3).
--define(options, 4).
--define(patch, 5).
--define(delete, 6).
+-define(GET, 0).
+-define(POST, 1).
+-define(PUT, 2).
+-define(HEAD, 3).
+-define(OPTIONS, 4).
+-define(PATCH, 5).
+-define(DELETE, 6).
 
--define(connecttimeout_ms, 5).
--define(followlocation, 6).
--define(ssl_verifyhost, 7).
--define(timeout_ms, 8).
--define(maxredirs, 9).
--define(ssl_verifypeer, 10).
--define(capath, 11).
--define(http_auth, 12).
--define(username, 13).
--define(password, 14).
--define(proxy, 15).
--define(cacert, 16).
--define(tcp_fastopen, 17).
--define(interface, 18).
--define(unix_socket_path, 19).
--define(lock_data_ssl_session, 20).
--define(doh_url, 21).
--define(http_version, 22).
--define(verbose, 23).
--define(sslcert, 24).
--define(sslkey, 25).
--define(sslkey_blob, 26).
--define(keypasswd, 27).
--define(userpwd, 28).
+-define(CONNECTTIMEOUT_MS, 5).
+-define(FOLLOWLOCATION, 6).
+-define(SSL_VERIFYHOST, 7).
+-define(TIMEOUT_MS, 8).
+-define(MAXREDIRS, 9).
+-define(SSL_VERIFYPEER, 10).
+-define(CAPATH, 11).
+-define(HTTP_AUTH, 12).
+-define(USERNAME, 13).
+-define(PASSWORD, 14).
+-define(PROXY, 15).
+-define(CACERT, 16).
+-define(TCP_FASTOPEN, 17).
+-define(INTERFACE, 18).
+-define(UNIX_SOCKET_PATH, 19).
+-define(LOCK_DATA_SSL_SESSION, 20).
+-define(DOH_URL, 21).
+-define(HTTP_VERSION, 22).
+-define(VERBOSE, 23).
+-define(SSLCERT, 24).
+-define(SSLKEY, 25).
+-define(SSLKEY_BLOB, 26).
+-define(KEYPASSWD, 27).
+-define(USERPWD, 28).
 
 -define(DEFAULT_REQ_TIMEOUT, 30000).
 -define(FOLLOWLOCATION_TRUE, 1).
@@ -123,7 +122,7 @@
 -define(METHODS, [get, post, put, head, options, patch, delete]).
 
 -type method() :: get | post | put | head | options | patch | delete.
--type method_int() :: ?get | ?post | ?put | ?head | ?options | ?patch | ?delete.
+-type method_int() :: ?GET | ?POST | ?PUT | ?HEAD | ?OPTIONS | ?PATCH | ?DELETE.
 -type url() :: binary().
 -type error_code() ::
         ok |
@@ -246,11 +245,89 @@
 -type header() :: {binary(), iodata()}.
 -type headers() :: [header()].
 -opaque cookiejar() :: [binary()].
--type doh_url() :: binary().
 -type qs_vals() :: [{unicode:chardata(), unicode:chardata() | true}].
 -type req_body() :: iodata() | qs_vals().
 -type body() :: binary().
--type request() :: map().
+-type connecttimeout_ms() :: pos_integer().
+%% See [https://curl.haxx.se/libcurl/c/CURLOPT_CONNECTTIMEOUT.html]
+-type ssl_verifyhost() :: boolean().
+%% See [https://curl.haxx.se/libcurl/c/CURLOPT_SSL_VERIFYHOST.html]
+-type ssl_verifypeer() :: boolean().
+%% See [https://curl.haxx.se/libcurl/c/CURLOPT_SSL_VERIFYPEER.html]
+-type proxy() :: binary().
+%% See [https://curl.haxx.se/libcurl/c/CURLOPT_PROXY.html]
+-type tcp_fastopen() :: boolean().
+%% See [https://curl.haxx.se/libcurl/c/CURLOPT_TCP_FASTOPEN.html]
+-type interface() :: binary().
+%% See [https://curl.haxx.se/libcurl/c/CURLOPT_INTERFACE.html]
+-type unix_socket_path() :: binary().
+%% See [https://curl.haxx.se/libcurl/c/CURLOPT_UNIX_SOCKET_PATH.html]
+-type doh_url() :: binary().
+%% See [https://curl.haxx.se/libcurl/c/CURLOPT_DOH_URL.html]
+-type sslcert() :: binary().
+%% See [https://curl.haxx.se/libcurl/c/CURLOPT_SSLCERT.html]
+-type sslkey() :: binary().
+%% See [https://curl.haxx.se/libcurl/c/CURLOPT_SSLKEY.html]
+-type sslkey_blob() :: binary().
+%% See [https://curl.haxx.se/libcurl/c/CURLOPT_SSLKEY_BLOB.html]
+-type userpwd() :: binary().
+%% See [https://curl.haxx.se/libcurl/c/CURLOPT_USERPWD.html]
+-type request() :: #{url := binary(),
+                    method := method(),
+                    headers => headers(),
+                    cookiejar => cookiejar(),
+                    body => req_body(),
+                    connecttimeout_ms => connecttimeout_ms(),
+                    followlocation => boolean(),
+                    ssl_verifyhost => ssl_verifyhost(),
+                    ssl_verifypeer => ssl_verifypeer(),
+                    capath => binary(),
+                    cacert => binary(),
+                    timeout_ms => pos_integer(),
+                    maxredirs => non_neg_integer(),
+                    http_auth => http_auth(),
+                    username => binary(),
+                    password => binary(),
+                    proxy => proxy(),
+                    return_metrics => boolean(),
+                    tcp_fastopen => tcp_fastopen(),
+                    interface => interface(),
+                    unix_socket_path => unix_socket_path(),
+                    lock_data_ssl_session => boolean(),
+                    doh_url => doh_url(),
+                    http_version => curlopt_http_version(),
+                    verbose => boolean(),
+                    sslcert => sslcert(),
+                    sslkey => sslkey(),
+                    sslkey_blob => sslkey_blob(),
+                    userpwd => userpwd()}.
+-type opts() :: #{headers => headers(),
+                    cookiejar => cookiejar(),
+                    body => req_body(),
+                    connecttimeout_ms => connecttimeout_ms(),
+                    followlocation => boolean(),
+                    ssl_verifyhost => ssl_verifyhost(),
+                    ssl_verifypeer => ssl_verifypeer(),
+                    capath => binary(),
+                    cacert => binary(),
+                    timeout_ms => pos_integer(),
+                    maxredirs => non_neg_integer(),
+                    http_auth => http_auth(),
+                    username => binary(),
+                    password => binary(),
+                    proxy => proxy(),
+                    return_metrics => boolean(),
+                    tcp_fastopen => tcp_fastopen(),
+                    interface => interface(),
+                    unix_socket_path => unix_socket_path(),
+                    lock_data_ssl_session => boolean(),
+                    doh_url => doh_url(),
+                    http_version => curlopt_http_version(),
+                    verbose => boolean(),
+                    sslcert => sslcert(),
+                    sslkey => sslkey(),
+                    sslkey_blob => sslkey_blob(),
+                    userpwd => userpwd()}.
 -type metrics() :: proplists:proplist().
 -type response() :: {ok, #{status := status(),
                            headers := headers(),
@@ -260,7 +337,11 @@
                     {error, #{code := error_code(),
                               message := error_msg()}}.
 -type http_auth() :: basic | digest | ntlm | negotiate.
--type http_auth_int() :: ?CURLAUTH_UNDEFINED | ?CURLAUTH_BASIC | ?CURLAUTH_DIGEST | ?CURLAUTH_NTLM | ?CURLAUTH_NEGOTIATE.
+-type http_auth_int() :: ?CURLAUTH_UNDEFINED |
+                         ?CURLAUTH_BASIC |
+                         ?CURLAUTH_DIGEST |
+                         ?CURLAUTH_NTLM |
+                         ?CURLAUTH_NEGOTIATE.
 -type pipelining() :: nothing | http1 | multiplex.
 -type curlopt_http_version() :: curl_http_version_none |
                                 curl_http_version_1_0 |
@@ -268,6 +349,8 @@
                                 curl_http_version_2_0 |
                                 curl_http_version_2tls |
                                 curl_http_version_2_prior_knowledge.
+%% HTTP protocol version to use
+%% see [https://curl.se/libcurl/c/CURLOPT_HTTP_VERSION.html]
 -type curlmopts() :: [{max_pipeline_length, non_neg_integer()} |
                       {pipelining, pipelining()} |
                       {max_total_connections, non_neg_integer()}].
@@ -287,9 +370,21 @@
 -export_type([response/0]).
 -export_type([http_auth/0]).
 -export_type([curlmopts/0]).
+-export_type([connecttimeout_ms/0]).
+-export_type([ssl_verifyhost/0]).
+-export_type([ssl_verifypeer/0]).
+-export_type([proxy/0]).
+-export_type([tcp_fastopen/0]).
+-export_type([interface/0]).
+-export_type([unix_socket_path/0]).
+-export_type([doh_url/0]).
+-export_type([sslcert/0]).
+-export_type([sslkey/0]).
+-export_type([sslkey_blob/0]).
+-export_type([userpwd/0]).
 
 -record(req, {
-          method = ?get :: method_int(),
+          method = ?GET :: method_int(),
           url :: undefined | binary(),
           headers = [] :: headers(),
           cookiejar = [] :: cookiejar(),
@@ -323,76 +418,90 @@
           userpwd = undefined :: undefined | binary()
          }).
 
+-type req() :: #req{}.
+
+%% @private
 tcp_fastopen_available() ->
     ?TCP_FASTOPEN_AVAILABLE.
 
+%% @private
 unix_socket_path_available() ->
     ?UNIX_SOCKET_PATH_AVAILABLE.
 
+%% @private
 doh_url_available() ->
     ?DOH_URL_AVAILABLE.
 
+%% @private
 sslkey_blob_available() ->
     ?SSLKEY_BLOB_AVAILABLE.
 
 -dialyzer({nowarn_function, opt/3}).
 
+%% @equiv get(Poolname, Url, #{})
 -spec get(katipo_pool:name(), url()) -> response().
 get(PoolName, Url) ->
-    get(PoolName, Url, #{}).
+    req(PoolName, #{url => Url, method => get}).
 
--spec get(katipo_pool:name(), url(), request()) -> response().
+-spec get(katipo_pool:name(), url(), opts()) -> response().
 get(PoolName, Url, Opts) ->
     req(PoolName, Opts#{url => Url, method => get}).
 
+%% @equiv post(Poolname, Url, #{})
 -spec post(katipo_pool:name(), url()) -> response().
 post(PoolName, Url) ->
-    post(PoolName, Url, #{}).
+    req(PoolName, #{url => Url, method => post}).
 
--spec post(katipo_pool:name(), url(), request()) -> response().
+-spec post(katipo_pool:name(), url(), opts()) -> response().
 post(PoolName, Url, Opts) ->
     req(PoolName, Opts#{url => Url, method => post}).
 
+%% @equiv put(Poolname, Url, #{})
 -spec put(katipo_pool:name(), url()) -> response().
 put(PoolName, Url) ->
-    put(PoolName, Url, #{}).
+    req(PoolName, #{url => Url, method => put}).
 
--spec put(katipo_pool:name(), url(), request()) -> response().
+-spec put(katipo_pool:name(), url(), opts()) -> response().
 put(PoolName, Url, Opts) ->
     req(PoolName, Opts#{url => Url, method => put}).
 
+%% @equiv head(Poolname, Url, #{})
 -spec head(katipo_pool:name(), url()) -> response().
 head(PoolName, Url) ->
-    head(PoolName, Url, #{}).
+    req(PoolName, #{url => Url, method => head}).
 
--spec head(katipo_pool:name(), url(), request()) -> response().
+-spec head(katipo_pool:name(), url(), opts()) -> response().
 head(PoolName, Url, Opts) ->
     req(PoolName, Opts#{url => Url, method => head}).
 
+%% @equiv options(Poolname, Url, #{})
 -spec options(katipo_pool:name(), url()) -> response().
 options(PoolName, Url) ->
-    options(PoolName, Url, #{}).
+    req(PoolName, #{url => Url, method => options}).
 
--spec options(katipo_pool:name(), url(), request()) -> response().
+-spec options(katipo_pool:name(), url(), opts()) -> response().
 options(PoolName, Url, Opts) ->
     req(PoolName, Opts#{url => Url, method => options}).
 
+%% @equiv patch(Poolname, Url, #{})
 -spec patch(katipo_pool:name(), url()) -> response().
 patch(PoolName, Url) ->
-    patch(PoolName, Url, #{}).
+    req(PoolName, #{url => Url, method => patch}).
 
--spec patch(katipo_pool:name(), url(), request()) -> response().
+-spec patch(katipo_pool:name(), url(), opts()) -> response().
 patch(PoolName, Url, Opts) ->
     req(PoolName, Opts#{url => Url, method => patch}).
 
+%% @equiv delete(Poolname, Url, #{})
 -spec delete(katipo_pool:name(), url()) -> response().
 delete(PoolName, Url) ->
-    delete(PoolName, Url, #{}).
+    req(PoolName, #{url => Url, method => delete}).
 
--spec delete(katipo_pool:name(), url(), request()) -> response().
+-spec delete(katipo_pool:name(), url(), opts()) -> response().
 delete(PoolName, Url, Opts) ->
     req(PoolName, Opts#{url => Url, method => delete}).
 
+%% @private
 -spec req(katipo_pool:name(), request()) -> response().
 req(PoolName, Opts)
   when is_map(Opts) ->
@@ -412,14 +521,14 @@ req(PoolName, Opts)
         {error, _} = Error ->
             ok = katipo_metrics:notify_error(),
             Error
-    end;
-req(_PoolName, Opts) ->
-    {error, #{code => bad_opts, message => Opts}}.
+    end.
 
+%% @private
 start_link(CurlOpts) when is_list(CurlOpts) ->
     Args = [CurlOpts],
     gen_server:start_link(?MODULE, Args, []).
 
+%% @private
 init([CurlOpts]) ->
     process_flag(trap_exit, true),
     case get_mopts(CurlOpts) of
@@ -431,6 +540,7 @@ init([CurlOpts]) ->
             {stop, Error}
     end.
 
+%% @private
 handle_call(#req{method = Method,
                  url = Url,
                  headers = Headers,
@@ -464,40 +574,42 @@ handle_call(#req{method = Method,
              From,
              State=#state{port=Port, reqs=Reqs}) ->
     {Self, Ref} = From,
-    Opts = [{?connecttimeout_ms, ConnTimeoutMs},
-            {?followlocation, FollowLocation},
-            {?ssl_verifyhost, SslVerifyHost},
-            {?ssl_verifypeer, SslVerifyPeer},
-            {?capath, CAPath},
-            {?cacert, CACert},
-            {?timeout_ms, TimeoutMs},
-            {?maxredirs, MaxRedirs},
-            {?http_auth, HTTPAuth},
-            {?username, Username},
-            {?password, Password},
-            {?proxy, Proxy},
-            {?tcp_fastopen, TCPFastOpen},
-            {?interface, Interface},
-            {?unix_socket_path, UnixSocketPath},
-            {?lock_data_ssl_session, LockDataSslSession},
-            {?doh_url, DOHURL},
-            {?http_version, HTTPVersion},
-            {?verbose, Verbose},
-            {?sslcert, SSLCert},
-            {?sslkey, SSLKey},
-            {?sslkey_blob, SSLKeyBlob},
-            {?keypasswd, KeyPasswd},
-            {?userpwd, UserPwd}],
+    Opts = [{?CONNECTTIMEOUT_MS, ConnTimeoutMs},
+            {?FOLLOWLOCATION, FollowLocation},
+            {?SSL_VERIFYHOST, SslVerifyHost},
+            {?SSL_VERIFYPEER, SslVerifyPeer},
+            {?CAPATH, CAPath},
+            {?CACERT, CACert},
+            {?TIMEOUT_MS, TimeoutMs},
+            {?MAXREDIRS, MaxRedirs},
+            {?HTTP_AUTH, HTTPAuth},
+            {?USERNAME, Username},
+            {?PASSWORD, Password},
+            {?PROXY, Proxy},
+            {?TCP_FASTOPEN, TCPFastOpen},
+            {?INTERFACE, Interface},
+            {?UNIX_SOCKET_PATH, UnixSocketPath},
+            {?LOCK_DATA_SSL_SESSION, LockDataSslSession},
+            {?DOH_URL, DOHURL},
+            {?HTTP_VERSION, HTTPVersion},
+            {?VERBOSE, Verbose},
+            {?SSLCERT, SSLCert},
+            {?SSLKEY, SSLKey},
+            {?SSLKEY_BLOB, SSLKeyBlob},
+            {?KEYPASSWD, KeyPasswd},
+            {?USERPWD, UserPwd}],
     Command = {Self, Ref, Method, Url, Headers, CookieJar, Body, Opts},
     true = port_command(Port, term_to_binary(Command)),
     Tref = erlang:start_timer(Timeout, self(), {req_timeout, From}),
     Reqs2 = maps:put(From, Tref, Reqs),
     {noreply, State#state{reqs=Reqs2}}.
 
+%% @private
 handle_cast(Msg, State) ->
     error_logger:error_msg("Unexpected cast: ~p", [Msg]),
     {noreply, State}.
 
+%% @private
 handle_info({Port, {data, Data}}, State=#state{port=Port, reqs=Reqs}) ->
     {Result, {From, Response}} =
         case binary_to_term(Data) of
@@ -536,10 +648,12 @@ handle_info({'EXIT', Port, Reason}, State=#state{port=Port}) ->
     error_logger:error_msg("Port ~p died with reason: ~p", [Port, Reason]),
     {stop, port_died, State}.
 
+%% @private
 terminate(_Reason, #state{port=Port}) ->
     true = port_close(Port),
     ok.
 
+%% @private
 code_change(_OldVsn, State, _Extra) ->
     {ok, State}.
 
@@ -548,13 +662,13 @@ headers_to_binary(Headers) ->
     [iolist_to_binary([K, <<": ">>, V]) || {K, V} <- Headers].
 
 -spec method_to_int(method()) -> method_int().
-method_to_int(get)     -> ?get;
-method_to_int(post)    -> ?post;
-method_to_int(put)     -> ?put;
-method_to_int(head)    -> ?head;
-method_to_int(options) -> ?options;
-method_to_int(patch)   -> ?patch;
-method_to_int(delete)  -> ?delete.
+method_to_int(get)     -> ?GET;
+method_to_int(post)    -> ?POST;
+method_to_int(put)     -> ?PUT;
+method_to_int(head)    -> ?HEAD;
+method_to_int(options) -> ?OPTIONS;
+method_to_int(patch)   -> ?PATCH;
+method_to_int(delete)  -> ?DELETE.
 
 -spec parse_headers([binary()]) -> headers().
 parse_headers([_StatusLine | Lines]) ->
@@ -607,7 +721,8 @@ mopt_supported({max_total_connections, Val})
 mopt_supported({_, _}) ->
     false.
 
--spec get_timeout(#req{}) -> pos_integer().
+%% @private
+-spec get_timeout(req()) -> pos_integer().
 get_timeout(#req{connecttimeout_ms=ConnMs, timeout_ms=ReqMs}) ->
     max(ConnMs, ReqMs).
 
@@ -719,7 +834,7 @@ opt(userpwd, UserPwd, {Req, Errors}) when is_binary(UserPwd) ->
 opt(K, V, {Req, Errors}) ->
     {Req, [{K, V} | Errors]}.
 
--spec process_opts(request()) -> {ok, #req{}} | {error, map()}.
+-spec process_opts(request()) -> {ok, req()} | {error, map()}.
 process_opts(Opts) ->
     case maps:fold(fun opt/3, {#req{}, []}, Opts) of
         {Req=#req{}, []} ->
@@ -728,6 +843,7 @@ process_opts(Opts) ->
             {error, error_map(bad_opts, Errors)}
     end.
 
+%% @private
 -spec check_opts(request()) -> ok | {error, map()}.
 check_opts(Opts) when is_map(Opts) ->
     case process_opts(Opts) of

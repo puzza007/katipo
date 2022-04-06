@@ -22,3 +22,4 @@ _build
 .vagrant/
 local/
 /rebar3.crashdump
+doc
