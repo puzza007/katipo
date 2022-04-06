@@ -140,35 +140,19 @@ katipo:Method(Pool :: atom(), URL :: binary(), ReqOptions :: map()).
 * redirect_time
 * starttransfer_time
 
-### Dependencies
+### System dependencies
 
-#### Ubuntu Trusty
+* libevent-dev
+* libcurl4-openssl-dev
+* make
+* curl
+* libssl-dev
+* gcc
 
-```sh
-sudo apt-get install git libwxgtk2.8-0 libwxbase2.8-0 libevent-dev libcurl4-openssl-dev libcurl4-openssl-dev
+## Testing
 
-wget http://packages.erlang-solutions.com/site/esl/esl-erlang/FLAVOUR_1_esl/esl-erlang_18.0-1~ubuntu~trusty_amd64.deb
-
-sudo dpkg -i esl-erlang_18.0-1~ubuntu~trusty_amd64.deb
-```
-#### Fedora
-
-```sh
-sudo dnf install libevent.x86_64 libcurl.x86_64 libevent-devel.x86_64
-```
-
-#### OSX
-
-```sh
-brew install --with-c-ares --with-nghttp2 curl
-brew install libevent
-```
-
-### Building
-
-```sh
-rebar3 compile
-```
+The official Erlang Docker [image](https://hub.docker.com/_/erlang)
+has everything needed to build and test Katipo
 
 ### TODO
 
