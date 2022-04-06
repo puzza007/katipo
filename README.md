@@ -103,7 +103,7 @@ katipo:Method(Pool :: atom(), URL :: binary(), ReqOptions :: map()).
 | `sslkey`                | `binary()`                          | `undefined` | [docs](https://curl.haxx.se/libcurl/c/CURLOPT_SSLKEY.html)                          |
 | `sslkey_blob`           | `binary()` (DER format)             | `undefined` | [docs](https://curl.haxx.se/libcurl/c/CURLOPT_SSLKEY_BLOB.html) curl >= 7.71.0      |
 | `keypasswd`             | `binary()`                          | `undefined` | [docs](https://curl.haxx.se/libcurl/c/CURLOPT_KEYPASSWD.html)                       |
-| `http_auth`             | `basic | digest | ntlm | negotiate` | `undefined` | [docs](https://curl.haxx.se/libcurl/c/CURLOPT_HTTPAUTH.html)                        |
+| `http_auth`             | `basic` <br> `digest` <br> `ntlm` <br> `negotiate` | `undefined` | [docs](https://curl.haxx.se/libcurl/c/CURLOPT_HTTPAUTH.html)                        |
 | `userpwd`               | `binary()`                          | `undefined` | [docs](https://curl.haxx.se/libcurl/c/CURLOPT_USERPWD.html)                         |
 
 #### Responses
@@ -122,7 +122,7 @@ katipo:Method(Pool :: atom(), URL :: binary(), ReqOptions :: map()).
 
 | Option                  | Type                          | Default      | Note                                                                                           |
 |:------------------------|:------------------------------|:-------------|:-----------------------------------------------------------------------------------------------|
-| `pipelining`            | `nothing | http1 | multiplex` | `nothing`    | HTTP pipelining [CURLMOPT_PIPELINING](https://curl.haxx.se/libcurl/c/CURLMOPT_PIPELINING.html) |
+| `pipelining`            | `nothing` <br> `http1` <br> `multiplex` | `nothing`    | HTTP pipelining [CURLMOPT_PIPELINING](https://curl.haxx.se/libcurl/c/CURLMOPT_PIPELINING.html) |
 | `max_pipeline_length`   | `non_neg_integer()`           | 100          |                                                                                                |
 | `max_total_connections` | `non_neg_integer()`           | 0 (no limit) | [docs](https://curl.haxx.se/libcurl/c/CURLMOPT_MAX_TOTAL_CONNECTIONS.html)                     |
 
