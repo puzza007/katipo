@@ -7,6 +7,7 @@ An HTTP/HTTP2 client library for Erlang built around libcurl-multi and libevent.
 
 ![build status](https://github.com/puzza007/katipo/actions/workflows/ci.yml/badge.svg)
 [![Hex pm](http://img.shields.io/hexpm/v/katipo.svg?style=flat)](https://hex.pm/packages/katipo)
+[![Hex Docs](https://img.shields.io/badge/hex-docs-blue.svg)](https://hexdocs.pm/katipo)
 
 ### Usage
 
