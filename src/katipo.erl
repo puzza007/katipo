@@ -244,10 +244,11 @@
 -type status() :: pos_integer().
 -type header() :: {binary(), iodata()}.
 -type headers() :: [header()].
+-type req_headers() :: [binary()].
 -opaque cookiejar() :: [binary()].
 -type qs_vals() :: [{unicode:chardata(), unicode:chardata() | true}].
 -type req_body() :: iodata() | qs_vals().
--type body() :: binary().
+-type body() :: iodata().
 -type connecttimeout_ms() :: pos_integer().
 %% See [https://curl.haxx.se/libcurl/c/CURLOPT_CONNECTTIMEOUT.html]
 -type ssl_verifyhost() :: boolean().
@@ -349,6 +350,21 @@
                                 curl_http_version_2_0 |
                                 curl_http_version_2tls |
                                 curl_http_version_2_prior_knowledge.
+
+-define(CURL_HTTP_VERSION_NONE, 0).
+-define(CURL_HTTP_VERSION_1_0, 1).
+-define(CURL_HTTP_VERSION_1_1, 2).
+-define(CURL_HTTP_VERSION_2_0, 3).
+-define(CURL_HTTP_VERSION_2TLS, 4).
+-define(CURL_HTTP_VERSION_2_PRIOR_KNOWLEDGE, 5).
+
+-type curlopt_http_version_int() :: ?CURL_HTTP_VERSION_NONE |
+                                    ?CURL_HTTP_VERSION_1_0 |
+                                    ?CURL_HTTP_VERSION_1_1 |
+                                    ?CURL_HTTP_VERSION_2_0 |
+                                    ?CURL_HTTP_VERSION_2TLS |
+                                    ?CURL_HTTP_VERSION_2_PRIOR_KNOWLEDGE.
+
 %% HTTP protocol version to use
 %% see [https://curl.se/libcurl/c/CURLOPT_HTTP_VERSION.html]
 -type curlmopts() :: [{max_pipeline_length, non_neg_integer()} |
@@ -386,7 +402,7 @@
 -record(req, {
           method = ?GET :: method_int(),
           url :: undefined | binary(),
-          headers = [] :: headers(),
+          headers = [] :: req_headers(),
           cookiejar = [] :: cookiejar(),
           body = <<>> :: body(),
           connecttimeout_ms = ?DEFAULT_REQ_TIMEOUT :: pos_integer(),
@@ -409,7 +425,7 @@
           lock_data_ssl_session = ?LOCK_DATA_SSL_SESSION_FALSE ::
             ?LOCK_DATA_SSL_SESSION_FALSE | ?LOCK_DATA_SSL_SESSION_TRUE,
           doh_url = undefined :: undefined | doh_url(),
-          http_version = curl_http_version_none :: curlopt_http_version(),
+          http_version = ?CURL_HTTP_VERSION_NONE :: curlopt_http_version_int(),
           verbose = ?VERBOSE_FALSE :: ?VERBOSE_FALSE | ?VERBOSE_TRUE,
           sslcert = undefined :: undefined | binary() | file:name_all(),
           sslkey = undefined :: undefined | binary() | file:name_all(),
@@ -705,7 +721,7 @@ get_mopts(Opts) ->
             {error, {bad_opts, Opts}}
     end.
 
--spec mopt_supported({curlmopt(), any()}) -> false | {true, any()}.
+-spec mopt_supported({curlmopt(), any()}) -> false | {true, string()}.
 mopt_supported({max_pipeline_length, Val})
   when is_integer(Val) andalso Val >= 0 ->
     {true, "--max-pipeline-length " ++ integer_to_list(Val)};
@@ -805,17 +821,17 @@ opt(lock_data_ssl_session, false, {Req, Errors}) ->
 opt(doh_url, DOHURL, {Req, Errors}) when ?DOH_URL_AVAILABLE andalso is_binary(DOHURL) ->
     {Req#req{doh_url=DOHURL}, Errors};
 opt(http_version, curl_http_version_none, {Req, Errors}) ->
-    {Req#req{http_version=0}, Errors};
+    {Req#req{http_version=?CURL_HTTP_VERSION_NONE}, Errors};
 opt(http_version, curl_http_version_1_0, {Req, Errors}) ->
-    {Req#req{http_version=1}, Errors};
+    {Req#req{http_version=?CURL_HTTP_VERSION_1_0}, Errors};
 opt(http_version, curl_http_version_1_1, {Req, Errors}) ->
-    {Req#req{http_version=2}, Errors};
+    {Req#req{http_version=?CURL_HTTP_VERSION_1_1}, Errors};
 opt(http_version, curl_http_version_2_0, {Req, Errors}) ->
-    {Req#req{http_version=3}, Errors};
+    {Req#req{http_version=?CURL_HTTP_VERSION_2_0}, Errors};
 opt(http_version, curl_http_version_2tls, {Req, Errors}) ->
-    {Req#req{http_version=4}, Errors};
+    {Req#req{http_version=?CURL_HTTP_VERSION_2TLS}, Errors};
 opt(http_version, curl_http_version_2_prior_knowledge, {Req, Errors}) ->
-    {Req#req{http_version=5}, Errors};
+    {Req#req{http_version=?CURL_HTTP_VERSION_2_PRIOR_KNOWLEDGE}, Errors};
 opt(verbose, true, {Req, Errors}) ->
     {Req#req{verbose=?VERBOSE_TRUE}, Errors};
 opt(verbose, false, {Req, Errors}) ->
