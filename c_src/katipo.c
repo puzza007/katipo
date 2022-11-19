@@ -728,7 +728,7 @@ static void set_method(long method, ConnInfo *conn) {
       curl_easy_setopt(conn->easy, CURLOPT_CUSTOMREQUEST, "OPTIONS");
       break;
     default:
-      errx(2, "Uknown method: '%ld'", method);
+      errx(2, "Unknown method: '%ld'", method);
   }
 }
 
