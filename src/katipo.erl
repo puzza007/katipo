@@ -682,7 +682,7 @@ parse_header(Line) when is_binary(Line) ->
     end.
 
 -spec encode_body(req_body()) -> {ok, iodata()} | {error, {atom(), term()}}.
-encode_body([{_, _}|_] = KVs) ->
+encode_body([{_, _} | _] = KVs) ->
     case uri_string:compose_query(KVs) of
         {error, Reason, Message} ->
             {error, {Reason, Message}};
