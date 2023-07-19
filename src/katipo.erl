@@ -328,6 +328,7 @@
                     sslkey => sslkey(),
                     sslkey_blob => sslkey_blob(),
                     userpwd => userpwd()}.
+-export_type([opts/0]).
 -type metrics() :: proplists:proplist().
 -type response() :: {ok, #{status := status(),
                            headers := headers(),
