@@ -142,10 +142,8 @@ groups() ->
        max_pipeline_length]},
      {https, [parallel],
       [verify_host_verify_peer_ok,
-       %% TODO :Fix this test. See https://github.com/puzza007/katipo/runs/5281801454?check_suite_focus=true
-       %% verify_host_verify_peer_error,
-       %% TODO: Fix this test. See https://github.com/puzza007/katipo/runs/5281750037?check_suite_focus=true
-       %% cacert_self_signed,
+       verify_host_verify_peer_error,
+       cacert_self_signed,
        badssl]},
      {https_mutual, [],
       [badssl_client_cert]},
@@ -699,7 +697,7 @@ cacert_self_signed(Config) ->
     CACert = ?config(cacert_file, Config),
     {ok, #{status := 200}} =
         katipo:get(?POOL, <<"https://localhost:8443">>,
-                   #{verbose => true, ssl_verifyhost => true, ssl_verifypeer => true, cacert => CACert}).
+                   #{ssl_verifyhost => true, ssl_verifypeer => true, cacert => CACert}).
 
 badssl(_) ->
     {error, _} =
