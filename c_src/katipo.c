@@ -762,10 +762,16 @@ static void new_conn(long method, char *url, struct curl_slist *req_headers,
   conn->post_data = post_data;
   conn->post_data_size = post_data_size;
 
-  curl_easy_setopt(conn->easy, CURLOPT_PROTOCOLS,
-                   CURLPROTO_HTTP | CURLPROTO_HTTPS);
-  curl_easy_setopt(conn->easy, CURLOPT_REDIR_PROTOCOLS,
-                   CURLPROTO_HTTP | CURLPROTO_HTTPS);
+  #if LIBCURL_VERSION_NUM >= 0x075500 /* 7.85.0 */
+    curl_easy_setopt(conn->easy, CURLOPT_PROTOCOLS_STR, "http,https");
+  #else
+    curl_easy_setopt(conn->easy, CURLOPT_PROTOCOLS, CURLPROTO_HTTP | CURLPROTO_HTTPS);
+  #endif
+  #if LIBCURL_VERSION_NUM >= 0x075500 /* 7.85.0 */
+    curl_easy_setopt(conn->easy, CURLOPT_REDIR_PROTOCOLS_STR, "http,https");
+  #else
+    curl_easy_setopt(conn->easy, CURLOPT_REDIR_PROTOCOLS, CURLPROTO_HTTP | CURLPROTO_HTTPS);
+  #endif
   curl_easy_setopt(conn->easy, CURLOPT_URL, conn->url);
   curl_easy_setopt(conn->easy, CURLOPT_HTTPHEADER, conn->req_headers);
   if (eopts.curlopt_http_version) {
