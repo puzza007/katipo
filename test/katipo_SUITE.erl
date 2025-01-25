@@ -625,13 +625,13 @@ port_death(_) ->
     {ok, _} = katipo_pool:start(PoolName, PoolSize),
     WorkerName = wpool_pool:best_worker(PoolName),
     WorkerPid = whereis(WorkerName),
-    {state, _, katipo, {state, Port, _}, _} = sys:get_state(WorkerPid),
+    {state, _, _, {state, Port, _}, _} = sys:get_state(WorkerPid),
     true = port_command(Port, <<"hdfjkshkjsdfgjsgafdjgsdjgfj">>),
     Fun = fun() ->
                   WorkerName2 = wpool_pool:best_worker(PoolName),
                   WorkerPid2 = whereis(WorkerName2),
                   case sys:get_state(WorkerPid2) of
-                      {state, _, katipo, {state, Port2, _}, _} when Port =/= Port2 ->
+                      {state, _, _, {state, Port2, _}, _} when Port =/= Port2 ->
                           {ok, #{status := 200}} =
                               katipo:get(PoolName, <<"https://httpbin.org/get">>),
                           true
