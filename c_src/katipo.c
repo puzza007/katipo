@@ -677,25 +677,34 @@ static size_t write_cb(void *ptr, size_t size, size_t nmemb, void *data) {
 static size_t header_cb(void *ptr, size_t size, size_t nmemb, void *data) {
   size_t realsize = size * nmemb;
   ConnInfo *conn = (ConnInfo *)data;
-  char *header;
 
-  // the last two chars of headers are \r\n
-  if (realsize > 2) {
-    if (conn->resp_headers && is_status_line(ptr)) {
-      curl_slist_free_all(conn->resp_headers);
-      conn->resp_headers = NULL;
-      conn->num_headers = 0;
-    }
-    header = strndup(ptr, realsize -2);
-    if (header) {
-      header[realsize - 2] = '\0';
-      conn->resp_headers = curl_slist_append(conn->resp_headers, header);
-      free(header);
-      conn->num_headers++;
-    } else {
-      errx(2, "Failed to strndup header");
-    }
+  if (realsize < 2) {
+    return realsize;
   }
+
+  // Remove trailing CRLF if present.
+  size_t header_length = realsize;
+  char *char_ptr = (char *)ptr;
+  if (realsize >= 2 && char_ptr[realsize - 2] == '\r' && char_ptr[realsize - 1] == '\n') {
+    header_length = realsize - 2;
+  }
+
+  // If this header is a status line, clear previously accumulated headers.
+  if (conn->resp_headers && is_status_line((const char *)ptr)) {
+    curl_slist_free_all(conn->resp_headers);
+    conn->resp_headers = NULL;
+    conn->num_headers = 0;
+  }
+
+  char *header = malloc(header_length + 1);
+  if (!header) {
+    errx(2, "Failed to allocate memory for header");
+  }
+  memcpy(header, ptr, header_length);
+  header[header_length] = '\0';
+  conn->resp_headers = curl_slist_append(conn->resp_headers, header);
+  free(header);
+  conn->num_headers++;
   return realsize;
 }
 
