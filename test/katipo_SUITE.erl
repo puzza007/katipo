@@ -120,8 +120,6 @@ groups() ->
        unix_socket_path_cant_connect,
        timeout_ms,
        maxredirs,
-       lock_data_ssl_session_true,
-       lock_data_ssl_session_false,
        doh_url,
        badopts,
        proxy_couldnt_connect,
@@ -139,13 +137,12 @@ groups() ->
        port_death,
        port_late_response,
        pool_opts,
-       max_pipeline_length]},
+       max_pipeline_length,
+       curlopt_share]},
      {https, [parallel],
       [verify_host_verify_peer_ok,
-       %% TODO :Fix this test. See https://github.com/puzza007/katipo/runs/5281801454?check_suite_focus=true
-       %% verify_host_verify_peer_error,
-       %% TODO: Fix this test. See https://github.com/puzza007/katipo/runs/5281750037?check_suite_focus=true
-       %% cacert_self_signed,
+       verify_host_verify_peer_error,
+       cacert_self_signed,
        badssl]},
      {https_mutual, [],
       [badssl_client_cert]},
@@ -525,20 +522,6 @@ digest_authorised_userpwd(_) ->
     true = proplists:get_value(<<"authenticated">>, Json),
     Username = proplists:get_value(<<"user">>, Json).
 
-lock_data_ssl_session_true(_) ->
-    {ok, #{status := 200, body := Body}} =
-        katipo:get(?POOL, <<"https://httpbin.org/get?a=%21%40%23%24%25%5E%26%2A%28%29_%2B">>,
-                  #{lock_data_ssl_session => true}),
-    Json = jsx:decode(Body, [{return_maps, false}]),
-    [{<<"a">>, <<"!@#$%^&*()_+">>}] = proplists:get_value(<<"args">>, Json).
-
-lock_data_ssl_session_false(_) ->
-    {ok, #{status := 200, body := Body}} =
-        katipo:get(?POOL, <<"https://httpbin.org/get?a=%21%40%23%24%25%5E%26%2A%28%29_%2B">>,
-                  #{lock_data_ssl_session => false}),
-    Json = jsx:decode(Body, [{return_maps, false}]),
-    [{<<"a">>, <<"!@#$%^&*()_+">>}] = proplists:get_value(<<"args">>, Json).
-
 doh_url(_) ->
     case katipo:doh_url_available() of
         true ->
@@ -665,6 +648,16 @@ max_pipeline_length(_) ->
     {ok, _} = katipo_pool:start(PoolName, PoolSize, PoolOpts),
     ok = katipo_pool:stop(PoolName).
 
+curlopt_share(_) ->
+    lists:foreach(fun({O, B}) ->
+                         PoolName = curlopt_share,
+                         PoolSize = 1,
+                         PoolOpts = [{O, B}],
+                         {ok, _} = katipo_pool:start(PoolName, PoolSize, PoolOpts),
+                         ok = katipo_pool:stop(PoolName)
+                  end,
+                  [{Opt, B} || Opt <- [lock_data_ssl_session, lock_data_dns, lock_data_connect], B <- [true, false]]).
+
 verify_host_verify_peer_ok(_) ->
     Opts = [#{ssl_verifyhost => true, ssl_verifypeer => true},
             #{ssl_verifyhost => false, ssl_verifypeer => true},
@@ -699,7 +692,7 @@ cacert_self_signed(Config) ->
     CACert = ?config(cacert_file, Config),
     {ok, #{status := 200}} =
         katipo:get(?POOL, <<"https://localhost:8443">>,
-                   #{verbose => true, ssl_verifyhost => true, ssl_verifypeer => true, cacert => CACert}).
+                   #{ssl_verifyhost => true, ssl_verifypeer => true, cacert => CACert}).
 
 badssl(_) ->
     {error, _} =

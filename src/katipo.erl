@@ -90,7 +90,6 @@
 -define(TCP_FASTOPEN, 17).
 -define(INTERFACE, 18).
 -define(UNIX_SOCKET_PATH, 19).
--define(LOCK_DATA_SSL_SESSION, 20).
 -define(DOH_URL, 21).
 -define(HTTP_VERSION, 22).
 -define(VERBOSE, 23).
@@ -114,8 +113,6 @@
 -define(CURLAUTH_NEGOTIATE, 104).
 -define(TCP_FASTOPEN_FALSE, 0).
 -define(TCP_FASTOPEN_TRUE, 1).
--define(LOCK_DATA_SSL_SESSION_FALSE, 0).
--define(LOCK_DATA_SSL_SESSION_TRUE, 1).
 -define(VERBOSE_TRUE, 1).
 -define(VERBOSE_FALSE, 0).
 
@@ -293,7 +290,6 @@
                     tcp_fastopen => tcp_fastopen(),
                     interface => interface(),
                     unix_socket_path => unix_socket_path(),
-                    lock_data_ssl_session => boolean(),
                     doh_url => doh_url(),
                     http_version => curlopt_http_version(),
                     verbose => boolean(),
@@ -320,7 +316,6 @@
                     tcp_fastopen => tcp_fastopen(),
                     interface => interface(),
                     unix_socket_path => unix_socket_path(),
-                    lock_data_ssl_session => boolean(),
                     doh_url => doh_url(),
                     http_version => curlopt_http_version(),
                     verbose => boolean(),
@@ -407,8 +402,6 @@
           tcp_fastopen = ?TCP_FASTOPEN_FALSE :: ?TCP_FASTOPEN_FALSE | ?TCP_FASTOPEN_TRUE,
           interface = undefined :: undefined | binary(),
           unix_socket_path = undefined :: undefined | binary(),
-          lock_data_ssl_session = ?LOCK_DATA_SSL_SESSION_FALSE ::
-            ?LOCK_DATA_SSL_SESSION_FALSE | ?LOCK_DATA_SSL_SESSION_TRUE,
           doh_url = undefined :: undefined | doh_url(),
           http_version = curl_http_version_none :: curlopt_http_version(),
           verbose = ?VERBOSE_FALSE :: ?VERBOSE_FALSE | ?VERBOSE_TRUE,
@@ -563,7 +556,6 @@ handle_call(#req{method = Method,
                  tcp_fastopen = TCPFastOpen,
                  interface = Interface,
                  unix_socket_path = UnixSocketPath,
-                 lock_data_ssl_session = LockDataSslSession,
                  doh_url = DOHURL,
                  http_version = HTTPVersion,
                  verbose = Verbose,
@@ -590,7 +582,6 @@ handle_call(#req{method = Method,
             {?TCP_FASTOPEN, TCPFastOpen},
             {?INTERFACE, Interface},
             {?UNIX_SOCKET_PATH, UnixSocketPath},
-            {?LOCK_DATA_SSL_SESSION, LockDataSslSession},
             {?DOH_URL, DOHURL},
             {?HTTP_VERSION, HTTPVersion},
             {?VERBOSE, Verbose},
@@ -719,6 +710,18 @@ mopt_supported({pipelining, multiplex}) ->
 mopt_supported({max_total_connections, Val})
   when is_integer(Val) andalso Val >= 0 ->
     {true, "--max-total-connections " ++ integer_to_list(Val)};
+mopt_supported({lock_data_ssl_session, false}) ->
+    {true, "--lock-data-ssl-session 0"};
+mopt_supported({lock_data_ssl_session, true}) ->
+    {true, "--lock-data-ssl-session 1"};
+mopt_supported({lock_data_dns, false}) ->
+    {true, "--lock-data-dns 0"};
+mopt_supported({lock_data_dns, true}) ->
+    {true, "--lock-data-dns 1"};
+mopt_supported({lock_data_connect, false}) ->
+    {true, "--lock-data-connect 0"};
+mopt_supported({lock_data_connect, true}) ->
+    {true, "--lock-data-connect 1"};
 mopt_supported({_, _}) ->
     false.
 
@@ -799,10 +802,6 @@ opt(interface, Interface, {Req, Errors}) when is_binary(Interface) ->
 opt(unix_socket_path, UnixSocketPath, {Req, Errors})
   when is_binary(UnixSocketPath) andalso ?UNIX_SOCKET_PATH_AVAILABLE ->
     {Req#req{unix_socket_path=UnixSocketPath}, Errors};
-opt(lock_data_ssl_session, true, {Req, Errors}) ->
-    {Req#req{lock_data_ssl_session=?LOCK_DATA_SSL_SESSION_TRUE}, Errors};
-opt(lock_data_ssl_session, false, {Req, Errors}) ->
-    {Req#req{lock_data_ssl_session=?LOCK_DATA_SSL_SESSION_FALSE}, Errors};
 opt(doh_url, DOHURL, {Req, Errors}) when ?DOH_URL_AVAILABLE andalso is_binary(DOHURL) ->
     {Req#req{doh_url=DOHURL}, Errors};
 opt(http_version, curl_http_version_none, {Req, Errors}) ->

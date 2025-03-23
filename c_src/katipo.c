@@ -37,7 +37,6 @@
 #define K_CURLOPT_TCP_FASTOPEN 17
 #define K_CURLOPT_INTERFACE 18
 #define K_CURLOPT_UNIX_SOCKET_PATH 19
-#define K_CURLOPT_LOCK_DATA_SSL_SESSION 20
 #define K_CURLOPT_DOH_URL 21
 #define K_CURLOPT_HTTP_VERSION 22
 #define K_CURLOPT_VERBOSE 23
@@ -117,7 +116,6 @@ typedef struct _EasyOpts {
   long curlopt_tcp_fastopen;
   char *curlopt_interface;
   char *curlopt_unix_socket_path;
-  long curlopt_lock_data_ssl_session;
   char *curlopt_doh_url;
   long curlopt_http_version;
   long curlopt_verbose;
@@ -679,22 +677,34 @@ static size_t write_cb(void *ptr, size_t size, size_t nmemb, void *data) {
 static size_t header_cb(void *ptr, size_t size, size_t nmemb, void *data) {
   size_t realsize = size * nmemb;
   ConnInfo *conn = (ConnInfo *)data;
-  char *header;
 
-  // the last two chars of headers are \r\n
-  if (realsize > 2) {
-    if (conn->resp_headers && is_status_line(ptr)) {
-      curl_slist_free_all(conn->resp_headers);
-      conn->resp_headers = NULL;
-      conn->num_headers = 0;
-    }
-    header = (char *)malloc(realsize - 1);
-    strncpy(header, ptr, realsize - 2);
-    header[realsize - 2] = '\0';
-    conn->resp_headers = curl_slist_append(conn->resp_headers, header);
-    free(header);
-    conn->num_headers++;
+  if (realsize < 2) {
+    return realsize;
   }
+
+  // Remove trailing CRLF if present.
+  size_t header_length = realsize;
+  char *char_ptr = (char *)ptr;
+  if (realsize >= 2 && char_ptr[realsize - 2] == '\r' && char_ptr[realsize - 1] == '\n') {
+    header_length = realsize - 2;
+  }
+
+  // If this header is a status line, clear previously accumulated headers.
+  if (conn->resp_headers && is_status_line((const char *)ptr)) {
+    curl_slist_free_all(conn->resp_headers);
+    conn->resp_headers = NULL;
+    conn->num_headers = 0;
+  }
+
+  char *header = malloc(header_length + 1);
+  if (!header) {
+    errx(2, "Failed to allocate memory for header");
+  }
+  memcpy(header, ptr, header_length);
+  header[header_length] = '\0';
+  conn->resp_headers = curl_slist_append(conn->resp_headers, header);
+  free(header);
+  conn->num_headers++;
   return realsize;
 }
 
@@ -784,7 +794,8 @@ static void new_conn(long method, char *url, struct curl_slist *req_headers,
   curl_easy_setopt(conn->easy, CURLOPT_VERBOSE, eopts.curlopt_verbose);
   curl_easy_setopt(conn->easy, CURLOPT_ERRORBUFFER, conn->error);
   curl_easy_setopt(conn->easy, CURLOPT_PRIVATE, conn);
-  curl_easy_setopt(conn->easy, CURLOPT_ACCEPT_ENCODING, "gzip,deflate");
+  /* accept all built-in encodings */
+  curl_easy_setopt(conn->easy, CURLOPT_ACCEPT_ENCODING, "");
 
   curl_easy_setopt(conn->easy, CURLOPT_CONNECTTIMEOUT_MS,
                    eopts.curlopt_connecttimeout_ms);
@@ -842,9 +853,9 @@ static void new_conn(long method, char *url, struct curl_slist *req_headers,
   #if LIBCURL_VERSION_NUM >= 0x073E00 /* Available since 7.62.0 */
   curl_easy_setopt(conn->easy, CURLOPT_DOH_URL, eopts.curlopt_doh_url);
   #endif
-  if (eopts.curlopt_lock_data_ssl_session) {
-    curl_easy_setopt(conn->easy, CURLOPT_SHARE, global->shobject);
-  }
+
+  curl_easy_setopt(conn->easy, CURLOPT_SHARE, global->shobject);
+
   if (eopts.curlopt_sslcert != NULL) {
     curl_easy_setopt(conn->easy, CURLOPT_SSLCERT,
                      eopts.curlopt_sslcert);
@@ -1053,7 +1064,6 @@ static void erl_input(struct bufferevent *ev, void *arg) {
     eopts.curlopt_tcp_fastopen = 0;
     eopts.curlopt_interface = NULL;
     eopts.curlopt_unix_socket_path = NULL;
-    eopts.curlopt_lock_data_ssl_session = 0;
     eopts.curlopt_doh_url = NULL;
     eopts.curlopt_http_version = 0;
     eopts.curlopt_verbose = 0;
@@ -1112,13 +1122,10 @@ static void erl_input(struct bufferevent *ev, void *arg) {
           } else if (eopt_long == K_CURLAUTH_NTLM) {
             eopts.curlopt_http_auth = CURLAUTH_NTLM;
           } else if (eopt_long == K_CURLAUTH_NEGOTIATE) {
-            eopts.curlopt_http_auth = CURLAUTH_NEGOTIATE;  
+            eopts.curlopt_http_auth = CURLAUTH_NEGOTIATE;
           } else if (eopt_long != K_CURLAUTH_UNDEFINED) {
             errx(2, "Unknown curlopt_http_auth value %ld", eopt_long);
           }
-          break;
-        case K_CURLOPT_LOCK_DATA_SSL_SESSION:
-          eopts.curlopt_lock_data_ssl_session = eopt_long;
           break;
         case K_CURLOPT_HTTP_VERSION:
           eopts.curlopt_http_version = eopt_long;
@@ -1235,6 +1242,9 @@ int main(int argc, char **argv) {
     { "pipelining", required_argument, 0, 'p' },
     { "max-pipeline-length", required_argument, 0, 'a' },
     { "max-total-connections", required_argument, 0, 'c' },
+    { "lock-data-ssl-session", required_argument, 0, 's' },
+    { "lock-data-dns", required_argument, 0, 'd' },
+    { "lock-data-connect", required_argument, 0, 'o' },
     { 0, 0, 0, 0 }
   };
 
@@ -1252,9 +1262,7 @@ int main(int argc, char **argv) {
   if (!global.shobject) {
     errx(2, "curl_share_init failed");
   }
-  if (CURLSHE_OK != curl_share_setopt(global.shobject, CURLSHOPT_SHARE, CURL_LOCK_DATA_SSL_SESSION)) {
-    errx(2, "curl_share_setopt failed");
-  }
+
   global.timer_event = evtimer_new(global.evbase, timer_cb, &global);
   global.to_get = 0;
 
@@ -1283,6 +1291,21 @@ int main(int argc, char **argv) {
       case 'c':
         curl_multi_setopt(global.multi, CURLMOPT_MAX_TOTAL_CONNECTIONS,
                           atoi(optarg));
+        break;
+      case 's':
+        if (atoi(optarg) && CURLSHE_OK != curl_share_setopt(global.shobject, CURLSHOPT_SHARE, CURL_LOCK_DATA_SSL_SESSION)) {
+          errx(2, "curl_share_setopt failed");
+        }
+        break;
+      case 'd':
+        if (atoi(optarg) && CURLSHE_OK != curl_share_setopt(global.shobject, CURLSHOPT_SHARE, CURL_LOCK_DATA_DNS)) {
+          errx(2, "curl_share_setopt failed");
+        }
+        break;
+      case 'o':
+        if (atoi(optarg) && CURLSHE_OK != curl_share_setopt(global.shobject, CURLSHOPT_SHARE, CURL_LOCK_DATA_CONNECT)) {
+          errx(2, "curl_share_setopt failed");
+        }
         break;
       default:
         errx(2, "Unknown option '%c'\n", c);
