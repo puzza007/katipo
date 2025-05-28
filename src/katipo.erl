@@ -525,11 +525,13 @@ req(PoolName, Opts)
     end.
 
 %% @private
+-spec start_link([{curlmopt(), any()}]) -> {ok, pid()} | {error, any()}.
 start_link(CurlOpts) when is_list(CurlOpts) ->
     Args = [CurlOpts],
     gen_server:start_link(?MODULE, Args, []).
 
 %% @private
+-spec init([[{curlmopt(), any()}]]) -> {ok, #state{}} | {stop, any()}.
 init([CurlOpts]) ->
     process_flag(trap_exit, true),
     case get_mopts(CurlOpts) of
@@ -606,11 +608,78 @@ handle_call(#req{method = Method,
     {noreply, State#state{reqs=Reqs2}}.
 
 %% @private
+-spec handle_call(#req{}, gen_server:from(), #state{}) -> {noreply, #state{}}.
+handle_call(#req{method = Method,
+                 url = Url,
+                 headers = Headers,
+                 cookiejar = CookieJar,
+                 body = Body,
+                 connecttimeout_ms = ConnTimeoutMs,
+                 followlocation = FollowLocation,
+                 ssl_verifyhost = SslVerifyHost,
+                 ssl_verifypeer = SslVerifyPeer,
+                 capath = CAPath,
+                 cacert = CACert,
+                 timeout_ms = TimeoutMs,
+                 maxredirs = MaxRedirs,
+                 timeout = Timeout,
+                 http_auth = HTTPAuth,
+                 username = Username,
+                 password = Password,
+                 proxy = Proxy,
+                 tcp_fastopen = TCPFastOpen,
+                 interface = Interface,
+                 unix_socket_path = UnixSocketPath,
+                 lock_data_ssl_session = LockDataSslSession,
+                 doh_url = DOHURL,
+                 http_version = HTTPVersion,
+                 verbose = Verbose,
+                 sslcert = SSLCert,
+                 sslkey = SSLKey,
+                 sslkey_blob = SSLKeyBlob,
+                 keypasswd = KeyPasswd,
+                 userpwd = UserPwd},
+             From,
+             State=#state{port=Port, reqs=Reqs}) ->
+    {Self, Ref} = From,
+    Opts = [{?CONNECTTIMEOUT_MS, ConnTimeoutMs},
+            {?FOLLOWLOCATION, FollowLocation},
+            {?SSL_VERIFYHOST, SslVerifyHost},
+            {?SSL_VERIFYPEER, SslVerifyPeer},
+            {?CAPATH, CAPath},
+            {?CACERT, CACert},
+            {?TIMEOUT_MS, TimeoutMs},
+            {?MAXREDIRS, MaxRedirs},
+            {?HTTP_AUTH, HTTPAuth},
+            {?USERNAME, Username},
+            {?PASSWORD, Password},
+            {?PROXY, Proxy},
+            {?TCP_FASTOPEN, TCPFastOpen},
+            {?INTERFACE, Interface},
+            {?UNIX_SOCKET_PATH, UnixSocketPath},
+            {?LOCK_DATA_SSL_SESSION, LockDataSslSession},
+            {?DOH_URL, DOHURL},
+            {?HTTP_VERSION, HTTPVersion},
+            {?VERBOSE, Verbose},
+            {?SSLCERT, SSLCert},
+            {?SSLKEY, SSLKey},
+            {?SSLKEY_BLOB, SSLKeyBlob},
+            {?KEYPASSWD, KeyPasswd},
+            {?USERPWD, UserPwd}],
+    Command = {Self, Ref, Method, Url, Headers, CookieJar, Body, Opts},
+    true = port_command(Port, term_to_binary(Command)),
+    Tref = erlang:start_timer(Timeout, self(), {req_timeout, From}),
+    Reqs2 = maps:put(From, Tref, Reqs),
+    {noreply, State#state{reqs=Reqs2}}.
+
+%% @private
+-spec handle_cast(any(), #state{}) -> {noreply, #state{}}.
 handle_cast(Msg, State) ->
     error_logger:error_msg("Unexpected cast: ~p", [Msg]),
     {noreply, State}.
 
 %% @private
+-spec handle_info(term(), #state{}) -> {noreply, #state{}} | {stop, term(), #state{}}.
 handle_info({Port, {data, Data}}, State=#state{port=Port, reqs=Reqs}) ->
     {Result, {From, Response}} =
         case binary_to_term(Data) of
@@ -650,11 +719,13 @@ handle_info({'EXIT', Port, Reason}, State=#state{port=Port}) ->
     {stop, port_died, State}.
 
 %% @private
+-spec terminate(any(), #state{}) -> ok.
 terminate(_Reason, #state{port=Port}) ->
     true = port_close(Port),
     ok.
 
 %% @private
+-spec code_change(any(), #state{}, any()) -> {ok, #state{}}.
 code_change(_OldVsn, State, _Extra) ->
     {ok, State}.
 
@@ -682,7 +753,7 @@ parse_header(Line) when is_binary(Line) ->
         [K, V] -> {K, V}
     end.
 
--spec encode_body(req_body()) -> {ok, iodata()} | {error, {atom(), term()}}.
+-spec encode_body(req_body()) -> {ok, iodata()} | {error, {atom(), term()}} | {error, req_body()}.
 encode_body([{_, _} | _] = KVs) ->
     case uri_string:compose_query(KVs) of
         {error, Reason, Message} ->
@@ -696,6 +767,7 @@ encode_body(Body) when is_binary(Body) orelse is_list(Body) ->
 encode_body(Body) ->
     {error, Body}.
 
+-spec get_mopts([{curlmopt(), any()}]) -> {ok, string()} | {error, {bad_opts, [{curlmopt(), any()}]}}.
 get_mopts(Opts) ->
     L = lists:filtermap(fun mopt_supported/1, Opts),
     LengthOpts = length(Opts),
@@ -706,7 +778,7 @@ get_mopts(Opts) ->
             {error, {bad_opts, Opts}}
     end.
 
--spec mopt_supported({curlmopt(), any()}) -> false | {true, any()}.
+-spec mopt_supported({curlmopt(), any()}) -> false | {true, string()}.
 mopt_supported({max_pipeline_length, Val})
   when is_integer(Val) andalso Val >= 0 ->
     {true, "--max-pipeline-length " ++ integer_to_list(Val)};
@@ -854,11 +926,13 @@ check_opts(Opts) when is_map(Opts) ->
             Error
     end.
 
+-spec maybe_return_metrics(#req{}, proplists:proplist(), map()) -> map().
 maybe_return_metrics(#req{return_metrics = true}, Metrics, Response) ->
     maps:put(metrics, Metrics, Response);
 maybe_return_metrics(_Req, _Metrics, Response) ->
     Response.
 
+-spec error_map(atom(), binary() | list()) -> #{code => atom(), message => binary()}.
 error_map(Code, Message) when is_atom(Code) andalso is_binary(Message) ->
     #{code => Code, message => Message};
 error_map(Code, Message) when is_atom(Code) ->

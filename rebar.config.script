@@ -1,6 +1,11 @@
 %%% -*- mode: erlang -*-
 
-CurlVerHex = string:strip(os:cmd("curl-config --vernum 2>/dev/null"), right, $\n).
+CurlVerHexCmd = os:cmd("curl-config --vernum 2>/dev/null").
+CurlVerHexStripped = string:strip(CurlVerHexCmd, right, $\n).
+CurlVerHex = case CurlVerHexStripped of
+                 "" -> "0"; % Default to 0 if curl-config is not found or returns empty
+                 _ -> CurlVerHexStripped
+             end.
 CurlVerInt = erlang:list_to_integer(CurlVerHex, 16).
 
 %% CURLOPT_TCP_FASTOPEN since 7.49.0 (471296)
