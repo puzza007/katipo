@@ -289,7 +289,6 @@
                     username => binary(),
                     password => binary(),
                     proxy => proxy(),
-                    return_metrics => boolean(),
                     tcp_fastopen => tcp_fastopen(),
                     interface => interface(),
                     unix_socket_path => unix_socket_path(),
@@ -316,7 +315,6 @@
                     username => binary(),
                     password => binary(),
                     proxy => proxy(),
-                    return_metrics => boolean(),
                     tcp_fastopen => tcp_fastopen(),
                     interface => interface(),
                     unix_socket_path => unix_socket_path(),
@@ -403,7 +401,6 @@
           username = undefined :: undefined | binary(),
           password = undefined :: undefined | binary(),
           proxy = undefined :: undefined | binary(),
-          return_metrics = false :: boolean(),
           tcp_fastopen = ?TCP_FASTOPEN_FALSE :: ?TCP_FASTOPEN_FALSE | ?TCP_FASTOPEN_TRUE,
           interface = undefined :: undefined | binary(),
           unix_socket_path = undefined :: undefined | binary(),
@@ -516,11 +513,10 @@ req(PoolName, Opts)
             {Result, {Response, Metrics}} =
                 wpool:call(PoolName, Req2, random_worker, infinity),
             TotalUs = timer:now_diff(os:timestamp(), Ts),
-            Metrics2 = katipo_metrics:notify({Result, Response}, Metrics, TotalUs),
-            Response2 = maybe_return_metrics(Req2, Metrics2, Response),
-            {Result, Response2};
+            Metrics2 = [{total_time, TotalUs div 1000} | Metrics],
+            katipo_telemetry:record_request(Req2#req.method, Req2#req.url, {Result, Response}, Metrics2),
+            {Result, Response};
         {error, _} = Error ->
-            ok = katipo_metrics:notify_error(),
             Error
     end.
 
@@ -788,8 +784,6 @@ opt(password, Password, {Req, Errors}) when is_binary(Password) ->
     {Req#req{password=Password}, Errors};
 opt(proxy, Proxy, {Req, Errors}) when is_binary(Proxy) ->
     {Req#req{proxy=Proxy}, Errors};
-opt(return_metrics, Flag, {Req, Errors}) when is_boolean(Flag) ->
-    {Req#req{return_metrics=Flag}, Errors};
 opt(tcp_fastopen, true, {Req, Errors}) when ?TCP_FASTOPEN_AVAILABLE ->
     {Req#req{tcp_fastopen=?TCP_FASTOPEN_TRUE}, Errors};
 opt(tcp_fastopen, false, {Req, Errors}) when ?TCP_FASTOPEN_AVAILABLE ->
@@ -854,10 +848,6 @@ check_opts(Opts) when is_map(Opts) ->
             Error
     end.
 
-maybe_return_metrics(#req{return_metrics = true}, Metrics, Response) ->
-    maps:put(metrics, Metrics, Response);
-maybe_return_metrics(_Req, _Metrics, Response) ->
-    Response.
 
 error_map(Code, Message) when is_atom(Code) andalso is_binary(Message) ->
     #{code => Code, message => Message};

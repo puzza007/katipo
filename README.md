@@ -9,6 +9,14 @@ An HTTP/HTTP2 client library for Erlang built around libcurl-multi and libevent.
 [![Hex pm](http://img.shields.io/hexpm/v/katipo.svg?style=flat)](https://hex.pm/packages/katipo)
 [![Hex Docs](https://img.shields.io/badge/hex-docs-blue.svg)](https://hexdocs.pm/katipo)
 
+### ⚠️ Breaking Changes in v2.0.0
+
+Katipo v2.0.0 introduces breaking changes to improve observability and modernize metrics collection:
+
+- **Removed**: Old metrics system (`mod_metrics` config, `return_metrics` option)
+- **Added**: Telemetry events compatible with OpenTelemetry
+- **Migration**: See [Telemetry Migration](#telemetry-migration) section below
+
 ### Usage
 
 ```erlang
@@ -72,10 +80,51 @@ katipo:Method(Pool :: atom(), URL :: binary(), ReqOptions :: map()).
 
 ```
 
-#### Application Config
-| Option | Values | Default | Notes |
-|:-------|:-------|:--------|:------|
-| `mod_metrics` | <code>folsom &#124; exometer &#124; noop</code> | `noop` | see [erlang-metrics](https://github.com/benoitc/erlang-metrics) |
+#### Telemetry Events
+
+Katipo emits [telemetry](https://github.com/beam-telemetry/telemetry) events that can be used for metrics collection and observability:
+
+| Event | Description | Measurements | Metadata |
+|:------|:------------|:-------------|:---------|
+| `[katipo, request, stop]` | Emitted when HTTP request completes | `duration`, `response_body_size`, `namelookup_time`, `connect_time`, `appconnect_time`, `pretransfer_time`, `redirect_time`, `starttransfer_time` | `method`, `url`, `status`, `scheme`, `host`, `port` |
+| `[katipo, request, error]` | Emitted when HTTP request fails | `count` | `method`, `url`, `error` |
+
+##### Measurements Description
+
+All timing measurements are in **milliseconds**:
+
+- `duration` - Total request duration (includes Erlang overhead)
+- `response_body_size` - Size of response body in bytes
+- `namelookup_time` - DNS lookup time
+- `connect_time` - TCP connection establishment time
+- `appconnect_time` - SSL/TLS handshake time (HTTPS only)
+- `pretransfer_time` - Time until transfer starts
+- `redirect_time` - Time spent on redirects
+- `starttransfer_time` - Time until first byte received
+
+##### Basic Usage
+
+```erlang
+%% Attach a simple handler to log request metrics
+telemetry:attach(
+    my_http_metrics,
+    [katipo, request, stop],
+    fun(EventName, Measurements, Metadata, Config) ->
+        Duration = maps:get(duration, Measurements),
+        Status = maps:get(status, Metadata),
+        Method = maps:get(method, Metadata),
+        logger:info("HTTP ~p request took ~p ms, status: ~p", [Method, Duration, Status])
+    end,
+    undefined
+).
+```
+
+##### OpenTelemetry Integration
+
+For OpenTelemetry integration, see `examples/telemetry_opentelemetry.erl` which shows how to:
+- Convert telemetry events to OpenTelemetry metrics
+- Use semantic conventions for HTTP client metrics
+- Set up histograms for timing data and counters for errors
 
 #### Request options
 
@@ -93,7 +142,6 @@ katipo:Method(Pool :: atom(), URL :: binary(), ReqOptions :: map()).
 | `timeout_ms`            | `pos_integer()`                     | 30000       |                                                                                     |
 | `maxredirs`             | `non_neg_integer()`                 | 9           |                                                                                     |
 | `proxy`                 | `binary()`                          | `undefined` | [docs](https://curl.haxx.se/libcurl/c/CURLOPT_PROXY.html)                           |
-| `return_metrics`        | `boolean()`                         | `false`     |                                                                                     |
 | `tcp_fastopen`          | `boolean()`                         | `false`     | [docs](https://curl.haxx.se/libcurl/c/CURLOPT_TCP_FASTOPEN.html) curl >= 7.49.0     |
 | `interface`             | `binary()`                          | `undefined` | [docs](https://curl.haxx.se/libcurl/c/CURLOPT_INTERFACE.html)                       |
 | `unix_socket_path`      | `binary()`                          | `undefined` | [docs](https://curl.haxx.se/libcurl/c/CURLOPT_UNIX_SOCKET_PATH.html) curl >= 7.40.0 |
@@ -113,8 +161,7 @@ katipo:Method(Pool :: atom(), URL :: binary(), ReqOptions :: map()).
 {ok, #{status := pos_integer(),
        headers := headers(),
        cookiejar := cookiejar(),
-       body := body(),
-       metrics => proplist()}}
+       body := body()}}
 
 {error, #{code := atom(), message := binary()}}
 ```
@@ -127,19 +174,6 @@ katipo:Method(Pool :: atom(), URL :: binary(), ReqOptions :: map()).
 | `max_pipeline_length`   | `non_neg_integer()`           | 100          |                                                                                                |
 | `max_total_connections` | `non_neg_integer()`           | 0 (no limit) | [docs](https://curl.haxx.se/libcurl/c/CURLMOPT_MAX_TOTAL_CONNECTIONS.html)                     |
 
-#### Metrics
-
-* ok
-* error
-* status.XXX
-* total_time
-* curl_time
-* namelookup_time
-* connect_time
-* appconnect_time
-* pretransfer_time
-* redirect_time
-* starttransfer_time
 
 ### System dependencies
 
@@ -154,6 +188,60 @@ katipo:Method(Pool :: atom(), URL :: binary(), ReqOptions :: map()).
 
 The official Erlang Docker [image](https://hub.docker.com/_/erlang)
 has everything needed to build and test Katipo
+
+## Telemetry Migration
+
+### Migrating from v1.x Metrics System
+
+If you were using the old metrics system, here's how to migrate:
+
+#### Before (v1.x)
+```erlang
+%% Old configuration
+{katipo, [{mod_metrics, folsom}]}
+
+%% Old usage with return_metrics
+{ok, #{status := 200, metrics := Metrics}} =
+    katipo:get(Pool, URL, #{return_metrics => true}).
+```
+
+#### After (v2.x)
+```erlang
+%% No configuration needed, telemetry events are always emitted
+
+%% Attach telemetry handlers for metrics collection
+telemetry:attach(
+    katipo_metrics,
+    [katipo, request, stop],
+    fun handle_request_metrics/4,
+    undefined
+).
+
+%% Metrics are now delivered via telemetry events
+handle_request_metrics(_Event, Measurements, Metadata, _Config) ->
+    %% All the same timing data is available in Measurements
+    %% Plus additional metadata about the request
+    Duration = maps:get(duration, Measurements),
+    Method = maps:get(method, Metadata),
+    %% ... process metrics
+    ok.
+```
+
+#### Key Changes
+
+1. **Configuration**: Remove `mod_metrics` from application config
+2. **Dependencies**: Replace `metrics` with `telemetry` in your `rebar.config`
+3. **Request Options**: Remove `return_metrics => true` from request options
+4. **Metrics Access**: Attach telemetry handlers instead of reading from response maps
+5. **Event-Driven**: Metrics are now pushed via events rather than pulled from responses
+
+#### Benefits of Migration
+
+- **Better Performance**: No need to include metrics in every response
+- **More Flexible**: Attach multiple handlers for different purposes
+- **OpenTelemetry Ready**: Easy integration with modern observability tools
+- **Richer Data**: Additional metadata (URL components, HTTP method, etc.)
+- **Standard Approach**: Uses BEAM ecosystem standard (telemetry)
 
 ### TODO
 

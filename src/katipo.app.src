@@ -1,15 +1,15 @@
 {application, 'katipo',
  [{description, "HTTP client based on libcurl"},
-  {vsn, "1.1.2"},
+  {vsn, "2.0.0"},
   {registered, []},
   {mod, {'katipo_app', []}},
   {applications,
    [kernel,
     stdlib,
     worker_pool,
-    metrics
+    telemetry
    ]},
-  {env, [{mod_metrics, noop}]},
+  {env, []},
   {modules, []},
   {licenses, ["MIT"]},
   {links, [{"Github", "https://github.com/puzza007/katipo"}]},
@@ -22,7 +22,7 @@
            "src/katipo.erl",
            "src/katipo_app.erl",
            "src/katipo_cow_qs.erl",
-           "src/katipo_metrics.erl",
            "src/katipo_pool.erl",
-           "src/katipo_sup.erl"]}
+           "src/katipo_sup.erl",
+           "src/katipo_telemetry.erl"]}
  ]}.

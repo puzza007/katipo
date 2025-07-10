@@ -151,9 +151,12 @@ groups() ->
       [badssl_client_cert]},
      {port, [],
       [max_total_connections]},
-     {metrics, [],
-      [metrics_true,
-       metrics_false]},
+     {telemetry, [],
+      [telemetry_events,
+       telemetry_success_measurements,
+       telemetry_error_events,
+       telemetry_metadata_parsing,
+       telemetry_timing_metrics]},
      {http2, [parallel],
       [http2_get]}].
 
@@ -164,7 +167,7 @@ all() ->
      {group, https},
      {group, https_mutual},
      {group, port},
-     {group, metrics},
+     {group, telemetry},
      {group, http2}].
 
 get(_) ->
@@ -768,36 +771,257 @@ max_total_connections(_) ->
     Diff = erlang:system_time(seconds) - Start,
     true = Diff >= 10.
 
-metrics_true(_) ->
-    ok = meck:new(metrics, [passthrough]),
-    ok = meck:expect(metrics, update_or_create,
-                     fun(X, _, spiral) when X =:= "katipo.status.200" orelse
-                                            X =:= "katipo.ok" ->
-                             ok;
-                        (X, _, histogram) when X =:= "katipo.curl_time" orelse
-                                               X =:= "katipo.total_time" orelse
-                                               X =:= "katipo.namelookup_time" orelse
-                                               X =:= "katipo.connect_time" orelse
-                                               X =:= "katipo.appconnect_time" orelse
-                                               X =:= "katipo.pretransfer_time" orelse
-                                               X =:= "katipo.redirect_time" orelse
-                                               X =:= "katipo.starttransfer_time" ->
-                             ok
-                     end),
-    {ok, #{status := 200, metrics := Metrics}} =
-        katipo:head(?POOL, <<"https://httpbin.org/get">>, #{return_metrics => true}),
-    10 = meck:num_calls(metrics, update_or_create, 3),
-    MetricKeys = [K || {K, _} <- Metrics],
-    ExpectedMetricKeys = [curl_time,total_time,namelookup_time,connect_time,
-                          appconnect_time,pretransfer_time,redirect_time,
-                          starttransfer_time],
-    true = lists:sort(MetricKeys) == lists:sort(ExpectedMetricKeys),
-    meck:unload(metrics).
+telemetry_events(_) ->
+    %% Set up a test handler to capture telemetry events
+    Events = [[katipo, request, stop], [katipo, request, error]],
+    TestPid = self(),
+    HandlerFun = fun(EventName, Measurements, Metadata, _Config) ->
+        TestPid ! {telemetry_event, EventName, Measurements, Metadata}
+    end,
 
-metrics_false(_) ->
-    {ok, #{status := 200} = Res} =
-        katipo:head(?POOL, <<"https://httpbin.org/get">>, #{return_metrics => false}),
-    false = maps:is_key(metrics, Res).
+    lists:foreach(fun(Event) ->
+        telemetry:attach(
+            list_to_atom(lists:concat([test_, lists:last(Event)])),
+            Event,
+            HandlerFun,
+            undefined
+        )
+    end, Events),
+
+    %% Make a successful request
+    {ok, #{status := 200}} = katipo:head(?POOL, <<"https://httpbin.org/get">>),
+
+    %% Verify telemetry event was emitted
+    receive
+        {telemetry_event, [katipo, request, stop], Measurements, Metadata} ->
+            %% Verify measurements contain expected keys
+            true = maps:is_key(duration, Measurements),
+            true = maps:is_key(response_body_size, Measurements),
+            true = maps:is_key(namelookup_time, Measurements),
+            true = maps:is_key(connect_time, Measurements),
+            true = maps:is_key(appconnect_time, Measurements),
+            true = maps:is_key(pretransfer_time, Measurements),
+            true = maps:is_key(redirect_time, Measurements),
+            true = maps:is_key(starttransfer_time, Measurements),
+            %% Verify metadata contains expected keys
+            true = maps:is_key(method, Metadata),
+            true = maps:is_key(url, Metadata),
+            true = maps:is_key(status, Metadata),
+            true = maps:is_key(scheme, Metadata),
+            true = maps:is_key(host, Metadata),
+            ok
+    after 5000 ->
+        error(no_telemetry_event)
+    end,
+
+    %% Clean up handlers
+    lists:foreach(fun(Event) ->
+        telemetry:detach(list_to_atom(lists:concat([test_, lists:last(Event)])))
+    end, Events).
+
+telemetry_success_measurements(_) ->
+    %% Test that successful requests emit all expected measurements
+    TestPid = self(),
+    HandlerFun = fun(EventName, Measurements, Metadata, _Config) ->
+        TestPid ! {telemetry_event, EventName, Measurements, Metadata}
+    end,
+
+    telemetry:attach(
+        test_success_measurements,
+        [katipo, request, stop],
+        HandlerFun,
+        undefined
+    ),
+
+    %% Make a successful request
+    {ok, #{status := 200, body := Body}} = katipo:get(?POOL, <<"https://httpbin.org/get">>),
+
+    %% Verify all measurements are present and reasonable
+    receive
+        {telemetry_event, [katipo, request, stop], Measurements, _Metadata} ->
+            %% Check that all timing measurements are present
+            RequiredMeasurements = [duration, namelookup_time, connect_time,
+                                  appconnect_time, pretransfer_time, redirect_time,
+                                  starttransfer_time, response_body_size],
+            lists:foreach(fun(Key) ->
+                case maps:get(Key, Measurements, undefined) of
+                    undefined ->
+                        error({missing_measurement, Key});
+                    Value when is_number(Value) ->
+                        ok;
+                    Value ->
+                        error({invalid_measurement_type, Key, Value})
+                end
+            end, RequiredMeasurements),
+
+            %% Verify response body size matches actual body
+            ExpectedSize = iolist_size(Body),
+            ExpectedSize = maps:get(response_body_size, Measurements),
+
+            %% Verify timing values are reasonable (>= 0)
+            TimingKeys = [duration, namelookup_time, connect_time, appconnect_time,
+                         pretransfer_time, redirect_time, starttransfer_time],
+            lists:foreach(fun(Key) ->
+                Value = maps:get(Key, Measurements),
+                case Value >= 0 of
+                    true -> ok;
+                    false -> error({negative_timing, Key, Value})
+                end
+            end, TimingKeys),
+
+            ok
+    after 5000 ->
+        error(no_telemetry_event)
+    end,
+
+    telemetry:detach(test_success_measurements).
+
+telemetry_error_events(_) ->
+    %% Test that error requests emit error events
+    TestPid = self(),
+    HandlerFun = fun(EventName, Measurements, Metadata, _Config) ->
+        TestPid ! {telemetry_event, EventName, Measurements, Metadata}
+    end,
+
+    telemetry:attach(
+        test_error_events,
+        [katipo, request, error],
+        HandlerFun,
+        undefined
+    ),
+
+    %% Make a request that will fail (invalid URL)
+    {error, _} = katipo:get(?POOL, <<"http://nonexistent.invalid.domain">>),
+
+    %% Verify error event was emitted
+    receive
+        {telemetry_event, [katipo, request, error], Measurements, Metadata} ->
+            %% Check measurements
+            1 = maps:get(count, Measurements),
+
+            %% Check metadata has error info
+            true = maps:is_key(error, Metadata),
+            true = maps:is_key(method, Metadata),
+            true = maps:is_key(url, Metadata),
+
+            %% Verify method is correct
+            get = maps:get(method, Metadata),
+
+            ok
+    after 5000 ->
+        error(no_error_telemetry_event)
+    end,
+
+    telemetry:detach(test_error_events).
+
+telemetry_metadata_parsing(_) ->
+    %% Test that URL metadata is parsed correctly
+    TestPid = self(),
+    HandlerFun = fun(EventName, Measurements, Metadata, _Config) ->
+        TestPid ! {telemetry_event, EventName, Measurements, Metadata}
+    end,
+
+    telemetry:attach(
+        test_metadata_parsing,
+        [katipo, request, stop],
+        HandlerFun,
+        undefined
+    ),
+
+    %% Make a request with a URL that has scheme, host, and port
+    {ok, #{status := 200}} = katipo:get(?POOL, <<"https://httpbin.org:443/get">>),
+
+    %% Verify metadata parsing
+    receive
+        {telemetry_event, [katipo, request, stop], _Measurements, Metadata} ->
+            %% Check URL components
+            get = maps:get(method, Metadata),
+            <<"https://httpbin.org:443/get">> = maps:get(url, Metadata),
+            <<"https">> = maps:get(scheme, Metadata),
+            <<"httpbin.org">> = maps:get(host, Metadata),
+            443 = maps:get(port, Metadata),
+            200 = maps:get(status, Metadata),
+
+            ok
+    after 5000 ->
+        error(no_metadata_telemetry_event)
+    end,
+
+    telemetry:detach(test_metadata_parsing).
+
+telemetry_timing_metrics(_) ->
+    %% Test that timing metrics are captured from libcurl
+    TestPid = self(),
+    HandlerFun = fun(EventName, Measurements, Metadata, _Config) ->
+        TestPid ! {telemetry_event, EventName, Measurements, Metadata}
+    end,
+
+    telemetry:attach(
+        test_timing_metrics,
+        [katipo, request, stop],
+        HandlerFun,
+        undefined
+    ),
+
+    %% Make a request to a server that will have measurable timing
+    {ok, #{status := 200}} = katipo:get(?POOL, <<"https://httpbin.org/delay/1">>),
+
+    %% Verify timing metrics are reasonable
+    receive
+        {telemetry_event, [katipo, request, stop], Measurements, _Metadata} ->
+            %% Total time should be at least 1 second (1000ms) due to delay
+            Duration = maps:get(duration, Measurements),
+            case Duration >= 1000 of
+                true -> ok;
+                false -> error({duration_too_short, Duration})
+            end,
+
+            %% DNS lookup time should be non-negative
+            NameLookupTime = maps:get(namelookup_time, Measurements),
+            case NameLookupTime >= 0 of
+                true -> ok;
+                false -> error({negative_namelookup_time, NameLookupTime})
+            end,
+
+            %% Connect time should be non-negative
+            ConnectTime = maps:get(connect_time, Measurements),
+            case ConnectTime >= 0 of
+                true -> ok;
+                false -> error({negative_connect_time, ConnectTime})
+            end,
+
+            %% For HTTPS, app connect time (TLS handshake) should be > 0
+            AppConnectTime = maps:get(appconnect_time, Measurements),
+            case AppConnectTime >= 0 of
+                true -> ok;
+                false -> error({negative_appconnect_time, AppConnectTime})
+            end,
+
+            %% Verify timing progression makes sense
+            %% (each timing should be >= previous timing)
+            Timings = [
+                {namelookup_time, NameLookupTime},
+                {connect_time, ConnectTime},
+                {appconnect_time, AppConnectTime},
+                {pretransfer_time, maps:get(pretransfer_time, Measurements)},
+                {starttransfer_time, maps:get(starttransfer_time, Measurements)},
+                {duration, Duration}
+            ],
+
+            %% Check that timings are in logical order (allowing for 0 values)
+            lists:foldl(fun({Name, Time}, PrevTime) ->
+                case Time >= PrevTime orelse Time =:= 0 of
+                    true -> Time;
+                    false -> error({timing_order_violation, Name, Time, PrevTime})
+                end
+            end, 0, Timings),
+
+            ok
+    after 10000 ->  %% Longer timeout for delayed request
+        error(no_timing_telemetry_event)
+    end,
+
+    telemetry:detach(test_timing_metrics).
 
 http2_get(_) ->
     {ok, #{status := 200, body := Body}} =
