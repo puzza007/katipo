@@ -7,9 +7,9 @@
    [kernel,
     stdlib,
     worker_pool,
-    metrics
+    telemetry
    ]},
-  {env, [{mod_metrics, noop}]},
+  {env, []},
   {modules, []},
   {licenses, ["MIT"]},
   {links, [{"Github", "https://github.com/puzza007/katipo"}]},

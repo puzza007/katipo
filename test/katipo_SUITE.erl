@@ -769,30 +769,42 @@ max_total_connections(_) ->
     true = Diff >= 10.
 
 metrics_true(_) ->
-    ok = meck:new(metrics, [passthrough]),
-    ok = meck:expect(metrics, update_or_create,
-                     fun(X, _, spiral) when X =:= "katipo.status.200" orelse
-                                            X =:= "katipo.ok" ->
-                             ok;
-                        (X, _, histogram) when X =:= "katipo.curl_time" orelse
-                                               X =:= "katipo.total_time" orelse
-                                               X =:= "katipo.namelookup_time" orelse
-                                               X =:= "katipo.connect_time" orelse
-                                               X =:= "katipo.appconnect_time" orelse
-                                               X =:= "katipo.pretransfer_time" orelse
-                                               X =:= "katipo.redirect_time" orelse
-                                               X =:= "katipo.starttransfer_time" ->
-                             ok
-                     end),
+    %% Create a test handler that captures telemetry events
+    TestPid = self(),
+    HandlerId = <<"katipo-test-handler">>,
+    Handler = fun([katipo, request, stop], Measurements, Metadata, _Config) ->
+                  TestPid ! {telemetry_event, Measurements, Metadata}
+              end,
+    ok = telemetry:attach(HandlerId, [katipo, request, stop], Handler, #{}),
+
     {ok, #{status := 200, metrics := Metrics}} =
         katipo:head(?POOL, <<"https://httpbin.org/get">>, #{return_metrics => true}),
-    10 = meck:num_calls(metrics, update_or_create, 3),
+
+    %% Verify telemetry event was emitted
+    receive
+        {telemetry_event, Measurements, Metadata} ->
+            #{result := ok, status := 200} = Metadata,
+            %% Verify all expected measurements are present
+            true = maps:is_key(curl_time, Measurements),
+            true = maps:is_key(total_time, Measurements),
+            true = maps:is_key(namelookup_time, Measurements),
+            true = maps:is_key(connect_time, Measurements),
+            true = maps:is_key(appconnect_time, Measurements),
+            true = maps:is_key(pretransfer_time, Measurements),
+            true = maps:is_key(redirect_time, Measurements),
+            true = maps:is_key(starttransfer_time, Measurements)
+    after 1000 ->
+        ct:fail("Did not receive telemetry event")
+    end,
+
+    %% Verify metrics returned in response
     MetricKeys = [K || {K, _} <- Metrics],
     ExpectedMetricKeys = [curl_time,total_time,namelookup_time,connect_time,
                           appconnect_time,pretransfer_time,redirect_time,
                           starttransfer_time],
     true = lists:sort(MetricKeys) == lists:sort(ExpectedMetricKeys),
-    meck:unload(metrics).
+
+    ok = telemetry:detach(HandlerId).
 
 metrics_false(_) ->
     {ok, #{status := 200} = Res} =
