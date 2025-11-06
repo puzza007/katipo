@@ -772,7 +772,7 @@ metrics_true(_) ->
     %% Create a test handler that captures telemetry events
     TestPid = self(),
     HandlerId = <<"katipo-test-handler">>,
-    Handler = fun([katipo, request, stop], Measurements, Metadata, _Config) ->
+    Handler = fun(_EventName, Measurements, Metadata, _Config) ->
                   TestPid ! {telemetry_event, Measurements, Metadata}
               end,
     ok = telemetry:attach(HandlerId, [katipo, request, stop], Handler, #{}),
