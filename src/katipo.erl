@@ -349,7 +349,8 @@
                                 curl_http_version_1_1 |
                                 curl_http_version_2_0 |
                                 curl_http_version_2tls |
-                                curl_http_version_2_prior_knowledge.
+                                curl_http_version_2_prior_knowledge |
+                                curl_http_version_3.
 %% HTTP protocol version to use
 %% see [https://curl.se/libcurl/c/CURLOPT_HTTP_VERSION.html]
 -type curlmopts() :: [{max_pipeline_length, non_neg_integer()} |
@@ -817,6 +818,8 @@ opt(http_version, curl_http_version_2tls, {Req, Errors}) ->
     {Req#req{http_version=4}, Errors};
 opt(http_version, curl_http_version_2_prior_knowledge, {Req, Errors}) ->
     {Req#req{http_version=5}, Errors};
+opt(http_version, curl_http_version_3, {Req, Errors}) ->
+    {Req#req{http_version=30}, Errors}; %% See https://github.com/curl/curl/blob/32d64b2e875f0d74cd433dff8bda9f8a98dcd44e/include/curl/curl.h#L1983
 opt(verbose, true, {Req, Errors}) ->
     {Req#req{verbose=?VERBOSE_TRUE}, Errors};
 opt(verbose, false, {Req, Errors}) ->
