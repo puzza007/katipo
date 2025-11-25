@@ -15,33 +15,30 @@ init_per_suite(Config) ->
     application:ensure_all_started(katipo),
     application:ensure_all_started(meck),
     {ok, _} = katipo_pool:start(?POOL, ?POOL_SIZE),
-    Config.
+    DataDir = ?config(data_dir, Config),
+    CACert = filename:join(DataDir, "ca-bundle.crt"),
+    [{cacert_file, list_to_binary(CACert)} | Config].
 
 end_per_suite(_Config) ->
     ok = application:stop(katipo).
 
-init_per_group(http, Config) ->
+init_per_group(curl, Config) ->
     application:ensure_all_started(cowboy),
     Filename = tempfile:name("katipo_test_"),
+    Name = make_ref(),
     Dispatch = cowboy_router:compile([{'_', [{"/unix", get_handler, []}]}]),
-    {ok, _} = cowboy:start_clear(unix_socket, [{ip, {local, Filename}},
-                                               {port, 0}], #{env => #{dispatch => Dispatch}}),
-    [{unix_socket_file, Filename} | Config];
+    {ok, _} = cowboy:start_clear(Name, [{ip, {local, Filename}},
+                                        {port, 0}], #{env => #{dispatch => Dispatch}}),
+    [{unix_socket_file, Filename}, {unix_server_name, Name}] ++ Config;
+init_per_group(session, Config) ->
+    application:ensure_all_started(katipo),
+    Config;
 init_per_group(pool, Config) ->
     application:ensure_all_started(meck),
     Config;
-init_per_group(https, Config) ->
-    application:ensure_all_started(cowboy),
-    Dispatch = cowboy_router:compile([{'_', [{"/", get_handler, []}]}]),
-    DataDir = ?config(data_dir, Config),
-    CACert = filename:join(DataDir, "cowboy-ca.crt"),
-    {ok, _} = cowboy:start_tls(ct_https,
-                               [{port, 8443},
-                                %% {cacertfile, CACert},
-                                {certfile, filename:join(DataDir, "server.crt")},
-                                {keyfile, filename:join(DataDir, "server.key")}],
-                               #{env => #{dispatch => Dispatch}}),
-    [{cacert_file, list_to_binary(CACert)} | Config];
+init_per_group(proxy, Config) ->
+    application:ensure_all_started(http_proxy),
+    Config;
 init_per_group(https_mutual, Config) ->
     DataDir = ?config(data_dir, Config),
     Cert = filename:join(DataDir, "badssl.com-client.pem"),
@@ -53,12 +50,20 @@ init_per_group(https_mutual, Config) ->
     [{cert_file, list_to_binary(Cert)},
      {key_file, list_to_binary(Key)},
      {decrypted_key_der, KeyDer} | Config];
+init_per_group(http1, Config) ->
+    [{httpbin_base, <<"https://httpbin.org">>}, {http_version, curl_http_version_1_1}] ++ Config;
+init_per_group(http2, Config) ->
+    [{httpbin_base, <<"https://nghttp2.org/httpbin">>}, {http_version, curl_http_version_2_prior_knowledge}] ++ Config;
+init_per_group(http3, Config) ->
+    [{httpbin_base, <<"https://cloudflare-quic.com/b">>}, {http_version, curl_http_version_3}] ++ Config;
 init_per_group(_, Config) ->
     Config.
 
-end_per_group(http, Config) ->
+end_per_group(curl, Config) ->
     Filename = ?config(unix_socket_file, Config),
+    Name = ?config(unix_server_name, Config),
     _ = file:delete(Filename),
+    ok = cowboy:stop_listener(Name),
     Config;
 end_per_group(pool, Config) ->
     application:stop(meck),
@@ -86,8 +91,6 @@ groups() ->
        post_qs,
        post_qs_invalid,
        post_req,
-       url_missing,
-       bad_method,
        put_data,
        put_arity_2,
        put_qs,
@@ -104,7 +107,6 @@ groups() ->
        statuses,
        cookies,
        cookies_delete,
-       cookies_bad_cookie_jar,
        bytes,
        stream_bytes,
        utf8,
@@ -112,19 +114,27 @@ groups() ->
        connecttimeout_ms,
        followlocation_true,
        followlocation_false,
+       timeout_ms,
+       maxredirs,
+       basic_unauthorised,
+       basic_authorised,
+       digest_unauthorised,
+       digest_authorised,
+       proxy_couldnt_connect]},
+     {curl, [parallel],
+      [url_missing,
+       bad_method,
+       cookies_bad_cookie_jar,
        tcp_fastopen_true,
        tcp_fastopen_false,
        interface,
        interface_unknown,
        unix_socket_path,
        unix_socket_path_cant_connect,
-       timeout_ms,
-       maxredirs,
        lock_data_ssl_session_true,
        lock_data_ssl_session_false,
        doh_url,
        badopts,
-       proxy_couldnt_connect,
        protocol_restriction]},
      {digest, [],
       [basic_authorised,
@@ -154,63 +164,84 @@ groups() ->
      {metrics, [],
       [metrics_true,
        metrics_false]},
+     {http1, [parallel],
+      [{group, http},
+       {group, https}]},
      {http2, [parallel],
-      [http2_get]}].
+      [{group, http},
+       {group, https}]},
+     {http3, [parallel],
+      [{group, http},
+       {group, https}]}].
 
 all() ->
-    [{group, http},
+    [{group, http1},
+     {group, curl},
      {group, digest},
      {group, pool},
-     {group, https},
+     {group, proxy},
+     {group, session},
      {group, https_mutual},
      {group, port},
      {group, metrics},
-     {group, http2}].
+     {group, http2},
+     {group, http3}].
 
-get(_) ->
+get(Config) ->
+    HTTPVersion = ?config(http_version, Config),
     {ok, #{status := 200, body := Body}} =
-        katipo:get(?POOL, <<"https://httpbin.org/get?a=%21%40%23%24%25%5E%26%2A%28%29_%2B">>),
-    Json = jsx:decode(Body, [{return_maps, false}]),
+        katipo:get(?POOL, httpbin_url(Config, <<"/get?a=%21%40%23%24%25%5E%26%2A%28%29_%2B">>), #{http_version => HTTPVersion}),
+    Json = jsx:decode(Body),
     [{<<"a">>, <<"!@#$%^&*()_+">>}] = proplists:get_value(<<"args">>, Json).
 
-get_http(_) ->
+get_http(Config) ->
+    HTTPVersion = ?config(http_version, Config),
     {ok, #{status := 200, body := Body}} =
-        katipo:get(?POOL, <<"http://httpbin.org/get?a=%21%40%23%24%25%5E%26%2A%28%29_%2B">>),
-    Json = jsx:decode(Body, [{return_maps, false}]),
+        katipo:get(?POOL, httpbin_url(Config, <<"/get?a=%21%40%23%24%25%5E%26%2A%28%29_%2B">>), #{http_version => HTTPVersion}),
+    Json = jsx:decode(Body),
     [{<<"a">>, <<"!@#$%^&*()_+">>}] = proplists:get_value(<<"args">>, Json).
 
-get_req(_) ->
+get_req(Config) ->
+    HTTPVersion = ?config(http_version, Config),
+    Url = httpbin_url(Config, <<"/get?a=%21%40%23%24%25%5E%26%2A%28%29_%2B">>),
     {ok, #{status := 200, body := Body}} =
-        katipo:req(?POOL, #{url => <<"https://httpbin.org/get?a=%21%40%23%24%25%5E%26%2A%28%29_%2B">>}),
-    Json = jsx:decode(Body, [{return_maps, false}]),
+        katipo:req(?POOL, #{url => Url, http_version => HTTPVersion}),
+    Json = jsx:decode(Body),
     [{<<"a">>, <<"!@#$%^&*()_+">>}] = proplists:get_value(<<"args">>, Json).
 
-head(_) ->
+head(Config) ->
+    HTTPVersion = ?config(http_version, Config),
     {ok, #{status := 200}} =
-        katipo:head(?POOL, <<"https://httpbin.org/get">>).
+        katipo:head(?POOL, httpbin_url(Config, <<"/get">>), #{http_version => HTTPVersion}).
 
-post_body_binary(_) ->
+post_body_binary(Config) ->
+    HTTPVersion = ?config(http_version, Config),
     {ok, #{status := 200, body := Body}} =
-        katipo:post(?POOL, <<"https://httpbin.org/post">>,
+        katipo:post(?POOL, httpbin_url(Config, <<"/post">>),
                     #{headers => [{<<"Content-Type">>, <<"application/json">>}],
-                      body => <<"!@#$%^&*()">>}),
-    Json = jsx:decode(Body, [{return_maps, false}]),
+                      body => <<"!@#$%^&*()">>,
+                      http_version => HTTPVersion}),
+    Json = jsx:decode(Body),
     <<"!@#$%^&*()">> = proplists:get_value(<<"data">>, Json).
 
-post_body_iolist(_) ->
+post_body_iolist(Config) ->
+    HTTPVersion = ?config(http_version, Config),
     {ok, #{status := 200, body := Body}} =
-        katipo:post(?POOL, <<"https://httpbin.org/post">>,
+        katipo:post(?POOL, httpbin_url(Config, <<"/post">>),
                     #{headers => [{<<"Content-Type">>, <<"application/json">>}],
-                      body => ["foo", $b, $a, $r, <<"baz">>]}),
-    Json = jsx:decode(Body, [{return_maps, false}]),
+                      body => ["foo", $b, $a, $r, <<"baz">>],
+                      http_version => HTTPVersion}),
+    Json = jsx:decode(Body),
     <<"foobarbaz">> = proplists:get_value(<<"data">>, Json).
 
-post_body_qs_vals(_) ->
+post_body_qs_vals(Config) ->
+    HTTPVersion = ?config(http_version, Config),
     {ok, #{status := 200, body := Body}} =
-        katipo:post(?POOL, <<"https://httpbin.org/post">>,
+        katipo:post(?POOL, httpbin_url(Config, <<"/post">>),
                     #{headers => [{<<"Content-Type">>, <<"application/json">>}],
-                      body => [<<"!@#$%">>, <<"^&*()">>]}),
-    Json = jsx:decode(Body, [{return_maps, false}]),
+                      body => [<<"!@#$%">>, <<"^&*()">>],
+                      http_version => HTTPVersion}),
+    Json = jsx:decode(Body),
     <<"!@#$%^&*()">> = proplists:get_value(<<"data">>, Json).
 
 post_body_bad(_) ->
@@ -221,17 +252,19 @@ post_body_bad(_) ->
                     #{headers => [{<<"Content-Type">>, <<"application/json">>}],
                       body => should_not_be_an_atom}).
 
-post_arity_2(_) ->
+post_arity_2(Config) ->
+    HTTPVersion = ?config(http_version, Config),
     {ok, #{status := 200, body := Body}} =
-        katipo:post(?POOL, <<"https://httpbin.org/post">>),
-    Json = jsx:decode(Body, [{return_maps, false}]),
+        katipo:post(?POOL, httpbin_url(Config, <<"/post">>), #{http_version => HTTPVersion}),
+    Json = jsx:decode(Body),
     undefined = proplists:get_value(<<>>, Json).
 
-post_qs(_) ->
+post_qs(Config) ->
+    HTTPVersion = ?config(http_version, Config),
     QsVals = [{<<"foo">>, <<"bar">>}, {<<"baz">>, true}],
     {ok, #{status := 200, body := Body}} =
-        katipo:post(?POOL, <<"https://httpbin.org/post">>, #{body => QsVals}),
-    Json = jsx:decode(Body, [{return_maps, false}]),
+        katipo:post(?POOL, httpbin_url(Config, <<"/post">>), #{body => QsVals, http_version => HTTPVersion}),
+    Json = jsx:decode(Body),
     [] = [{<<"baz">>,<<>>},{<<"foo">>,<<"bar">>}] -- proplists:get_value(<<"form">>, Json).
 
 post_qs_invalid(_) ->
@@ -239,13 +272,15 @@ post_qs_invalid(_) ->
     {error, #{code := bad_opts}} =
         katipo:post(?POOL, <<"https://httpbin.org/post">>, #{body => QsVals}).
 
-post_req(_) ->
+post_req(Config) ->
+    HTTPVersion = ?config(http_version, Config),
     {ok, #{status := 200, body := Body}} =
-        katipo:req(?POOL, #{url => <<"https://httpbin.org/post">>,
-                     method => post,
-                     headers => [{<<"Content-Type">>, <<"application/json">>}],
-                     body => <<"!@#$%^&*()">>}),
-    Json = jsx:decode(Body, [{return_maps, false}]),
+        katipo:req(?POOL, #{url => httpbin_url(Config, <<"/post">>),
+                            method => post,
+                            headers => [{<<"Content-Type">>, <<"application/json">>}],
+                            body => <<"!@#$%^&*()">>,
+                            http_version => HTTPVersion}),
+    Json = jsx:decode(Body),
     <<"!@#$%^&*()">> = proplists:get_value(<<"data">>, Json).
 
 url_missing(_) ->
@@ -253,167 +288,194 @@ url_missing(_) ->
     BinaryMessage = iolist_to_binary(io_lib:format("~p", [Message])),
     {error, #{code := bad_opts, message := BinaryMessage}} =
         katipo:req(?POOL, #{method => post,
-                     headers => [{<<"Content-Type">>, <<"application/json">>}],
-                     body => <<"!@#$%^&*()">>}).
+                            headers => [{<<"Content-Type">>, <<"application/json">>}],
+                            body => <<"!@#$%^&*()">>}).
 
 bad_method(_) ->
     Message = [{method, toast}],
     BinaryMessage = iolist_to_binary(io_lib:format("~p", [Message])),
     {error, #{code := bad_opts, message := BinaryMessage}} =
         katipo:req(?POOL, #{method => toast,
-                     headers => [{<<"Content-Type">>, <<"application/json">>}],
-                     body => <<"!@#$%^&*()">>}).
+                            headers => [{<<"Content-Type">>, <<"application/json">>}],
+                            body => <<"!@#$%^&*()">>}).
 
-put_data(_) ->
+put_data(Config) ->
+    HTTPVersion = ?config(http_version, Config),
     Headers = [{<<"Content-Type">>, <<"application/json">>}],
     {ok, #{status := 200, body := Body}} =
-        katipo:put(?POOL, <<"https://httpbin.org/put">>,
-                   #{headers => Headers, body => <<"!@#$%^&*()">>}),
-    Json = jsx:decode(Body, [{return_maps, false}]),
+        katipo:put(?POOL, httpbin_url(Config, <<"/put">>),
+                   #{headers => Headers, body => <<"!@#$%^&*()">>, http_version => HTTPVersion}),
+    Json = jsx:decode(Body),
     <<"!@#$%^&*()">> = proplists:get_value(<<"data">>, Json).
 
-put_arity_2(_) ->
+put_arity_2(Config) ->
+    HTTPVersion = ?config(http_version, Config),
     {ok, #{status := 200, body := Body}} =
-        katipo:put(?POOL, <<"https://httpbin.org/put">>),
-    Json = jsx:decode(Body, [{return_maps, false}]),
+        katipo:put(?POOL, httpbin_url(Config, <<"/put">>), #{http_version => HTTPVersion}),
+    Json = jsx:decode(Body),
     undefined = proplists:get_value(<<>>, Json).
 
-put_qs(_) ->
+put_qs(Config) ->
+    HTTPVersion = ?config(http_version, Config),
     QsVals = [{<<"foo">>, <<"bar">>}, {<<"baz">>, true}],
     {ok, #{status := 200, body := Body}} =
-        katipo:put(?POOL, <<"https://httpbin.org/put">>, #{body => QsVals}),
-    Json = jsx:decode(Body, [{return_maps, false}]),
+        katipo:put(?POOL, httpbin_url(Config, <<"/put">>), #{body => QsVals, http_version => HTTPVersion}),
+    Json = jsx:decode(Body),
     [] = [{<<"baz">>,<<>>},{<<"foo">>,<<"bar">>}] -- proplists:get_value(<<"form">>, Json).
 
-patch_data(_) ->
+patch_data(Config) ->
+    HTTPVersion = ?config(http_version, Config),
     Headers = [{<<"Content-Type">>, <<"application/json">>}],
     {ok, #{status := 200, body := Body}} =
-        katipo:patch(?POOL, <<"https://httpbin.org/patch">>,
-                   #{headers => Headers, body => <<"!@#$%^&*()">>}),
-    Json = jsx:decode(Body, [{return_maps, false}]),
+        katipo:patch(?POOL, httpbin_url(Config, <<"/patch">>),
+                   #{headers => Headers, body => <<"!@#$%^&*()">>, http_version => HTTPVersion}),
+    Json = jsx:decode(Body),
     <<"!@#$%^&*()">> = proplists:get_value(<<"data">>, Json).
 
-patch_arity_2(_) ->
+patch_arity_2(Config) ->
+    HTTPVersion = ?config(http_version, Config),
     {ok, #{status := 200, body := Body}} =
-        katipo:patch(?POOL, <<"https://httpbin.org/patch">>),
-    Json = jsx:decode(Body, [{return_maps, false}]),
+        katipo:patch(?POOL, httpbin_url(Config, <<"/patch">>), #{http_version => HTTPVersion}),
+    Json = jsx:decode(Body),
     <<>> = proplists:get_value(<<"data">>, Json).
 
-patch_qs(_) ->
+patch_qs(Config) ->
+    HTTPVersion = ?config(http_version, Config),
     QsVals = [{<<"foo">>, <<"bar">>}, {<<"baz">>, true}],
     {ok, #{status := 200, body := Body}} =
-        katipo:patch(?POOL, <<"https://httpbin.org/patch">>, #{body => QsVals}),
-    Json = jsx:decode(Body, [{return_maps, false}]),
+        katipo:patch(?POOL, httpbin_url(Config, <<"/patch">>), #{body => QsVals, http_version => HTTPVersion}),
+    Json = jsx:decode(Body),
     [] = [{<<"baz">>,<<>>},{<<"foo">>,<<"bar">>}] -- proplists:get_value(<<"form">>, Json).
 
-options(_) ->
-    {ok, #{status := 200, headers := Headers}} = katipo:options(?POOL, <<"https://httpbin.org">>),
-    LowerHeaders = [{string:lowercase(K), V} || {K, V} <- Headers],
+options(Config) ->
+    HTTPVersion = ?config(http_version, Config),
+    {ok, #{status := 200, headers := Headers}} = katipo:options(?POOL, httpbin_url(Config, <<"/get">>), #{http_version => HTTPVersion}),
+    Lowercase = lists:map(fun({K, V}) -> {string:lowercase(K), V} end, Headers),
+    %% Different httpbin servers have different header capitalisations
     <<"GET, POST, PUT, DELETE, PATCH, OPTIONS">> =
-        proplists:get_value(<<"access-control-allow-methods">>, LowerHeaders).
+        proplists:get_value(<<"access-control-allow-methods">>, Lowercase).
 
-delete(_) ->
-    {ok, #{status := 200}} = katipo:delete(?POOL, <<"https://httpbin.org/delete">>).
+delete(Config) ->
+    HTTPVersion = ?config(http_version, Config),
+    {ok, #{status := 200}} = katipo:delete(?POOL, httpbin_url(Config, <<"/delete">>), #{http_version => HTTPVersion}).
 
-headers(_) ->
+headers(Config) ->
+    Url = httpbin_url(Config, <<"/gzip">>),
+    Parsed = uri_string:parse(Url),
+    Host = maps:get(host, Parsed),
+    HTTPVersion = ?config(http_version, Config),
     Headers = [{<<"header1">>, <<"!@#$%^&*()">>}],
     {ok, #{status := 200, body := Body}} =
-        katipo:get(?POOL, <<"https://httpbin.org/gzip">>, #{headers => Headers}),
-    Json = jsx:decode(Body, [{return_maps, false}]),
+        katipo:get(?POOL, Url, #{headers => Headers, http_version => HTTPVersion}),
+    Json = jsx:decode(Body),
     Expected =  [{<<"Accept">>,<<"*/*">>},
-                 {<<"Accept-Encoding">>,<<"gzip,deflate">>},
                  {<<"Header1">>,<<"!@#$%^&*()">>},
-                 {<<"Host">>,<<"httpbin.org">>}],
+                 {<<"Host">>,Host}],
     [] = Expected -- proplists:get_value(<<"headers">>, Json).
 
-header_remove(_) ->
+header_remove(Config) ->
+    Url = httpbin_url(Config, <<"/get">>),
+    Parsed = uri_string:parse(Url),
+    Host = maps:get(host, Parsed),
+    HTTPVersion = ?config(http_version, Config),
     Headers = [{<<"Accept-Encoding">>, <<>>}],
     {ok, #{status := 200, body := Body}} =
-        katipo:get(?POOL, <<"https://httpbin.org/get">>, #{headers => Headers}),
-    Json = jsx:decode(Body, [{return_maps, false}]),
+        katipo:get(?POOL, Url, #{headers => Headers, http_version => HTTPVersion}),
+    Json = jsx:decode(Body),
     Expected =  [{<<"Accept">>,<<"*/*">>},
-                 {<<"Host">>,<<"httpbin.org">>}],
+                 {<<"Host">>,Host}],
     [] = Expected -- proplists:get_value(<<"headers">>, Json).
 
-gzip(_) ->
-    {ok, #{status := 200, body := Body}} = katipo:get(?POOL, <<"https://httpbin.org/gzip">>),
-    Json = jsx:decode(Body, [{return_maps, false}]),
+gzip(Config) ->
+    HTTPVersion = ?config(http_version, Config),
+    {ok, #{status := 200, body := Body}} = katipo:get(?POOL, httpbin_url(Config, <<"/gzip">>), #{http_version => HTTPVersion}),
+    Json = jsx:decode(Body),
     true = proplists:get_value(<<"gzipped">>, Json).
 
-deflate(_) ->
-    {ok, #{status := 200, body := Body}} = katipo:get(?POOL, <<"https://httpbin.org/deflate">>),
-    Json = jsx:decode(Body, [{return_maps, false}]),
+deflate(Config) ->
+    HTTPVersion = ?config(http_version, Config),
+    {ok, #{status := 200, body := Body}} = katipo:get(?POOL, httpbin_url(Config, <<"/deflate">>), #{http_version => HTTPVersion}),
+    Json = jsx:decode(Body),
     true = proplists:get_value(<<"deflated">>, Json).
 
-bytes(_) ->
-    {ok, #{status := 200, body := Body}} = katipo:get(?POOL, <<"https://httpbin.org/bytes/1024?seed=9999">>),
+bytes(Config) ->
+    HTTPVersion = ?config(http_version, Config),
+    {ok, #{status := 200, body := Body}} = katipo:get(?POOL, httpbin_url(Config, <<"/bytes/1024?seed=9999">>), #{http_version => HTTPVersion}),
     1024 = byte_size(Body),
     <<168,123,193,120,18,120,65,73,67,119,198,61,39,1,24,169>> = crypto:hash(md5, Body).
 
-stream_bytes(_) ->
-    {ok, #{status := 200, body := Body}} = katipo:get(?POOL, <<"https://httpbin.org/bytes/1024?seed=9999&chunk_size=8">>),
+stream_bytes(Config) ->
+    HTTPVersion = ?config(http_version, Config),
+    {ok, #{status := 200, body := Body}} = katipo:get(?POOL, httpbin_url(Config, <<"/bytes/1024?seed=9999&chunk_size=8">>), #{http_version => HTTPVersion}),
     1024 = byte_size(Body),
     <<168,123,193,120,18,120,65,73,67,119,198,61,39,1,24,169>> = crypto:hash(md5, Body).
 
-utf8(_) ->
-    {ok, #{status := 200, body := Body}} = katipo:get(?POOL, <<"https://httpbin.org/encoding/utf8">>),
+utf8(Config) ->
+    HTTPVersion = ?config(http_version, Config),
+    {ok, #{status := 200, body := Body}} = katipo:get(?POOL, httpbin_url(Config, <<"/encoding/utf8">>), #{http_version => HTTPVersion}),
     case xmerl_ucs:from_utf8(Body) of
         [_|_] -> ok
     end.
 
-stream(_) ->
-    {ok, #{status := 200, body := Body}} = katipo:get(?POOL, <<"https://httpbin.org/stream/20">>),
+stream(Config) ->
+    HTTPVersion = ?config(http_version, Config),
+    {ok, #{status := 200, body := Body}} = katipo:get(?POOL, httpbin_url(Config, <<"/stream/20">>), #{http_version => HTTPVersion}),
     20 = length(binary:split(Body, <<"\n">>, [global, trim])).
 
-statuses(_) ->
+statuses(Config) ->
+    HTTPVersion = ?config(http_version, Config),
     MFAs = [begin
                 B = integer_to_binary(S),
-                Url = <<"https://httpbin.org/status/",B/binary>>,
-                {katipo, get, [?POOL, Url]}
+                Url = httpbin_url(Config, <<"/status/",B/binary>>),
+                {katipo, get, [?POOL, Url, #{http_version => HTTPVersion}]}
             end || S <- http_status_codes()],
     Results = rpc:parallel_eval(MFAs),
     Results2 = [S || {ok, #{status := S}} <- Results],
     Results2 = http_status_codes().
 
-cookies(_) ->
-    Url = <<"https://httpbin.org/cookies/set?cname=cvalue">>,
-    Opts = #{followlocation => true},
+cookies(Config) ->
+    HTTPVersion = ?config(http_version, Config),
+    Url = httpbin_url(Config, <<"/cookies/set?cname=cvalue">>),
+    Opts = #{followlocation => true, http_version => HTTPVersion},
     {ok, #{status := 200, body := Body}} = katipo:get(?POOL, Url, Opts),
     Json = jsx:decode(Body, [{return_maps, false}]),
     [{<<"cname">>, <<"cvalue">>}] = proplists:get_value(<<"cookies">>, Json).
 
-cookies_delete(_) ->
-    GetUrl = <<"https://httpbin.org/cookies/set?cname=cvalue">>,
-    Opts = #{followlocation => true},
+cookies_delete(Config) ->
+    HTTPVersion = ?config(http_version, Config),
+    GetUrl = httpbin_url(Config, <<"/cookies/set?cname=cvalue">>),
+    Opts = #{followlocation => true, http_version => HTTPVersion},
     {ok, #{status := 200, cookiejar := CookieJar}} = katipo:get(?POOL, GetUrl, Opts),
-    DeleteUrl = <<"https://httpbin.org/cookies/delete?cname">>,
+    DeleteUrl = httpbin_url(Config, <<"/cookies/delete?cname">>),
     {ok, #{status := 200, body := Body}} =
         katipo:get(?POOL, DeleteUrl, #{cookiejar => CookieJar, followlocation => true}),
     Json = jsx:decode(Body, [{return_maps, false}]),
     [{}] = proplists:get_value(<<"cookies">>, Json).
 
 cookies_bad_cookie_jar(_) ->
-    Url = <<"https://httpbin.org/cookies/delete?cname">>,
+    Url = <<"http://httpbin.org/cookies/delete?cname">>,
     CookieJar = ["has to be a binary"],
     Message = <<"[{cookiejar,[\"has to be a binary\"]}]">>,
     {error, #{code := bad_opts, message := Message}} =
         katipo:get(?POOL, Url, #{cookiejar => CookieJar}).
 
-%% TODO
-redirect_to(_) ->
-    {ok, #{status := 302}} = katipo:get(?POOL, <<"https://nghttp2.org/httpbin/redirect-to?url=https://google.com">>).
+redirect_to(Config) ->
+    HTTPVersion = ?config(http_version, Config),
+    {ok, #{status := 302}} = katipo:get(?POOL, httpbin_url(Config, <<"/redirect-to?url=https://google.com">>), #{http_version => HTTPVersion}).
 
 connecttimeout_ms(_) ->
     {error, #{code := operation_timedout}} =
         katipo:get(?POOL, <<"http://google.com">>, #{connecttimeout_ms => 1}).
 
-followlocation_true(_) ->
+followlocation_true(Config) ->
+    HTTPVersion = ?config(http_version, Config),
     {ok, #{status := 200}} =
-        katipo:get(?POOL, <<"https://nghttp2.org/httpbin/redirect/6">>, #{followlocation => true}).
+        katipo:get(?POOL, httpbin_url(Config, <<"/redirect/6">>), #{followlocation => true, http_version => HTTPVersion}).
 
-followlocation_false(_) ->
+followlocation_false(Config) ->
+    HTTPVersion = ?config(http_version, Config),
     {ok, #{status := 302}} =
-        katipo:get(?POOL, <<"https://nghttp2.org/httpbin/redirect/6">>, #{followlocation => false}).
+        katipo:get(?POOL, httpbin_url(Config, <<"/redirect/6">>), #{followlocation => false, http_version => HTTPVersion}).
 
 tcp_fastopen_true(_) ->
     case katipo:get(?POOL, <<"https://httpbin.org/get">>, #{tcp_fastopen => true}) of
@@ -472,22 +534,25 @@ unix_socket_path_cant_connect(_) ->
             ok
     end.
 
-maxredirs(_) ->
-    Opts = #{followlocation => true, maxredirs => 2},
+maxredirs(Config) ->
+    HTTPVersion = ?config(http_version, Config),
+    Opts = #{followlocation => true, maxredirs => 2, http_version => HTTPVersion},
     {error, #{code := too_many_redirects, message := <<"Maximum (2) redirects followed">>}} =
-        katipo:get(?POOL, <<"https://nghttp2.org/httpbin/redirect/6">>, Opts).
+        katipo:get(?POOL, httpbin_url(Config, <<"/redirect/6">>), Opts).
 
-basic_unauthorised(_) ->
+basic_unauthorised(Config) ->
+    HTTPVersion = ?config(http_version, Config),
     {ok, #{status := 401}} =
-        katipo:get(?POOL, <<"https://httpbin.org/basic-auth/johndoe/p455w0rd">>).
+        katipo:get(?POOL, httpbin_url(Config, <<"/basic-auth/johndoe/p455w0rd">>), #{http_version => HTTPVersion}).
 
-basic_authorised(_) ->
+basic_authorised(Config) ->
+    HTTPVersion = ?config(http_version, Config),
     Username = <<"johndoe">>,
     Password = <<"p455w0rd">>,
     {ok, #{status := 200, body := Body}} =
-        katipo:get(?POOL, <<"https://httpbin.org/basic-auth/johndoe/p455w0rd">>,
-                  #{http_auth => basic, username => Username, password => Password}),
-    Json = jsx:decode(Body, [{return_maps, false}]),
+        katipo:get(?POOL, httpbin_url(Config, <<"/basic-auth/johndoe/p455w0rd">>),
+                  #{http_auth => basic, username => Username, password => Password, http_version => HTTPVersion}),
+    Json = jsx:decode(Body),
     true = proplists:get_value(<<"authenticated">>, Json),
     Username = proplists:get_value(<<"user">>, Json).
 
@@ -501,17 +566,19 @@ basic_authorised_userpwd(_) ->
     true = proplists:get_value(<<"authenticated">>, Json),
     Username = proplists:get_value(<<"user">>, Json).
 
-digest_unauthorised(_) ->
+digest_unauthorised(Config) ->
+    HTTPVersion = ?config(http_version, Config),
     {ok, #{status := 401}} =
-        katipo:get(?POOL, <<"https://httpbin.org/digest-auth/auth/johndoe/p455w0rd">>).
+        katipo:get(?POOL, httpbin_url(Config, <<"/digest-auth/auth/johndoe/p455w0rd">>), #{http_version => HTTPVersion}).
 
-digest_authorised(_) ->
+digest_authorised(Config) ->
+    HTTPVersion = ?config(http_version, Config),
     Username = <<"johndoe">>,
     Password = <<"p455w0rd">>,
     {ok, #{status := 200, body := Body}} =
-        katipo:get(?POOL, <<"https://httpbin.org/digest-auth/auth/johndoe/p455w0rd">>,
-                  #{http_auth => digest, username => Username, password => Password}),
-    Json = jsx:decode(Body, [{return_maps, false}]),
+        katipo:get(?POOL, httpbin_url(Config, <<"/digest-auth/auth/johndoe/p455w0rd">>),
+                  #{http_auth => digest, username => Username, password => Password, http_version => HTTPVersion}),
+    Json = jsx:decode(Body),
     true = proplists:get_value(<<"authenticated">>, Json),
     Username = proplists:get_value(<<"user">>, Json).
 
@@ -564,9 +631,15 @@ proxy_couldnt_connect(_) ->
 protocol_restriction(_) ->
     {error, #{code := unsupported_protocol}} = katipo:get(?POOL, <<"dict.org">>).
 
-timeout_ms(_) ->
-    {error, #{code := operation_timedout}} =
-        katipo:get(?POOL, <<"https://httpbin.org/delay/1">>, #{timeout_ms => 500}).
+timeout_ms(Config) ->
+    HTTPVersion = ?config(http_version, Config),
+    ok = case katipo:get(?POOL, httpbin_url(Config, <<"/delay/1">>), #{timeout_ms => 500, http_version => HTTPVersion}) of
+             {error, #{code := operation_timedout}} ->
+                 ok;
+             %% http2 seems to return this when it times out
+             {error, #{code := couldnt_connect}} ->
+                 ok
+         end.
 
 couldnt_resolve_host(_) ->
     {error, #{code := couldnt_resolve_host,
@@ -674,7 +747,7 @@ verify_host_verify_peer_ok(_) ->
 
 verify_host_verify_peer_error(_) ->
     {error, #{code := Code}} =
-         katipo:get(?POOL, <<"https://localhost:8443">>,
+         katipo:get(?POOL, <<"https://self-signed.badssl.com/">>,
                     #{ssl_verifyhost => true, ssl_verifypeer => true}),
     %% TODO: this could be made to reflect the ifdef from katipo.c...
     ok = case Code of
@@ -682,24 +755,24 @@ verify_host_verify_peer_error(_) ->
              peer_failed_verification -> ok
          end,
     {error, #{code := Code}} =
-         katipo:get(?POOL, <<"https://localhost:8443">>,
+         katipo:get(?POOL, <<"https://self-signed.badssl.com/">>,
                     #{ssl_verifyhost => false, ssl_verifypeer => true}),
     ok = case Code of
              ssl_cacert -> ok;
              peer_failed_verification -> ok
          end,
     {ok, #{status := 200}} =
-        katipo:get(?POOL, <<"https://localhost:8443">>,
+        katipo:get(?POOL, <<"https://self-signed.badssl.com/">>,
                    #{ssl_verifyhost => true, ssl_verifypeer => false}),
     {ok, #{status := 200}} =
-        katipo:get(?POOL, <<"https://localhost:8443">>,
+        katipo:get(?POOL, <<"https://self-signed.badssl.com/">>,
                    #{ssl_verifyhost => false, ssl_verifypeer => false}).
 
 cacert_self_signed(Config) ->
     CACert = ?config(cacert_file, Config),
-    {ok, #{status := 200}} =
-        katipo:get(?POOL, <<"https://localhost:8443">>,
-                   #{verbose => true, ssl_verifyhost => true, ssl_verifypeer => true, cacert => CACert}).
+    {ok, #{status := 301}} =
+        katipo:get(?POOL, <<"https://google.com">>,
+                   #{ssl_verifyhost => true, ssl_verifypeer => true, cacert => CACert}).
 
 badssl(_) ->
     {error, _} =
@@ -799,13 +872,6 @@ metrics_false(_) ->
         katipo:head(?POOL, <<"https://httpbin.org/get">>, #{return_metrics => false}),
     false = maps:is_key(metrics, Res).
 
-http2_get(_) ->
-    {ok, #{status := 200, body := Body}} =
-        katipo:get(?POOL, <<"https://nghttp2.org/httpbin/get?a=%21%40%23%24%25%5E%26%2A%28%29_%2B">>,
-                   #{http_version => curl_http_version_2_prior_knowledge}),
-    Json = jsx:decode(Body, [{return_maps, false}]),
-    [{<<"a">>, <<"!@#$%^&*()_+">>}] = proplists:get_value(<<"args">>, Json).
-
 repeat_until_true(Fun) ->
     try
         case Fun() of
@@ -819,3 +885,7 @@ repeat_until_true(Fun) ->
             timer:sleep(100),
             repeat_until_true(Fun)
     end.
+
+httpbin_url(Config, Path) ->
+    Base = ?config(httpbin_base, Config),
+    <<Base/binary, Path/binary>>.

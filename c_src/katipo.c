@@ -63,6 +63,7 @@ typedef struct _GlobalInfo {
   CURLSH *shobject;
   int still_running;
   size_t to_get;
+  curl_version_info_data *ver;
 } GlobalInfo;
 
 typedef struct _ConnInfo {
@@ -543,6 +544,7 @@ static void check_multi_info(GlobalInfo *global) {
   CURLcode res;
 
   while ((msg = curl_multi_info_read(global->multi, &msgs_left))) {
+    fprintf(stderr, "ZZZZ curl_multi_info_read\n");
     if (msg->msg == CURLMSG_DONE) {
       easy = msg->easy_handle;
       res = msg->data.result;
@@ -562,6 +564,7 @@ static void check_multi_info(GlobalInfo *global) {
         send_error_to_erlang(res, conn);
       }
 
+      fprintf(stderr, "ZZZZ curl_multi_remove_handle\n");
       curl_multi_remove_handle(global->multi, easy);
       free(conn->url);
       free(conn->pid);
@@ -669,6 +672,7 @@ static size_t write_cb(void *ptr, size_t size, size_t nmemb, void *data) {
   size_t realsize = size * nmemb;
   ConnInfo *conn = (ConnInfo *)data;
 
+  fprintf(stderr, "ZZZZ write_cb\n");
   conn->memory = (char *)realloc(conn->memory, conn->size + realsize);
   memcpy(&(conn->memory[conn->size]), ptr, realsize);
   conn->size += realsize;
@@ -678,19 +682,31 @@ static size_t write_cb(void *ptr, size_t size, size_t nmemb, void *data) {
 
 static size_t header_cb(void *ptr, size_t size, size_t nmemb, void *data) {
   size_t realsize = size * nmemb;
+  size_t adjusted_size = realsize;
   ConnInfo *conn = (ConnInfo *)data;
   char *header;
 
-  // the last two chars of headers are \r\n
+  fprintf(stderr, "ZZZZ header_cb\n");
+  // the last two chars of headers are \r\n except for http3...
   if (realsize > 2) {
     if (conn->resp_headers && is_status_line(ptr)) {
       curl_slist_free_all(conn->resp_headers);
       conn->resp_headers = NULL;
       conn->num_headers = 0;
     }
-    header = (char *)malloc(realsize - 1);
-    strncpy(header, ptr, realsize - 2);
-    header[realsize - 2] = '\0';
+    // TODO: understand better what's going on with http3
+    // headers. They don't seem to have the trailing \r\n that the
+    // former HTTP versions do
+    #if LIBCURL_VERSION_NUM >= 0x074200
+    long http_version;
+    curl_easy_getinfo(conn->easy, CURLINFO_HTTP_VERSION, &http_version);
+    if (http_version == CURL_HTTP_VERSION_3) {
+      adjusted_size += 1;
+    }
+    #endif
+    header = (char *)malloc(adjusted_size - 1);
+    strncpy(header, ptr, adjusted_size - 2);
+    header[adjusted_size - 2] = '\0';
     conn->resp_headers = curl_slist_append(conn->resp_headers, header);
     free(header);
     conn->num_headers++;
@@ -825,9 +841,11 @@ static void new_conn(long method, char *url, struct curl_slist *req_headers,
                      eopts.curlopt_interface);
   }
   #if LIBCURL_VERSION_NUM >= 0x072800 /* Available since 7.40.0 */
-  if (eopts.curlopt_unix_socket_path != NULL) {
-    curl_easy_setopt(conn->easy, CURLOPT_UNIX_SOCKET_PATH,
-                     eopts.curlopt_unix_socket_path);
+  if (global->ver->features & CURL_VERSION_UNIX_SOCKETS) {
+    if (eopts.curlopt_unix_socket_path != NULL) {
+      curl_easy_setopt(conn->easy, CURLOPT_UNIX_SOCKET_PATH,
+                       eopts.curlopt_unix_socket_path);
+    }
   }
   #endif
   #if LIBCURL_VERSION_NUM >= 0x073100 /* Available since 7.49.0 */
@@ -898,6 +916,7 @@ static void new_conn(long method, char *url, struct curl_slist *req_headers,
 
   set_method(method, conn);
   rc = curl_multi_add_handle(global->multi, conn->easy);
+  fprintf(stderr, "ZZZZ curl_multi_add_handle\n");
   mcode_or_die("new_conn: curl_multi_add_handle", rc);
 }
 
@@ -1197,6 +1216,7 @@ static void erl_input(struct bufferevent *ev, void *arg) {
       errx(2, "Couldn't skip empty eopt list");
     }
 
+    fprintf(stderr, "ZZZZ new_conn\n");
     new_conn(method, url, req_headers, req_cookies, post_data,
              post_data_size, eopts, pid, ref, arg);
 
@@ -1230,6 +1250,7 @@ int main(int argc, char **argv) {
   int option_index = 0;
   int c;
   long pipelining = 0;
+  curl_version_info_data *ver;
 
   struct option long_options[] = {
     { "pipelining", required_argument, 0, 'p' },
@@ -1257,6 +1278,8 @@ int main(int argc, char **argv) {
   }
   global.timer_event = evtimer_new(global.evbase, timer_cb, &global);
   global.to_get = 0;
+  ver = curl_version_info(CURLVERSION_NOW);
+  global.ver = ver;
 
   curl_multi_setopt(global.multi, CURLMOPT_SOCKETFUNCTION, sock_cb);
   curl_multi_setopt(global.multi, CURLMOPT_SOCKETDATA, &global);
