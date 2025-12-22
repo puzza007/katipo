@@ -1,6 +1,7 @@
 on:
   pull_request:
   push:
+
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -9,10 +10,152 @@ jobs:
       matrix:
         otp: ['26']
         rebar3: ['3.18.0']
+
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v4
+
+      - name: Start httpbin server
+        run: |
+          cd test/http3-httpbin
+          docker compose up -d
+          # Wait for Caddy to be ready
+          for i in {1..30}; do
+            curl -k -s https://localhost:8443/get && break
+            echo "Waiting for Caddy..."
+            sleep 2
+          done
+
       - uses: erlef/setup-beam@v1
         with:
           otp-version: ${{matrix.otp}}
           rebar3-version: ${{matrix.rebar3}}
-      - run: sudo apt update && sudo apt install -y make gcc libevent-dev libcurl4-openssl-dev libssl-dev && rebar3 update && rebar3 ct && rebar3 dialyzer && rebar3 lint
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y make gcc libevent-dev libcurl4-openssl-dev libssl-dev
+
+      - name: Run tests
+        run: rebar3 ct
+
+      - name: Run dialyzer
+        run: rebar3 dialyzer
+
+      - name: Run lint
+        run: rebar3 lint
+
+      - name: Stop httpbin server
+        if: always()
+        run: |
+          cd test/http3-httpbin
+          docker compose down
+
+  test-http3:
+    runs-on: ubuntu-latest
+    name: HTTP/3 Tests
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Start HTTP/3 httpbin server
+        run: |
+          cd test/http3-httpbin
+          docker compose up -d
+          # Wait for Caddy to be ready
+          for i in {1..30}; do
+            curl -k -s https://localhost:8443/get && break
+            echo "Waiting for Caddy..."
+            sleep 2
+          done
+
+      - name: Cache curl HTTP/3 build
+        uses: actions/cache@v4
+        id: curl-cache
+        with:
+          path: /tmp/curl-http3
+          key: curl-http3-8.11.0-recursive-${{ runner.os }}
+
+      - name: Build curl with HTTP/3 support
+        if: steps.curl-cache.outputs.cache-hit != 'true'
+        run: |
+          set -ex
+          sudo apt-get update
+          sudo apt-get install -y build-essential pkg-config autoconf libtool cmake libpsl-dev
+
+          mkdir -p /tmp/curl-http3
+          cd /tmp/curl-http3
+
+          # Build OpenSSL with QUIC support (quictls)
+          git clone --depth 1 -b openssl-3.1.4+quic https://github.com/quictls/openssl.git
+          cd openssl
+          ./config --prefix=/tmp/curl-http3/install --openssldir=/tmp/curl-http3/install/ssl
+          make -j$(nproc)
+          make install_sw
+          cd ..
+
+          # Build nghttp3 (sfparse is built as a submodule)
+          git clone --recursive https://github.com/ngtcp2/nghttp3.git
+          cd nghttp3
+          autoreconf -fi
+          ./configure --prefix=/tmp/curl-http3/install --enable-lib-only \
+            PKG_CONFIG_PATH=/tmp/curl-http3/install/lib/pkgconfig:/tmp/curl-http3/install/lib64/pkgconfig
+          make -j$(nproc)
+          make install
+          cd ..
+
+          # Build ngtcp2
+          git clone --depth 1 https://github.com/ngtcp2/ngtcp2.git
+          cd ngtcp2
+          autoreconf -fi
+          ./configure --prefix=/tmp/curl-http3/install --enable-lib-only \
+            PKG_CONFIG_PATH=/tmp/curl-http3/install/lib/pkgconfig:/tmp/curl-http3/install/lib64/pkgconfig \
+            --with-openssl=/tmp/curl-http3/install
+          make -j$(nproc)
+          make install
+          cd ..
+
+          # Build curl with HTTP/3
+          git clone --depth 1 -b curl-8_11_0 https://github.com/curl/curl.git
+          cd curl
+          autoreconf -fi
+          ./configure --prefix=/tmp/curl-http3/install \
+            --with-openssl=/tmp/curl-http3/install \
+            --with-nghttp3=/tmp/curl-http3/install \
+            --with-ngtcp2=/tmp/curl-http3/install \
+            PKG_CONFIG_PATH=/tmp/curl-http3/install/lib/pkgconfig:/tmp/curl-http3/install/lib64/pkgconfig
+          make -j$(nproc)
+          make install
+          cd ..
+
+      - uses: erlef/setup-beam@v1
+        with:
+          otp-version: '26'
+          rebar3-version: '3.18.0'
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y make gcc libevent-dev
+
+      - name: Build and test with HTTP/3 curl
+        env:
+          KATIPO_TEST_HTTP3: "true"
+          PKG_CONFIG_PATH: /tmp/curl-http3/install/lib/pkgconfig:/tmp/curl-http3/install/lib64/pkgconfig
+          LD_LIBRARY_PATH: /tmp/curl-http3/install/lib:/tmp/curl-http3/install/lib64
+          CURL_PREFIX: /tmp/curl-http3/install
+        run: |
+          # Add custom curl to PATH
+          export PATH=/tmp/curl-http3/install/bin:$PATH
+
+          # Verify HTTP/3 support
+          curl --version | grep -i http3
+          curl-config --vernum
+
+          # Build and run tests
+          rebar3 ct
+
+      - name: Stop HTTP/3 server
+        if: always()
+        run: |
+          cd test/http3-httpbin
+          docker compose down

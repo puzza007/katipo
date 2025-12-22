@@ -35,13 +35,22 @@ CurlOptSSLKeyBlob = case CurlVerInt >= 476928 of
                                     []
                         end.
 
+%% CURL_HTTP_VERSION_3 since 7.66.0 (475648)
+CurlOptHttp3 = case CurlVerInt >= 475648 of
+                   true ->
+                       [{d, http3_available}];
+                   false ->
+                       []
+               end.
+
 {_, ErlOpts} = lists:keyfind(erl_opts, 1, CONFIG).
 
 ErlOpts2 = ErlOpts ++
            CurlOptTcpFastopen ++
            CurlOptUnixSocketPath ++
            CurlOptDOHURL ++
-           CurlOptSSLKeyBlob.
+           CurlOptSSLKeyBlob ++
+           CurlOptHttp3.
 
 Config1 = lists:keystore(erl_opts, 1, CONFIG, {erl_opts, ErlOpts2}).
 

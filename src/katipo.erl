@@ -37,6 +37,7 @@
 -export([unix_socket_path_available/0]).
 -export([doh_url_available/0]).
 -export([sslkey_blob_available/0]).
+-export([http3_available/0]).
 
 -ifdef(tcp_fastopen_available).
 -define(TCP_FASTOPEN_AVAILABLE, true).
@@ -62,6 +63,12 @@
 -define(SSLKEY_BLOB_AVAILABLE, true).
 -else.
 -define(SSLKEY_BLOB_AVAILABLE, false).
+-endif.
+
+-ifdef(http3_available).
+-define(HTTP3_AVAILABLE, true).
+-else.
+-define(HTTP3_AVAILABLE, false).
 -endif.
 
 -record(state, {port :: port(),
@@ -99,6 +106,7 @@
 -define(SSLKEY_BLOB, 26).
 -define(KEYPASSWD, 27).
 -define(USERPWD, 28).
+-define(SSLVERSION, 29).
 
 -define(DEFAULT_REQ_TIMEOUT, 30000).
 -define(FOLLOWLOCATION_TRUE, 1).
@@ -296,6 +304,7 @@
                     lock_data_ssl_session => boolean(),
                     doh_url => doh_url(),
                     http_version => curlopt_http_version(),
+                    sslversion => curlopt_sslversion(),
                     verbose => boolean(),
                     sslcert => sslcert(),
                     sslkey => sslkey(),
@@ -323,6 +332,7 @@
                     lock_data_ssl_session => boolean(),
                     doh_url => doh_url(),
                     http_version => curlopt_http_version(),
+                    sslversion => curlopt_sslversion(),
                     verbose => boolean(),
                     sslcert => sslcert(),
                     sslkey => sslkey(),
@@ -353,6 +363,14 @@
                                 curl_http_version_3.
 %% HTTP protocol version to use
 %% see [https://curl.se/libcurl/c/CURLOPT_HTTP_VERSION.html]
+-type curlopt_sslversion() :: sslversion_default |
+                              sslversion_tlsv1 |
+                              sslversion_tlsv1_0 |
+                              sslversion_tlsv1_1 |
+                              sslversion_tlsv1_2 |
+                              sslversion_tlsv1_3.
+%% Minimum SSL/TLS version to use
+%% see [https://curl.se/libcurl/c/CURLOPT_SSLVERSION.html]
 -type curlmopts() :: [{max_pipeline_length, non_neg_integer()} |
                       {pipelining, pipelining()} |
                       {max_total_connections, non_neg_integer()}].
@@ -412,6 +430,7 @@
             ?LOCK_DATA_SSL_SESSION_FALSE | ?LOCK_DATA_SSL_SESSION_TRUE,
           doh_url = undefined :: undefined | doh_url(),
           http_version = curl_http_version_none :: curlopt_http_version(),
+          sslversion = sslversion_default :: curlopt_sslversion(),
           verbose = ?VERBOSE_FALSE :: ?VERBOSE_FALSE | ?VERBOSE_TRUE,
           sslcert = undefined :: undefined | binary() | file:name_all(),
           sslkey = undefined :: undefined | binary() | file:name_all(),
@@ -437,6 +456,10 @@ doh_url_available() ->
 %% @private
 sslkey_blob_available() ->
     ?SSLKEY_BLOB_AVAILABLE.
+
+%% @private
+http3_available() ->
+    ?HTTP3_AVAILABLE.
 
 -dialyzer({nowarn_function, opt/3}).
 
@@ -508,11 +531,11 @@ delete(PoolName, Url, Opts) ->
 req(PoolName, Opts)
   when is_map(Opts) ->
     case process_opts(Opts) of
-        {ok, #req{url=undefined}} ->
+        {ok, #req{url = undefined}} ->
             {error, error_map(bad_opts, <<"[{url,undefined}]">>)};
         {ok, Req} ->
             Timeout = ?MODULE:get_timeout(Req),
-            Req2 = Req#req{timeout=Timeout},
+            Req2 = Req#req{timeout = Timeout},
             Ts = os:timestamp(),
             {Result, {Response, Metrics}} =
                 wpool:call(PoolName, Req2, random_worker, infinity),
@@ -537,7 +560,7 @@ init([CurlOpts]) ->
         {ok, Args} ->
             Prog = filename:join([code:priv_dir(katipo), "katipo"]),
             Port = open_port({spawn, Prog ++ " " ++ Args}, [{packet, 4}, binary]),
-            {ok, #state{port=Port, reqs=#{}}};
+            {ok, #state{port = Port, reqs = #{}}};
         {error, Error} ->
             {stop, Error}
     end.
@@ -567,6 +590,7 @@ handle_call(#req{method = Method,
                  lock_data_ssl_session = LockDataSslSession,
                  doh_url = DOHURL,
                  http_version = HTTPVersion,
+                 sslversion = SSLVersion,
                  verbose = Verbose,
                  sslcert = SSLCert,
                  sslkey = SSLKey,
@@ -574,7 +598,7 @@ handle_call(#req{method = Method,
                  keypasswd = KeyPasswd,
                  userpwd = UserPwd},
              From,
-             State=#state{port=Port, reqs=Reqs}) ->
+             State = #state{port = Port, reqs = Reqs}) ->
     {Self, Ref} = From,
     Opts = [{?CONNECTTIMEOUT_MS, ConnTimeoutMs},
             {?FOLLOWLOCATION, FollowLocation},
@@ -594,6 +618,7 @@ handle_call(#req{method = Method,
             {?LOCK_DATA_SSL_SESSION, LockDataSslSession},
             {?DOH_URL, DOHURL},
             {?HTTP_VERSION, HTTPVersion},
+            {?SSLVERSION, SSLVersion},
             {?VERBOSE, Verbose},
             {?SSLCERT, SSLCert},
             {?SSLKEY, SSLKey},
@@ -604,7 +629,7 @@ handle_call(#req{method = Method,
     true = port_command(Port, term_to_binary(Command)),
     Tref = erlang:start_timer(Timeout, self(), {req_timeout, From}),
     Reqs2 = maps:put(From, Tref, Reqs),
-    {noreply, State#state{reqs=Reqs2}}.
+    {noreply, State#state{reqs = Reqs2}}.
 
 %% @private
 handle_cast(Msg, State) ->
@@ -612,7 +637,7 @@ handle_cast(Msg, State) ->
     {noreply, State}.
 
 %% @private
-handle_info({Port, {data, Data}}, State=#state{port=Port, reqs=Reqs}) ->
+handle_info({Port, {data, Data}}, State = #state{port = Port, reqs = Reqs}) ->
     {Result, {From, Response}} =
         case binary_to_term(Data) of
             {ok, {From0, {Status, Headers, CookieJar, Body, Metrics}}} ->
@@ -633,8 +658,8 @@ handle_info({Port, {data, Data}}, State=#state{port=Port, reqs=Reqs}) ->
             ok
     end,
     Reqs2 = maps:remove(From, Reqs),
-    {noreply, State#state{reqs=Reqs2}};
-handle_info({timeout, Tref, {req_timeout, From}}, State=#state{reqs=Reqs}) ->
+    {noreply, State#state{reqs = Reqs2}};
+handle_info({timeout, Tref, {req_timeout, From}}, State = #state{reqs = Reqs}) ->
     Reqs2 =
         case maps:find(From, Reqs) of
             {ok, Tref} ->
@@ -645,13 +670,13 @@ handle_info({timeout, Tref, {req_timeout, From}}, State=#state{reqs=Reqs}) ->
             error ->
                 Reqs
         end,
-    {noreply, State#state{reqs=Reqs2}};
-handle_info({'EXIT', Port, Reason}, State=#state{port=Port}) ->
+    {noreply, State#state{reqs = Reqs2}};
+handle_info({'EXIT', Port, Reason}, State = #state{port = Port}) ->
     error_logger:error_msg("Port ~p died with reason: ~p", [Port, Reason]),
     {stop, port_died, State}.
 
 %% @private
-terminate(_Reason, #state{port=Port}) ->
+terminate(_Reason, #state{port = Port}) ->
     true = port_close(Port),
     ok.
 
@@ -725,24 +750,24 @@ mopt_supported({_, _}) ->
 
 %% @private
 -spec get_timeout(req()) -> pos_integer().
-get_timeout(#req{connecttimeout_ms=ConnMs, timeout_ms=ReqMs}) ->
+get_timeout(#req{connecttimeout_ms = ConnMs, timeout_ms = ReqMs}) ->
     max(ConnMs, ReqMs).
 
 opt(url, Url, {Req, Errors}) when is_binary(Url) ->
-    {Req#req{url=Url}, Errors};
+    {Req#req{url = Url}, Errors};
 opt(method, Method, {Req, Errors}) when is_atom(Method) ->
     case lists:member(Method, ?METHODS) of
         true ->
-            {Req#req{method=method_to_int(Method)}, Errors};
+            {Req#req{method = method_to_int(Method)}, Errors};
         false ->
             {Req, [{method, Method} | Errors]}
     end;
 opt(headers, Headers, {Req, Errors}) when is_list(Headers) ->
-    {Req#req{headers=headers_to_binary(Headers)}, Errors};
+    {Req#req{headers = headers_to_binary(Headers)}, Errors};
 opt(cookiejar, CookieJar, {Req, Errors}) when is_list(CookieJar) ->
     case lists:all(fun erlang:is_binary/1, CookieJar) of
         true ->
-            {Req#req{cookiejar=CookieJar}, Errors};
+            {Req#req{cookiejar = CookieJar}, Errors};
         false ->
             {Req, [{cookiejar, CookieJar} | Errors]}
     end;
@@ -751,97 +776,112 @@ opt(body, Body, {Req, Errors}) ->
         {error, Error} ->
             {Req, [{body, Error} | Errors]};
         {ok, Encoded} ->
-            {Req#req{body=Encoded}, Errors}
+            {Req#req{body = Encoded}, Errors}
     end;
 opt(connecttimeout_ms, Ms, {Req, Errors}) when is_integer(Ms) andalso Ms > 0 ->
-    {Req#req{connecttimeout_ms=Ms}, Errors};
+    {Req#req{connecttimeout_ms = Ms}, Errors};
 opt(followlocation, true, {Req, Errors}) ->
-    {Req#req{followlocation=?FOLLOWLOCATION_TRUE}, Errors};
+    {Req#req{followlocation = ?FOLLOWLOCATION_TRUE}, Errors};
 opt(followlocation, false, {Req, Errors}) ->
-    {Req#req{followlocation=?FOLLOWLOCATION_FALSE}, Errors};
+    {Req#req{followlocation = ?FOLLOWLOCATION_FALSE}, Errors};
 opt(ssl_verifyhost, true, {Req, Errors}) ->
-    {Req#req{ssl_verifyhost=?SSL_VERIFYHOST_TRUE}, Errors};
+    {Req#req{ssl_verifyhost = ?SSL_VERIFYHOST_TRUE}, Errors};
 opt(ssl_verifyhost, false, {Req, Errors}) ->
-    {Req#req{ssl_verifyhost=?SSL_VERIFYHOST_FALSE}, Errors};
+    {Req#req{ssl_verifyhost = ?SSL_VERIFYHOST_FALSE}, Errors};
 opt(ssl_verifypeer, true, {Req, Errors}) ->
-    {Req#req{ssl_verifypeer=?SSL_VERIFYPEER_TRUE}, Errors};
+    {Req#req{ssl_verifypeer = ?SSL_VERIFYPEER_TRUE}, Errors};
 opt(ssl_verifypeer, false, {Req, Errors}) ->
-    {Req#req{ssl_verifypeer=?SSL_VERIFYPEER_FALSE}, Errors};
+    {Req#req{ssl_verifypeer = ?SSL_VERIFYPEER_FALSE}, Errors};
 opt(capath, CAPath, {Req, Errors}) when is_binary(CAPath) ->
-    {Req#req{capath=CAPath}, Errors};
+    {Req#req{capath = CAPath}, Errors};
 opt(cacert, CACert, {Req, Errors}) when is_binary(CACert) ->
-    {Req#req{cacert=CACert}, Errors};
+    {Req#req{cacert = CACert}, Errors};
 opt(timeout_ms, Ms, {Req, Errors}) when is_integer(Ms) andalso Ms > 0 ->
-    {Req#req{timeout_ms=Ms}, Errors};
+    {Req#req{timeout_ms = Ms}, Errors};
 opt(maxredirs, M, {Req, Errors}) when is_integer(M) andalso M >= -1 ->
-    {Req#req{maxredirs=M}, Errors};
+    {Req#req{maxredirs = M}, Errors};
 opt(http_auth, basic, {Req, Errors}) ->
-    {Req#req{http_auth=?CURLAUTH_BASIC}, Errors};
+    {Req#req{http_auth = ?CURLAUTH_BASIC}, Errors};
 opt(http_auth, digest, {Req, Errors}) ->
-    {Req#req{http_auth=?CURLAUTH_DIGEST}, Errors};
+    {Req#req{http_auth = ?CURLAUTH_DIGEST}, Errors};
 opt(http_auth, ntlm, {Req, Errors}) ->
-    {Req#req{http_auth=?CURLAUTH_NTLM}, Errors};
+    {Req#req{http_auth = ?CURLAUTH_NTLM}, Errors};
 opt(http_auth, negotiate, {Req, Errors}) ->
-    {Req#req{http_auth=?CURLAUTH_NEGOTIATE}, Errors};
+    {Req#req{http_auth = ?CURLAUTH_NEGOTIATE}, Errors};
 opt(username, Username, {Req, Errors}) when is_binary(Username) ->
-    {Req#req{username=Username}, Errors};
+    {Req#req{username = Username}, Errors};
 opt(password, Password, {Req, Errors}) when is_binary(Password) ->
-    {Req#req{password=Password}, Errors};
+    {Req#req{password = Password}, Errors};
 opt(proxy, Proxy, {Req, Errors}) when is_binary(Proxy) ->
-    {Req#req{proxy=Proxy}, Errors};
+    {Req#req{proxy = Proxy}, Errors};
 opt(return_metrics, Flag, {Req, Errors}) when is_boolean(Flag) ->
-    {Req#req{return_metrics=Flag}, Errors};
+    {Req#req{return_metrics = Flag}, Errors};
 opt(tcp_fastopen, true, {Req, Errors}) when ?TCP_FASTOPEN_AVAILABLE ->
-    {Req#req{tcp_fastopen=?TCP_FASTOPEN_TRUE}, Errors};
+    {Req#req{tcp_fastopen = ?TCP_FASTOPEN_TRUE}, Errors};
 opt(tcp_fastopen, false, {Req, Errors}) when ?TCP_FASTOPEN_AVAILABLE ->
-    {Req#req{tcp_fastopen=?TCP_FASTOPEN_FALSE}, Errors};
+    {Req#req{tcp_fastopen = ?TCP_FASTOPEN_FALSE}, Errors};
 opt(interface, Interface, {Req, Errors}) when is_binary(Interface) ->
-    {Req#req{interface=Interface}, Errors};
+    {Req#req{interface = Interface}, Errors};
 opt(unix_socket_path, UnixSocketPath, {Req, Errors})
   when is_binary(UnixSocketPath) andalso ?UNIX_SOCKET_PATH_AVAILABLE ->
-    {Req#req{unix_socket_path=UnixSocketPath}, Errors};
+    {Req#req{unix_socket_path = UnixSocketPath}, Errors};
 opt(lock_data_ssl_session, true, {Req, Errors}) ->
-    {Req#req{lock_data_ssl_session=?LOCK_DATA_SSL_SESSION_TRUE}, Errors};
+    {Req#req{lock_data_ssl_session = ?LOCK_DATA_SSL_SESSION_TRUE}, Errors};
 opt(lock_data_ssl_session, false, {Req, Errors}) ->
-    {Req#req{lock_data_ssl_session=?LOCK_DATA_SSL_SESSION_FALSE}, Errors};
+    {Req#req{lock_data_ssl_session = ?LOCK_DATA_SSL_SESSION_FALSE}, Errors};
 opt(doh_url, DOHURL, {Req, Errors}) when ?DOH_URL_AVAILABLE andalso is_binary(DOHURL) ->
-    {Req#req{doh_url=DOHURL}, Errors};
+    {Req#req{doh_url = DOHURL}, Errors};
 opt(http_version, curl_http_version_none, {Req, Errors}) ->
-    {Req#req{http_version=0}, Errors};
+    {Req#req{http_version = 0}, Errors};
 opt(http_version, curl_http_version_1_0, {Req, Errors}) ->
-    {Req#req{http_version=1}, Errors};
+    {Req#req{http_version = 1}, Errors};
 opt(http_version, curl_http_version_1_1, {Req, Errors}) ->
-    {Req#req{http_version=2}, Errors};
+    {Req#req{http_version = 2}, Errors};
 opt(http_version, curl_http_version_2_0, {Req, Errors}) ->
-    {Req#req{http_version=3}, Errors};
+    {Req#req{http_version = 3}, Errors};
 opt(http_version, curl_http_version_2tls, {Req, Errors}) ->
-    {Req#req{http_version=4}, Errors};
+    {Req#req{http_version = 4}, Errors};
 opt(http_version, curl_http_version_2_prior_knowledge, {Req, Errors}) ->
-    {Req#req{http_version=5}, Errors};
-opt(http_version, curl_http_version_3, {Req, Errors}) ->
-    {Req#req{http_version=30}, Errors}; %% See https://github.com/curl/curl/blob/32d64b2e875f0d74cd433dff8bda9f8a98dcd44e/include/curl/curl.h#L1983
+    {Req#req{http_version = 5}, Errors};
+%% CURL_HTTP_VERSION_3 = 30
+%% See: https://github.com/curl/curl/blob/
+%%      32d64b2e875f0d74cd433dff8bda9f8a98dcd44e/include/curl/curl.h#L1983
+opt(http_version, curl_http_version_3, {Req, Errors}) when ?HTTP3_AVAILABLE ->
+    {Req#req{http_version = 30}, Errors};
+opt(sslversion, sslversion_default, {Req, Errors}) ->
+    {Req#req{sslversion = 0}, Errors};
+opt(sslversion, sslversion_tlsv1, {Req, Errors}) ->
+    {Req#req{sslversion = 1}, Errors};
+opt(sslversion, sslversion_tlsv1_0, {Req, Errors}) ->
+    {Req#req{sslversion = 4}, Errors};
+opt(sslversion, sslversion_tlsv1_1, {Req, Errors}) ->
+    {Req#req{sslversion = 5}, Errors};
+opt(sslversion, sslversion_tlsv1_2, {Req, Errors}) ->
+    {Req#req{sslversion = 6}, Errors};
+opt(sslversion, sslversion_tlsv1_3, {Req, Errors}) ->
+    {Req#req{sslversion = 7}, Errors};
 opt(verbose, true, {Req, Errors}) ->
-    {Req#req{verbose=?VERBOSE_TRUE}, Errors};
+    {Req#req{verbose = ?VERBOSE_TRUE}, Errors};
 opt(verbose, false, {Req, Errors}) ->
-    {Req#req{verbose=?VERBOSE_FALSE}, Errors};
+    {Req#req{verbose = ?VERBOSE_FALSE}, Errors};
 opt(sslcert, Cert, {Req, Errors}) when is_binary(Cert) ->
-    {Req#req{sslcert=Cert}, Errors};
+    {Req#req{sslcert = Cert}, Errors};
 opt(sslkey, Key, {Req, Errors}) when is_binary(Key) ->
-    {Req#req{sslkey=Key}, Errors};
+    {Req#req{sslkey = Key}, Errors};
 opt(sslkey_blob, Key, {Req, Errors})
   when ?SSLKEY_BLOB_AVAILABLE andalso is_binary(Key) ->
-    {Req#req{sslkey_blob=Key}, Errors};
+    {Req#req{sslkey_blob = Key}, Errors};
 opt(keypasswd, Pass, {Req, Errors}) when is_binary(Pass) ->
-    {Req#req{keypasswd=Pass}, Errors};
+    {Req#req{keypasswd = Pass}, Errors};
 opt(userpwd, UserPwd, {Req, Errors}) when is_binary(UserPwd) ->
-    {Req#req{userpwd=UserPwd}, Errors};
+    {Req#req{userpwd = UserPwd}, Errors};
 opt(K, V, {Req, Errors}) ->
     {Req, [{K, V} | Errors]}.
 
 -spec process_opts(request()) -> {ok, req()} | {error, map()}.
 process_opts(Opts) ->
     case maps:fold(fun opt/3, {#req{}, []}, Opts) of
-        {Req=#req{}, []} ->
+        {Req = #req{}, []} ->
             {ok, Req};
         {#req{}, Errors} ->
             {error, error_map(bad_opts, Errors)}

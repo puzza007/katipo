@@ -46,6 +46,7 @@
 #define K_CURLOPT_SSLKEY_BLOB 26
 #define K_CURLOPT_KEYPASSWD 27
 #define K_CURLOPT_USERPWD 28
+#define K_CURLOPT_SSLVERSION 29
 
 #define K_CURLAUTH_BASIC 100
 #define K_CURLAUTH_DIGEST 101
@@ -128,6 +129,7 @@ typedef struct _EasyOpts {
   long curlopt_sslkey_blob_size;
   char *curlopt_keypasswd;
   char *curlopt_userpwd;
+  long curlopt_sslversion;
 } EasyOpts;
 
 static const char *curl_error_code(CURLcode error) {
@@ -544,7 +546,6 @@ static void check_multi_info(GlobalInfo *global) {
   CURLcode res;
 
   while ((msg = curl_multi_info_read(global->multi, &msgs_left))) {
-    fprintf(stderr, "ZZZZ curl_multi_info_read\n");
     if (msg->msg == CURLMSG_DONE) {
       easy = msg->easy_handle;
       res = msg->data.result;
@@ -564,7 +565,6 @@ static void check_multi_info(GlobalInfo *global) {
         send_error_to_erlang(res, conn);
       }
 
-      fprintf(stderr, "ZZZZ curl_multi_remove_handle\n");
       curl_multi_remove_handle(global->multi, easy);
       free(conn->url);
       free(conn->pid);
@@ -672,7 +672,6 @@ static size_t write_cb(void *ptr, size_t size, size_t nmemb, void *data) {
   size_t realsize = size * nmemb;
   ConnInfo *conn = (ConnInfo *)data;
 
-  fprintf(stderr, "ZZZZ write_cb\n");
   conn->memory = (char *)realloc(conn->memory, conn->size + realsize);
   memcpy(&(conn->memory[conn->size]), ptr, realsize);
   conn->size += realsize;
@@ -682,34 +681,31 @@ static size_t write_cb(void *ptr, size_t size, size_t nmemb, void *data) {
 
 static size_t header_cb(void *ptr, size_t size, size_t nmemb, void *data) {
   size_t realsize = size * nmemb;
-  size_t adjusted_size = realsize;
   ConnInfo *conn = (ConnInfo *)data;
   char *header;
 
-  fprintf(stderr, "ZZZZ header_cb\n");
-  // the last two chars of headers are \r\n except for http3...
+  // Headers end with \r\n (CRLF). Strip trailing whitespace to get clean header.
+  // Modern curl normalizes HTTP/2 and HTTP/3 headers to HTTP/1.x style with \r\n.
   if (realsize > 2) {
     if (conn->resp_headers && is_status_line(ptr)) {
       curl_slist_free_all(conn->resp_headers);
       conn->resp_headers = NULL;
       conn->num_headers = 0;
     }
-    // TODO: understand better what's going on with http3
-    // headers. They don't seem to have the trailing \r\n that the
-    // former HTTP versions do
-    #if LIBCURL_VERSION_NUM >= 0x074200
-    long http_version;
-    curl_easy_getinfo(conn->easy, CURLINFO_HTTP_VERSION, &http_version);
-    if (http_version == CURL_HTTP_VERSION_3) {
-      adjusted_size += 1;
+    // Strip trailing \r\n, \n, or \r from header
+    size_t header_len = realsize;
+    const char *src = (const char *)ptr;
+    while (header_len > 0 && (src[header_len - 1] == '\r' || src[header_len - 1] == '\n')) {
+      header_len--;
     }
-    #endif
-    header = (char *)malloc(adjusted_size - 1);
-    strncpy(header, ptr, adjusted_size - 2);
-    header[adjusted_size - 2] = '\0';
-    conn->resp_headers = curl_slist_append(conn->resp_headers, header);
-    free(header);
-    conn->num_headers++;
+    if (header_len > 0) {
+      header = (char *)malloc(header_len + 1);
+      strncpy(header, src, header_len);
+      header[header_len] = '\0';
+      conn->resp_headers = curl_slist_append(conn->resp_headers, header);
+      free(header);
+      conn->num_headers++;
+    }
   }
   return realsize;
 }
@@ -810,6 +806,10 @@ static void new_conn(long method, char *url, struct curl_slist *req_headers,
                    eopts.curlopt_ssl_verifyhost);
   curl_easy_setopt(conn->easy, CURLOPT_SSL_VERIFYPEER,
                    eopts.curlopt_ssl_verifypeer);
+  if (eopts.curlopt_sslversion != 0) {
+    curl_easy_setopt(conn->easy, CURLOPT_SSLVERSION,
+                     eopts.curlopt_sslversion);
+  }
   if (eopts.curlopt_capath != NULL) {
     curl_easy_setopt(conn->easy, CURLOPT_CAPATH,
                      eopts.curlopt_capath);
@@ -916,7 +916,6 @@ static void new_conn(long method, char *url, struct curl_slist *req_headers,
 
   set_method(method, conn);
   rc = curl_multi_add_handle(global->multi, conn->easy);
-  fprintf(stderr, "ZZZZ curl_multi_add_handle\n");
   mcode_or_die("new_conn: curl_multi_add_handle", rc);
 }
 
@@ -1145,6 +1144,9 @@ static void erl_input(struct bufferevent *ev, void *arg) {
         case K_CURLOPT_VERBOSE:
           eopts.curlopt_verbose = eopt_long;
           break;
+        case K_CURLOPT_SSLVERSION:
+          eopts.curlopt_sslversion = eopt_long;
+          break;
         default:
           errx(2, "Unknown eopt long value %ld", eopt);
         }
@@ -1216,7 +1218,6 @@ static void erl_input(struct bufferevent *ev, void *arg) {
       errx(2, "Couldn't skip empty eopt list");
     }
 
-    fprintf(stderr, "ZZZZ new_conn\n");
     new_conn(method, url, req_headers, req_cookies, post_data,
              post_data_size, eopts, pid, ref, arg);
 
