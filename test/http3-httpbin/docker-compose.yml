@@ -1,0 +1,23 @@
+services:
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "8443:443"        # TCP for HTTP/1.1 and HTTP/2
+      - "8443:443/udp"    # UDP for HTTP/3 (QUIC)
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - httpbin
+
+  # Build httpbin locally for native arm64 support
+  httpbin:
+    build: .
+    expose:
+      - "80"
+
+volumes:
+  caddy_data:
+  caddy_config:

@@ -1,0 +1,14 @@
+{
+    # Enable debug logging
+    debug
+    # Skip ACME challenges since we're using localhost
+    skip_install_trust
+}
+
+localhost:443 {
+    # Auto-generate self-signed cert for localhost
+    tls internal
+
+    # Reverse proxy to httpbin (Python version runs on port 80)
+    reverse_proxy httpbin:80
+}
