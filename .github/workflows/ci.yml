@@ -8,8 +8,8 @@ jobs:
     name: Erlang/OTP ${{matrix.otp}} / rebar3 ${{matrix.rebar3}}
     strategy:
       matrix:
-        otp: ['26']
-        rebar3: ['3.18.0']
+        otp: ['27']
+        rebar3: ['3.24.0']
 
     steps:
       - uses: actions/checkout@v4
@@ -150,8 +150,8 @@ jobs:
 
       - uses: erlef/setup-beam@v1
         with:
-          otp-version: '26'
-          rebar3-version: '3.18.0'
+          otp-version: '27'
+          rebar3-version: '3.24.0'
 
       - name: Install dependencies
         run: |

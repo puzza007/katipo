@@ -268,7 +268,8 @@
         %% curlmopt_content_length_penalty_size |
         %% curlmopt_max_host_connections |
         max_pipeline_length |
-        curlmopt_max_total_connections |
+        max_total_connections |
+        max_concurrent_streams |
         %% curlmopt_maxconnects |
         pipelining.
         %% curlmopt_pipelining_site_bl |
@@ -441,9 +442,9 @@
 -record(req, {
           method = ?GET :: method_int(),
           url :: undefined | binary(),
-          headers = [] :: headers(),
+          headers = [] :: [binary()],
           cookiejar = [] :: cookiejar(),
-          body = <<>> :: body(),
+          body = <<>> :: iodata(),
           connecttimeout_ms = ?DEFAULT_REQ_TIMEOUT :: pos_integer(),
           followlocation = ?FOLLOWLOCATION_FALSE :: integer(),
           ssl_verifyhost = ?SSL_VERIFYHOST_TRUE :: integer(),
@@ -830,7 +831,7 @@ encode_body([{_, _} | _] = KVs) ->
 encode_body(Body) when is_binary(Body) orelse is_list(Body) ->
     {ok, Body};
 encode_body(Body) ->
-    {error, Body}.
+    {error, {invalid_body, Body}}.
 
 get_mopts(Opts) ->
     L = lists:filtermap(fun mopt_supported/1, Opts),
@@ -1028,5 +1029,6 @@ check_opts(Opts) when is_map(Opts) ->
 error_map(Code, Message) when is_atom(Code) andalso is_binary(Message) ->
     #{code => Code, message => Message};
 error_map(Code, Message) when is_atom(Code) ->
-    BinaryMessage = iolist_to_binary(io_lib:format("~p", [Message])),
+    Chars = io_lib:format("~p", [Message]),
+    BinaryMessage = unicode:characters_to_binary(Chars),
     error_map(Code, BinaryMessage).
