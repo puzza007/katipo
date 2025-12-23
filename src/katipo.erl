@@ -39,6 +39,9 @@
 -export([sslkey_blob_available/0]).
 -export([http3_available/0]).
 
+%% eqwalizer: ignore do_req/2 because wpool:call returns term()
+-eqwalizer({nowarn_function, do_req/2}).
+
 -ifdef(tcp_fastopen_available).
 -define(TCP_FASTOPEN_AVAILABLE, true).
 -else.
@@ -236,7 +239,7 @@
         %% curlmopt_content_length_penalty_size |
         %% curlmopt_max_host_connections |
         max_pipeline_length |
-        curlmopt_max_total_connections |
+        max_total_connections |
         %% curlmopt_maxconnects |
         pipelining.
         %% curlmopt_pipelining_site_bl |
@@ -406,9 +409,9 @@
 -record(req, {
           method = ?GET :: method_int(),
           url :: undefined | binary(),
-          headers = [] :: headers(),
+          headers = [] :: [binary()],
           cookiejar = [] :: cookiejar(),
-          body = <<>> :: body(),
+          body = <<>> :: iodata(),
           connecttimeout_ms = ?DEFAULT_REQ_TIMEOUT :: pos_integer(),
           followlocation = ?FOLLOWLOCATION_FALSE :: integer(),
           ssl_verifyhost = ?SSL_VERIFYHOST_TRUE :: integer(),
@@ -429,8 +432,8 @@
           lock_data_ssl_session = ?LOCK_DATA_SSL_SESSION_FALSE ::
             ?LOCK_DATA_SSL_SESSION_FALSE | ?LOCK_DATA_SSL_SESSION_TRUE,
           doh_url = undefined :: undefined | doh_url(),
-          http_version = curl_http_version_none :: curlopt_http_version(),
-          sslversion = sslversion_default :: curlopt_sslversion(),
+          http_version = 0 :: non_neg_integer(),
+          sslversion = 0 :: non_neg_integer(),
           verbose = ?VERBOSE_FALSE :: ?VERBOSE_FALSE | ?VERBOSE_TRUE,
           sslcert = undefined :: undefined | binary() | file:name_all(),
           sslkey = undefined :: undefined | binary() | file:name_all(),
@@ -531,9 +534,24 @@ delete(PoolName, Url, Opts) ->
 req(PoolName, Opts)
   when is_map(Opts) ->
     case process_opts(Opts) of
-        {ok, #req{url = undefined}} ->
-            {error, error_map(bad_opts, <<"[{url,undefined}]">>)};
         {ok, Req} ->
+            do_req(PoolName, Req);
+        {error, _} = Error ->
+            ok = katipo_metrics:notify_error(),
+            Error
+    end.
+
+%% Note: Gradualizer reports a false positive on ?MODULE:get_timeout(Req) below.
+%% It claims "expected req() but got #req{}" but req() :: #req{}, so they're identical.
+%% The ?MODULE: prefix is required for meck mocking in tests.
+%% eqwalizer: wpool:call returns term(), so types can't be inferred
+-spec do_req(katipo_pool:name(), req()) -> response().
+do_req(PoolName, Req) ->
+    case Req#req.url of
+        undefined ->
+            {error, error_map(bad_opts, <<"[{url,undefined}]">>)};
+        _ ->
+            %% Use ?MODULE: to allow mocking in tests
             Timeout = ?MODULE:get_timeout(Req),
             Req2 = Req#req{timeout = Timeout},
             Ts = os:timestamp(),
@@ -542,10 +560,7 @@ req(PoolName, Opts)
             TotalUs = timer:now_diff(os:timestamp(), Ts),
             Metrics2 = katipo_metrics:notify({Result, Response}, Metrics, TotalUs),
             Response2 = maybe_return_metrics(Req2, Metrics2, Response),
-            {Result, Response2};
-        {error, _} = Error ->
-            ok = katipo_metrics:notify_error(),
-            Error
+            {Result, Response2}
     end.
 
 %% @private
@@ -556,13 +571,18 @@ start_link(CurlOpts) when is_list(CurlOpts) ->
 %% @private
 init([CurlOpts]) ->
     process_flag(trap_exit, true),
-    case get_mopts(CurlOpts) of
-        {ok, Args} ->
-            Prog = filename:join([code:priv_dir(katipo), "katipo"]),
-            Port = open_port({spawn, Prog ++ " " ++ Args}, [{packet, 4}, binary]),
-            {ok, #state{port = Port, reqs = #{}}};
-        {error, Error} ->
-            {stop, Error}
+    case code:priv_dir(katipo) of
+        {error, bad_name} ->
+            {stop, {error, priv_dir_not_found}};
+        PrivDir ->
+            case get_mopts(CurlOpts) of
+                {ok, Args} ->
+                    Prog = filename:join([PrivDir, "katipo"]),
+                    Port = open_port({spawn, Prog ++ " " ++ Args}, [{packet, 4}, binary]),
+                    {ok, #state{port = Port, reqs = #{}}};
+                {error, Error} ->
+                    {stop, Error}
+            end
     end.
 
 %% @private
@@ -698,6 +718,8 @@ method_to_int(patch)   -> ?PATCH;
 method_to_int(delete)  -> ?DELETE.
 
 -spec parse_headers([binary()]) -> headers().
+parse_headers([]) ->
+    [];
 parse_headers([_StatusLine | Lines]) ->
     [parse_header(L) || L <- Lines].
 
@@ -720,7 +742,7 @@ encode_body([{_, _} | _] = KVs) ->
 encode_body(Body) when is_binary(Body) orelse is_list(Body) ->
     {ok, Body};
 encode_body(Body) ->
-    {error, Body}.
+    {error, {invalid_body, Body}}.
 
 get_mopts(Opts) ->
     L = lists:filtermap(fun mopt_supported/1, Opts),
@@ -732,7 +754,7 @@ get_mopts(Opts) ->
             {error, {bad_opts, Opts}}
     end.
 
--spec mopt_supported({curlmopt(), any()}) -> false | {true, any()}.
+-spec mopt_supported({curlmopt(), any()}) -> false | {true, string()}.
 mopt_supported({max_pipeline_length, Val})
   when is_integer(Val) andalso Val >= 0 ->
     {true, "--max-pipeline-length " ++ integer_to_list(Val)};
@@ -905,5 +927,6 @@ maybe_return_metrics(_Req, _Metrics, Response) ->
 error_map(Code, Message) when is_atom(Code) andalso is_binary(Message) ->
     #{code => Code, message => Message};
 error_map(Code, Message) when is_atom(Code) ->
-    BinaryMessage = iolist_to_binary(io_lib:format("~p", [Message])),
+    Chars = io_lib:format("~p", [Message]),
+    BinaryMessage = unicode:characters_to_binary(Chars),
     error_map(Code, BinaryMessage).
