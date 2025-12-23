@@ -72,11 +72,6 @@ katipo:Method(Pool :: atom(), URL :: binary(), ReqOptions :: map()).
 
 ```
 
-#### Application Config
-| Option | Values | Default | Notes |
-|:-------|:-------|:--------|:------|
-| `mod_metrics` | <code>folsom &#124; exometer &#124; noop</code> | `noop` | see [erlang-metrics](https://github.com/benoitc/erlang-metrics) |
-
 #### Request options
 
 | Option                  | Type                                | Default     | Notes                                                                               |
@@ -93,7 +88,6 @@ katipo:Method(Pool :: atom(), URL :: binary(), ReqOptions :: map()).
 | `timeout_ms`            | `pos_integer()`                     | 30000       | [docs](https://curl.haxx.se/libcurl/c/CURLOPT_TIMEOUT_MS.html)                      |
 | `maxredirs`             | `non_neg_integer()`                 | 9           | [docs](https://curl.haxx.se/libcurl/c/CURLOPT_MAXREDIRS.html)                       |
 | `proxy`                 | `binary()`                          | `undefined` | [docs](https://curl.haxx.se/libcurl/c/CURLOPT_PROXY.html)                           |
-| `return_metrics`        | `boolean()`                         | `false`     |                                                                                     |
 | `tcp_fastopen`          | `boolean()`                         | `false`     | [docs](https://curl.haxx.se/libcurl/c/CURLOPT_TCP_FASTOPEN.html) curl >= 7.49.0     |
 | `interface`             | `binary()`                          | `undefined` | [docs](https://curl.haxx.se/libcurl/c/CURLOPT_INTERFACE.html)                       |
 | `unix_socket_path`      | `binary()`                          | `undefined` | [docs](https://curl.haxx.se/libcurl/c/CURLOPT_UNIX_SOCKET_PATH.html) curl >= 7.40.0 |
@@ -117,8 +111,7 @@ katipo:Method(Pool :: atom(), URL :: binary(), ReqOptions :: map()).
 {ok, #{status := pos_integer(),
        headers := headers(),
        cookiejar := cookiejar(),
-       body := body(),
-       metrics => proplist()}}
+       body := body()}}
 
 {error, #{code := atom(), message := binary()}}
 ```
@@ -131,19 +124,81 @@ katipo:Method(Pool :: atom(), URL :: binary(), ReqOptions :: map()).
 | `max_pipeline_length`   | `non_neg_integer()`           | 100          |                                                                                                |
 | `max_total_connections` | `non_neg_integer()`           | 0 (no limit) | [docs](https://curl.haxx.se/libcurl/c/CURLMOPT_MAX_TOTAL_CONNECTIONS.html)                     |
 
-#### Metrics
+#### Observability
 
-* ok
-* error
-* status.XXX
-* total_time
-* curl_time
-* namelookup_time
-* connect_time
-* appconnect_time
-* pretransfer_time
-* redirect_time
-* starttransfer_time
+Katipo uses [OpenTelemetry](https://opentelemetry.io/) for tracing and metrics.
+
+##### Tracing
+
+Each HTTP request creates a span with the following attributes:
+
+| Attribute | Description |
+|:----------|:------------|
+| `http.request.method` | HTTP method (GET, POST, etc.) |
+| `url.full` | Request URL (query string, fragment and userinfo are stripped for security) |
+| `server.address` | Target host |
+| `http.response.status_code` | Response status code (on success) |
+
+##### Metrics
+
+The following metrics are recorded:
+
+| Metric | Type | Description |
+|:-------|:-----|:------------|
+| `http.client.requests` | Counter | Number of HTTP requests (with `result` and `http.response.status_code` attributes) |
+| `http.client.duration` | Histogram | Total request duration (ms) |
+| `http.client.curl_time` | Histogram | Curl total time (ms) |
+| `http.client.namelookup_time` | Histogram | DNS lookup time (ms) |
+| `http.client.connect_time` | Histogram | Connection time (ms) |
+| `http.client.appconnect_time` | Histogram | SSL/TLS handshake time (ms) |
+| `http.client.pretransfer_time` | Histogram | Pre-transfer time (ms) |
+| `http.client.redirect_time` | Histogram | Redirect processing time (ms) |
+| `http.client.starttransfer_time` | Histogram | Time to first byte (ms) |
+
+All histogram metrics include the `http.request.method` attribute for filtering by HTTP method.
+
+##### Enabling OpenTelemetry Export
+
+The OpenTelemetry API is a no-op by default. To export telemetry data add the OpenTelemetry SDK and an exporter to your release:
+
+```erlang
+%% In rebar.config
+{deps, [
+    {opentelemetry, "1.5.0"},
+    {opentelemetry_experimental, "0.5.1"},
+    {opentelemetry_exporter, "1.8.0"}
+]}.
+```
+
+Configure the exporter in your `sys.config`:
+
+```erlang
+[
+ {opentelemetry, [
+   {span_processor, batch},
+   {traces_exporter, otlp}
+ ]},
+ {opentelemetry_experimental, [
+   {readers, [
+     #{module => otel_metric_reader,
+       config => #{exporter => {opentelemetry_exporter, #{}}}}
+   ]}
+ ]},
+ {opentelemetry_exporter, [
+   {otlp_endpoint, "http://localhost:4318"}
+ ]}
+].
+```
+
+##### Migration from metrics library
+
+If you were using the previous `metrics` library integration, note the following breaking changes:
+
+- The `mod_metrics` application environment option has been removed
+- The `return_metrics` request option has been removed
+- The `metrics` field is no longer included in response maps
+
+To access timing metrics, configure an OpenTelemetry exporter as shown above. The histogram metrics provide the same timing data (DNS lookup, connect time, TLS handshake, etc.) that was previously available via `return_metrics`.
 
 ### System dependencies
 

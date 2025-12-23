@@ -38,6 +38,9 @@
 -export([doh_url_available/0]).
 -export([sslkey_blob_available/0]).
 -export([http3_available/0]).
+-export([parse_url_for_span/1]). %% exported for testing
+
+-include_lib("opentelemetry_api/include/otel_tracer.hrl").
 
 -ifdef(tcp_fastopen_available).
 -define(TCP_FASTOPEN_AVAILABLE, true).
@@ -297,7 +300,6 @@
                     username => binary(),
                     password => binary(),
                     proxy => proxy(),
-                    return_metrics => boolean(),
                     tcp_fastopen => tcp_fastopen(),
                     interface => interface(),
                     unix_socket_path => unix_socket_path(),
@@ -325,7 +327,6 @@
                     username => binary(),
                     password => binary(),
                     proxy => proxy(),
-                    return_metrics => boolean(),
                     tcp_fastopen => tcp_fastopen(),
                     interface => interface(),
                     unix_socket_path => unix_socket_path(),
@@ -422,7 +423,6 @@
           username = undefined :: undefined | binary(),
           password = undefined :: undefined | binary(),
           proxy = undefined :: undefined | binary(),
-          return_metrics = false :: boolean(),
           tcp_fastopen = ?TCP_FASTOPEN_FALSE :: ?TCP_FASTOPEN_FALSE | ?TCP_FASTOPEN_TRUE,
           interface = undefined :: undefined | binary(),
           unix_socket_path = undefined :: undefined | binary(),
@@ -534,18 +534,89 @@ req(PoolName, Opts)
         {ok, #req{url = undefined}} ->
             {error, error_map(bad_opts, <<"[{url,undefined}]">>)};
         {ok, Req} ->
-            Timeout = ?MODULE:get_timeout(Req),
-            Req2 = Req#req{timeout = Timeout},
-            Ts = os:timestamp(),
-            {Result, {Response, Metrics}} =
-                wpool:call(PoolName, Req2, random_worker, infinity),
-            TotalUs = timer:now_diff(os:timestamp(), Ts),
-            Metrics2 = katipo_metrics:notify({Result, Response}, Metrics, TotalUs),
-            Response2 = maybe_return_metrics(Req2, Metrics2, Response),
-            {Result, Response2};
+            do_req_with_span(PoolName, Req);
         {error, _} = Error ->
-            ok = katipo_metrics:notify_error(),
             Error
+    end.
+
+%% @private
+do_req_with_span(PoolName, Req) ->
+    #req{method = MethodInt, url = Url} = Req,
+    Method = method_int_to_binary(MethodInt),
+    SpanName = <<"HTTP ", Method/binary>>,
+    ?with_span(SpanName, #{kind => client}, fun(SpanCtx) ->
+        %% Only parse URL and set attributes if span is actually recording
+        %% (avoids overhead when OTel SDK is not configured)
+        case otel_span:is_recording(SpanCtx) of
+            true ->
+                ?set_attribute('http.request.method', Method),
+                set_url_span_attrs(Url);
+            false ->
+                ok
+        end,
+        Timeout = ?MODULE:get_timeout(Req),
+        Req2 = Req#req{timeout = Timeout},
+        Ts = os:timestamp(),
+        {Result, {Response, Metrics}} =
+            wpool:call(PoolName, Req2, random_worker, infinity),
+        TotalUs = timer:now_diff(os:timestamp(), Ts),
+        %% Set span attributes based on response
+        set_response_span_attrs(Result, Response),
+        _ = katipo_metrics:notify({Result, Response}, Metrics, TotalUs, Method),
+        {Result, Response}
+    end).
+
+%% @private
+set_response_span_attrs(ok, #{status := Status}) ->
+    ?set_attribute('http.response.status_code', Status),
+    case Status >= 400 of
+        true -> ?set_status(error, <<>>);
+        false -> ok
+    end;
+set_response_span_attrs(error, #{code := Code, message := _Msg}) ->
+    %% Don't include error message in span - it may contain sensitive URL info
+    ?set_status(error, <<>>),
+    ?set_attribute('error.type', Code);
+set_response_span_attrs(_, _) ->
+    ok.
+
+%% @private
+method_int_to_binary(?GET) -> <<"GET">>;
+method_int_to_binary(?POST) -> <<"POST">>;
+method_int_to_binary(?PUT) -> <<"PUT">>;
+method_int_to_binary(?HEAD) -> <<"HEAD">>;
+method_int_to_binary(?OPTIONS) -> <<"OPTIONS">>;
+method_int_to_binary(?PATCH) -> <<"PATCH">>;
+method_int_to_binary(?DELETE) -> <<"DELETE">>.
+
+%% @private
+set_url_span_attrs(Url) ->
+    case parse_url_for_span(Url) of
+        {<<>>, _} ->
+            ok;
+        {SanitizedUrl, Host} ->
+            ?set_attribute('url.full', SanitizedUrl),
+            ?set_attribute('server.address', Host)
+    end.
+
+%% @private
+%% Parse URL once, returning sanitized URL (no query/fragment) and host
+parse_url_for_span(Url) when is_binary(Url) ->
+    case uri_string:parse(Url) of
+        #{host := Host} = Parsed ->
+            Sanitized = sanitize_parsed_url(Parsed),
+            {Sanitized, unicode:characters_to_binary(Host)};
+        _ ->
+            {<<>>, <<>>}
+    end.
+
+%% @private
+%% Remove query, fragment, and userinfo (credentials) from URL
+sanitize_parsed_url(Parsed) ->
+    Sanitized = maps:without([query, fragment, userinfo], Parsed),
+    case uri_string:recompose(Sanitized) of
+        {error, _, _} -> <<>>;
+        Recomposed -> iolist_to_binary(Recomposed)
     end.
 
 %% @private
@@ -628,7 +699,7 @@ handle_call(#req{method = Method,
     Command = {Self, Ref, Method, Url, Headers, CookieJar, Body, Opts},
     true = port_command(Port, term_to_binary(Command)),
     Tref = erlang:start_timer(Timeout, self(), {req_timeout, From}),
-    Reqs2 = maps:put(From, Tref, Reqs),
+    Reqs2 = Reqs#{From => Tref},
     {noreply, State#state{reqs = Reqs2}}.
 
 %% @private
@@ -814,8 +885,6 @@ opt(password, Password, {Req, Errors}) when is_binary(Password) ->
     {Req#req{password = Password}, Errors};
 opt(proxy, Proxy, {Req, Errors}) when is_binary(Proxy) ->
     {Req#req{proxy = Proxy}, Errors};
-opt(return_metrics, Flag, {Req, Errors}) when is_boolean(Flag) ->
-    {Req#req{return_metrics = Flag}, Errors};
 opt(tcp_fastopen, true, {Req, Errors}) when ?TCP_FASTOPEN_AVAILABLE ->
     {Req#req{tcp_fastopen = ?TCP_FASTOPEN_TRUE}, Errors};
 opt(tcp_fastopen, false, {Req, Errors}) when ?TCP_FASTOPEN_AVAILABLE ->
@@ -896,11 +965,6 @@ check_opts(Opts) when is_map(Opts) ->
         {error, _} = Error ->
             Error
     end.
-
-maybe_return_metrics(#req{return_metrics = true}, Metrics, Response) ->
-    maps:put(metrics, Metrics, Response);
-maybe_return_metrics(_Req, _Metrics, Response) ->
-    Response.
 
 error_map(Code, Message) when is_atom(Code) andalso is_binary(Message) ->
     #{code => Code, message => Message};

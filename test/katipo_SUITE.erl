@@ -5,6 +5,7 @@
 
 -include_lib("common_test/include/ct.hrl").
 -include_lib("stdlib/include/assert.hrl").
+-include_lib("opentelemetry/include/otel_span.hrl").
 
 -define(POOL, katipo_test_pool).
 -define(POOL_SIZE, 2).
@@ -13,6 +14,9 @@ suite() ->
     [{timetrap, {seconds, 30}}].
 
 init_per_suite(Config) ->
+    %% Start OpenTelemetry SDKs for proper metrics/tracing support in tests
+    application:ensure_all_started(opentelemetry),
+    application:ensure_all_started(opentelemetry_experimental),
     application:ensure_all_started(katipo),
     application:ensure_all_started(meck),
     {ok, _} = katipo_pool:start(?POOL, ?POOL_SIZE),
@@ -28,6 +32,10 @@ init_per_suite(Config) ->
 end_per_suite(_Config) ->
     ok = application:stop(katipo).
 
+init_per_group(otel, Config) ->
+    %% OTel tests will configure their own exporters since each test
+    %% runs in its own process
+    Config;
 init_per_group(curl, Config) ->
     application:ensure_all_started(cowboy),
     Filename = tempfile:name("katipo_test_"),
@@ -78,6 +86,8 @@ init_per_group(digest, Config) ->
 init_per_group(_, Config) ->
     Config.
 
+end_per_group(otel, Config) ->
+    Config;
 end_per_group(curl, Config) ->
     Filename = ?config(unix_socket_file, Config),
     Name = ?config(unix_server_name, Config),
@@ -182,9 +192,10 @@ groups() ->
       [badssl_client_cert]},
      {port, [],
       [max_total_connections]},
-     {metrics, [],
-      [metrics_true,
-       metrics_false]},
+     {otel, [],
+      [otel_span_created,
+       otel_metrics_recorded,
+       otel_url_sanitization]},
      {http1, [parallel],
       [{group, http},
        {group, https}]},
@@ -202,7 +213,7 @@ all() ->
                   {group, pool},
                   {group, https_mutual},
                   {group, port},
-                  {group, metrics}],
+                  {group, otel}],
     %% HTTP/2 tests always run (local httpbin supports HTTP/2)
     Http2Groups = [{group, http2}],
     %% HTTP/3 tests run when KATIPO_TEST_HTTP3 is set
@@ -954,41 +965,6 @@ max_total_connections(Config) ->
     ok = katipo_pool:stop(PoolName),
     true = Diff >= 10.
 
-metrics_true(Config) ->
-    ok = meck:new(metrics, [passthrough]),
-    ok = meck:expect(metrics, update_or_create,
-                     fun(X, _, spiral) when X =:= "katipo.status.200" orelse
-                                            X =:= "katipo.ok" ->
-                             ok;
-                        (X, _, histogram) when X =:= "katipo.curl_time" orelse
-                                               X =:= "katipo.total_time" orelse
-                                               X =:= "katipo.namelookup_time" orelse
-                                               X =:= "katipo.connect_time" orelse
-                                               X =:= "katipo.appconnect_time" orelse
-                                               X =:= "katipo.pretransfer_time" orelse
-                                               X =:= "katipo.redirect_time" orelse
-                                               X =:= "katipo.starttransfer_time" ->
-                             ok
-                     end),
-    Url = httpbin_url(Config, <<"/get">>),
-    BaseOpts = ?config(httpbin_opts, Config),
-    {ok, #{status := 200, metrics := Metrics}} =
-        katipo:head(?POOL, Url, BaseOpts#{return_metrics => true}),
-    10 = meck:num_calls(metrics, update_or_create, 3),
-    MetricKeys = [K || {K, _} <- Metrics],
-    ExpectedMetricKeys = [curl_time,total_time,namelookup_time,connect_time,
-                          appconnect_time,pretransfer_time,redirect_time,
-                          starttransfer_time],
-    true = lists:sort(MetricKeys) == lists:sort(ExpectedMetricKeys),
-    meck:unload(metrics).
-
-metrics_false(Config) ->
-    Url = httpbin_url(Config, <<"/get">>),
-    BaseOpts = ?config(httpbin_opts, Config),
-    {ok, #{status := 200} = Res} =
-        katipo:head(?POOL, Url, BaseOpts#{return_metrics => false}),
-    false = maps:is_key(metrics, Res).
-
 repeat_until_true(Fun) ->
     try
         case Fun() of
@@ -1006,3 +982,112 @@ repeat_until_true(Fun) ->
 httpbin_url(Config, Path) ->
     Base = ?config(httpbin_base, Config),
     <<Base/binary, Path/binary>>.
+
+%% OpenTelemetry integration tests
+
+otel_span_created(_Config) ->
+    Self = self(),
+    application:set_env(opentelemetry, processors,
+                        [{otel_simple_processor, #{exporter => {otel_exporter_pid, Self}}}]),
+    application:stop(opentelemetry),
+    {ok, _} = application:ensure_all_started(opentelemetry),
+
+    {ok, #{status := 200}} =
+        katipo:get(?POOL, <<"https://localhost:8443/get">>,
+                   #{ssl_verifyhost => false, ssl_verifypeer => false}),
+    receive
+        {span, #span{name = SpanName}} ->
+            ?assertEqual(<<"HTTP GET">>, SpanName)
+    after 5000 ->
+        ct:fail("Timeout waiting for span")
+    end.
+
+otel_metrics_recorded(_Config) ->
+    Self = self(),
+    ReadersConfig = [#{module => otel_metric_reader,
+                       config => #{exporter => {otel_metric_exporter_pid, Self},
+                                  export_interval_ms => 100}}],
+    application:set_env(opentelemetry_experimental, readers, ReadersConfig),
+    application:stop(opentelemetry_experimental),
+    {ok, _} = application:ensure_all_started(opentelemetry_experimental),
+
+    %% Re-register instruments with new meter provider
+    ok = katipo_metrics:init(),
+
+    flush_otel_metrics(),
+    {ok, #{status := 200}} =
+        katipo:get(?POOL, <<"https://localhost:8443/get">>,
+                   #{ssl_verifyhost => false, ssl_verifypeer => false}),
+
+    ok = otel_meter_server:force_flush(),
+    timer:sleep(300),
+
+    Metrics = collect_otel_metrics(),
+    ?assert(length(Metrics) > 0),
+    HasRequestCounter = lists:any(
+        fun(Metric) ->
+            case Metric of
+                {Name, _, _, _} when Name =:= 'http.client.requests' -> true;
+                _ -> metric_contains_name(Metric, 'http.client.requests')
+            end
+        end, Metrics),
+    ?assert(HasRequestCounter).
+
+flush_otel_metrics() ->
+    receive
+        {otel_metric, _} -> flush_otel_metrics()
+    after 0 -> ok
+    end.
+
+collect_otel_metrics() ->
+    collect_otel_metrics([]).
+
+collect_otel_metrics(Acc) ->
+    receive
+        {otel_metric, Metric} ->
+            collect_otel_metrics([Metric | Acc])
+    after 100 ->
+        lists:reverse(Acc)
+    end.
+
+metric_contains_name(Metric, Name) when is_tuple(Metric) ->
+    metric_contains_name(tuple_to_list(Metric), Name);
+metric_contains_name([Name | _], Name) when is_atom(Name) ->
+    true;
+metric_contains_name([H | T], Name) ->
+    metric_contains_name(H, Name) orelse metric_contains_name(T, Name);
+metric_contains_name(_, _) ->
+    false.
+
+otel_url_sanitization(_Config) ->
+    %% Test that query strings are stripped (prevents leaking API keys, tokens, etc.)
+    {Url1, Host1} = katipo:parse_url_for_span(<<"https://api.example.com/users?api_key=secret123&token=abc">>),
+    ?assertEqual(<<"https://api.example.com/users">>, Url1),
+    ?assertEqual(<<"api.example.com">>, Host1),
+
+    %% Test that fragments are stripped
+    {Url2, Host2} = katipo:parse_url_for_span(<<"https://example.com/page#section">>),
+    ?assertEqual(<<"https://example.com/page">>, Url2),
+    ?assertEqual(<<"example.com">>, Host2),
+
+    %% Test that both query and fragment are stripped
+    {Url3, Host3} = katipo:parse_url_for_span(<<"https://example.com/path?foo=bar#anchor">>),
+    ?assertEqual(<<"https://example.com/path">>, Url3),
+    ?assertEqual(<<"example.com">>, Host3),
+
+    %% Test URL without query or fragment is unchanged
+    {Url4, Host4} = katipo:parse_url_for_span(<<"https://example.com/path">>),
+    ?assertEqual(<<"https://example.com/path">>, Url4),
+    ?assertEqual(<<"example.com">>, Host4),
+
+    %% Test URL with port
+    {Url5, Host5} = katipo:parse_url_for_span(<<"https://example.com:8443/api?secret=value">>),
+    ?assertEqual(<<"https://example.com:8443/api">>, Url5),
+    ?assertEqual(<<"example.com">>, Host5),
+
+    %% Test URL with userinfo - credentials are stripped for security
+    {Url6, Host6} = katipo:parse_url_for_span(<<"https://user:pass@example.com/path?token=x">>),
+    ?assertEqual(<<"https://example.com/path">>, Url6),
+    ?assertEqual(<<"example.com">>, Host6),
+
+    ok.
