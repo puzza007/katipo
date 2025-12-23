@@ -1,63 +1,113 @@
 %% @hidden
 -module(katipo_metrics).
 
+-include_lib("opentelemetry_api_experimental/include/otel_meter.hrl").
+
+%% Suppress dialyzer warnings from OTel macro expansion
+%% (macros use is_atom checks that always match since we use atom names)
+-dialyzer({nowarn_function, [notify/4, record_timing/3]}).
+
 -export([init/0]).
--export([notify/3]).
--export([notify_error/0]).
+-export([notify/4]).
 
--spec notify(katipo:response(), katipo:metrics(), number()) -> katipo:metrics().
-notify({ok, Response}, Metrics, TotalUs) ->
+%% Metric names
+-define(REQUESTS_COUNTER, 'http.client.requests').
+-define(DURATION_HISTOGRAM, 'http.client.duration').
+-define(CURL_TIME_HISTOGRAM, 'http.client.curl_time').
+-define(NAMELOOKUP_TIME_HISTOGRAM, 'http.client.namelookup_time').
+-define(CONNECT_TIME_HISTOGRAM, 'http.client.connect_time').
+-define(APPCONNECT_TIME_HISTOGRAM, 'http.client.appconnect_time').
+-define(PRETRANSFER_TIME_HISTOGRAM, 'http.client.pretransfer_time').
+-define(REDIRECT_TIME_HISTOGRAM, 'http.client.redirect_time').
+-define(STARTTRANSFER_TIME_HISTOGRAM, 'http.client.starttransfer_time').
+
+-spec init() -> ok.
+init() ->
+    %% Create request counter
+    _ = ?create_counter(?REQUESTS_COUNTER, #{
+        description => <<"Number of HTTP requests made">>,
+        unit => request
+    }),
+    %% Create timing histograms
+    _ = ?create_histogram(?DURATION_HISTOGRAM, #{
+        description => <<"Total request duration (Erlang-side)">>,
+        unit => ms
+    }),
+    _ = ?create_histogram(?CURL_TIME_HISTOGRAM, #{
+        description => <<"Curl total time">>,
+        unit => ms
+    }),
+    _ = ?create_histogram(?NAMELOOKUP_TIME_HISTOGRAM, #{
+        description => <<"DNS lookup time">>,
+        unit => ms
+    }),
+    _ = ?create_histogram(?CONNECT_TIME_HISTOGRAM, #{
+        description => <<"Connection time">>,
+        unit => ms
+    }),
+    _ = ?create_histogram(?APPCONNECT_TIME_HISTOGRAM, #{
+        description => <<"SSL/TLS handshake time">>,
+        unit => ms
+    }),
+    _ = ?create_histogram(?PRETRANSFER_TIME_HISTOGRAM, #{
+        description => <<"Pre-transfer time">>,
+        unit => ms
+    }),
+    _ = ?create_histogram(?REDIRECT_TIME_HISTOGRAM, #{
+        description => <<"Redirect processing time">>,
+        unit => ms
+    }),
+    _ = ?create_histogram(?STARTTRANSFER_TIME_HISTOGRAM, #{
+        description => <<"Time to first byte">>,
+        unit => ms
+    }),
+    ok.
+
+-spec notify(katipo:response(), katipo:metrics(), number(), binary()) -> katipo:metrics().
+notify({ok, Response}, Metrics, TotalUs, Method) ->
     #{status := Status} = Response,
-    StatusMetric = status_metric_name(Status),
-    ok = metrics:update_or_create(StatusMetric, {c, 1}, spiral),
-    OkMetric = name(ok),
-    ok = metrics:update_or_create(OkMetric, {c, 1}, spiral),
-    notify_metrics(Metrics, TotalUs);
-notify({error, _Error}, Metrics, TotalUs) ->
-    ok = notify_error(),
-    notify_metrics(Metrics, TotalUs).
+    Attrs = #{result => ok, 'http.response.status_code' => Status},
+    ?counter_add(?REQUESTS_COUNTER, 1, Attrs),
+    notify_timing_metrics(Metrics, TotalUs, Method);
+notify({error, _Error}, Metrics, TotalUs, Method) ->
+    ?counter_add(?REQUESTS_COUNTER, 1, #{result => error}),
+    notify_timing_metrics(Metrics, TotalUs, Method).
 
-notify_error() ->
-    ErrorMetric = name(error),
-    ok = metrics:update_or_create(ErrorMetric, {c, 1}, spiral).
 
-name(M) ->
-    L = atom_to_list(M),
-    "katipo." ++ L.
-
-status_metric_name(Status) when is_integer(Status) ->
-    L = integer_to_list(Status),
-    "katipo.status." ++ L.
-
-notify_metrics(Metrics, TotalUs) ->
-    %% Curl metrics are in seconds
+%% @private
+notify_timing_metrics(Metrics, TotalUs, Method) ->
+    %% Curl metrics are in seconds, convert to milliseconds
     Metrics1 = [{K, 1000 * V} || {K, V} <- Metrics],
-    %% now_diff is in microsecs
-    Total = TotalUs / 1000.0,
+    %% now_diff is in microsecs, convert to milliseconds
+    TotalMs = TotalUs / 1000.0,
     Metrics3 =
         case lists:keytake(total_time, 1, Metrics1) of
             {value, {total_time, CurlTotal}, Metrics2} ->
                 [{curl_time, CurlTotal},
-                 {total_time, Total} | Metrics2];
+                 {total_time, TotalMs} | Metrics2];
             false ->
-                [{total_time, Total} | Metrics1]
+                [{total_time, TotalMs} | Metrics1]
         end,
-    Notify = fun({K, V}) ->
-                     Name = name(K),
-                     ok = metrics:update_or_create(Name, {c, V}, histogram)
-             end,
-    ok = lists:foreach(Notify, Metrics3),
+    Attrs = #{'http.request.method' => Method},
+    lists:foreach(fun({K, V}) -> record_timing(K, V, Attrs) end, Metrics3),
     Metrics3.
 
--spec init() -> ok.
-init() ->
-    Mod = mod_metrics(),
-    ok = metrics:backend(Mod).
-
-mod_metrics() ->
-    case application:get_env(katipo, mod_metrics, noop) of
-        folsom -> metrics_folsom;
-        exometer -> metrics_exometer;
-        noop -> metrics_noop;
-        Mod -> Mod
-    end.
+%% @private
+record_timing(total_time, V, Attrs) ->
+    ?histogram_record(?DURATION_HISTOGRAM, V, Attrs);
+record_timing(curl_time, V, Attrs) ->
+    ?histogram_record(?CURL_TIME_HISTOGRAM, V, Attrs);
+record_timing(namelookup_time, V, Attrs) ->
+    ?histogram_record(?NAMELOOKUP_TIME_HISTOGRAM, V, Attrs);
+record_timing(connect_time, V, Attrs) ->
+    ?histogram_record(?CONNECT_TIME_HISTOGRAM, V, Attrs);
+record_timing(appconnect_time, V, Attrs) ->
+    ?histogram_record(?APPCONNECT_TIME_HISTOGRAM, V, Attrs);
+record_timing(pretransfer_time, V, Attrs) ->
+    ?histogram_record(?PRETRANSFER_TIME_HISTOGRAM, V, Attrs);
+record_timing(redirect_time, V, Attrs) ->
+    ?histogram_record(?REDIRECT_TIME_HISTOGRAM, V, Attrs);
+record_timing(starttransfer_time, V, Attrs) ->
+    ?histogram_record(?STARTTRANSFER_TIME_HISTOGRAM, V, Attrs);
+record_timing(_, _, _) ->
+    ok.
