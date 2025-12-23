@@ -284,7 +284,7 @@ post_body_qs_vals(Config) ->
     ?assertEqual(<<"!@#$%^&*()">>, maps:get(<<"data">>, Json)).
 
 post_body_bad(_) ->
-    Message = [{body, should_not_be_an_atom}],
+    Message = [{body, {invalid_body, should_not_be_an_atom}}],
     BinaryMessage = iolist_to_binary(io_lib:format("~p", [Message])),
     %% URL doesn't matter - request fails during option validation
     {error, #{code := bad_opts, message := BinaryMessage}} =
@@ -800,13 +800,13 @@ port_death(Config) ->
     {ok, _} = katipo_pool:start(PoolName, PoolSize),
     WorkerName = wpool_pool:best_worker(PoolName),
     WorkerPid = whereis(WorkerName),
-    {state, _, katipo, {state, Port, _}, _} = sys:get_state(WorkerPid),
+    {state, _, _, {state, Port, _}, _} = sys:get_state(WorkerPid),
     true = port_command(Port, <<"hdfjkshkjsdfgjsgafdjgsdjgfj">>),
     Fun = fun() ->
                   WorkerName2 = wpool_pool:best_worker(PoolName),
                   WorkerPid2 = whereis(WorkerName2),
                   case sys:get_state(WorkerPid2) of
-                      {state, _, katipo, {state, Port2, _}, _} when Port =/= Port2 ->
+                      {state, _, _, {state, Port2, _}, _} when Port =/= Port2 ->
                           {ok, #{status := 200}} =
                               katipo:get(PoolName, Url, BaseOpts),
                           true
