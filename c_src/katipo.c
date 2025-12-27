@@ -14,7 +14,6 @@
 #include <string.h>
 #include <ei.h>
 #include <curl/curl.h>
-#include <getopt.h>
 
 #define KATIPO_GET 0
 #define KATIPO_POST 1
@@ -523,7 +522,7 @@ static void send_ok_to_erlang(ConnInfo *conn) {
 
   encode_metrics(&result, conn);
 
-  send_to_erlang(result.buff, result.buffsz);
+  send_to_erlang(result.buff, result.index);
   ei_x_free(&result);
 }
 
@@ -553,7 +552,7 @@ static void send_error_to_erlang(CURLcode curl_code, ConnInfo *conn) {
 
   encode_metrics(&result, conn);
 
-  send_to_erlang(result.buff, result.buffsz);
+  send_to_erlang(result.buff, result.index);
   ei_x_free(&result);
 }
 
@@ -681,6 +680,7 @@ static int sock_cb(CURL *e, curl_socket_t s, int what, void *cbp, void *sockp) {
 static int multi_timer_cb(CURLM *multi, long timeout_ms, void *userp) {
   GlobalInfo *global = (GlobalInfo *)userp;
   struct timeval timeout;
+  (void)multi; /* unused */
 
   timeout.tv_sec = timeout_ms / 1000;
   timeout.tv_usec = (timeout_ms % 1000) * 1000;
@@ -691,8 +691,13 @@ static int multi_timer_cb(CURLM *multi, long timeout_ms, void *userp) {
 static size_t write_cb(void *ptr, size_t size, size_t nmemb, void *data) {
   size_t realsize = size * nmemb;
   ConnInfo *conn = (ConnInfo *)data;
+  char *new_memory;
 
-  conn->memory = (char *)realloc(conn->memory, conn->size + realsize);
+  new_memory = (char *)realloc(conn->memory, conn->size + realsize);
+  if (new_memory == NULL) {
+    return 0;
+  }
+  conn->memory = new_memory;
   memcpy(&(conn->memory[conn->size]), ptr, realsize);
   conn->size += realsize;
 
@@ -773,7 +778,6 @@ static void new_conn(long method, char *url, struct curl_slist *req_headers,
   struct curl_slist *nc;
 
   conn = calloc(1, sizeof(ConnInfo));
-  memset(conn, 0, sizeof(ConnInfo));
   conn->error[0] = '\0';
 
   conn->memory = (char *)malloc(1);
@@ -1112,6 +1116,8 @@ static void erl_input(struct bufferevent *ev, void *arg) {
     eopts.curlopt_sslkey_blob_size = 0;
     eopts.curlopt_keypasswd = NULL;
     eopts.curlopt_userpwd = NULL;
+    eopts.curlopt_sslversion = 0;
+    eopts.curlopt_dns_cache_timeout = 60;
     eopts.curlopt_ca_cache_timeout = 86400; /* 24 hours - libcurl default */
     eopts.curlopt_pipewait = 1; /* Enable by default for better HTTP/2 multiplexing */
 
