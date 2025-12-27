@@ -733,7 +733,7 @@ handle_call(#req{method = Method,
 
 %% @private
 handle_cast(Msg, State) ->
-    error_logger:error_msg("Unexpected cast: ~p", [Msg]),
+    logger:error("Unexpected cast: ~p", [Msg]),
     {noreply, State}.
 
 %% @private
@@ -772,7 +772,7 @@ handle_info({timeout, Tref, {req_timeout, From}}, State = #state{reqs = Reqs}) -
         end,
     {noreply, State#state{reqs = Reqs2}};
 handle_info({'EXIT', Port, Reason}, State = #state{port = Port}) ->
-    error_logger:error_msg("Port ~p died with reason: ~p", [Port, Reason]),
+    logger:error("Port ~p died with reason: ~p", [Port, Reason]),
     {stop, port_died, State}.
 
 %% @private
