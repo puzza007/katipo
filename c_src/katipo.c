@@ -1098,7 +1098,7 @@ static void erl_input(struct bufferevent *ev, void *arg) {
     eopts.curlopt_capath = NULL;
     eopts.curlopt_cacert = NULL;
     eopts.curlopt_timeout_ms = 30000;
-    eopts.curlopt_maxredirs = 100;
+    eopts.curlopt_maxredirs = 9;
     eopts.curlopt_http_auth = -1;
     eopts.curlopt_username = NULL;
     eopts.curlopt_password = NULL;
