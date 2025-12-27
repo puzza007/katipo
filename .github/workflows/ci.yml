@@ -33,10 +33,31 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y make gcc libevent-dev libcurl4-openssl-dev libssl-dev
+          sudo apt-get install -y make gcc libevent-dev libcurl4-openssl-dev libssl-dev lcov
 
-      - name: Run tests
-        run: rebar3 ct
+      - name: Run tests with coverage
+        env:
+          COVERAGE: 1
+        run: rebar3 ct --cover
+
+      - name: Generate Erlang coverage report
+        run: rebar3 covertool generate
+
+      - name: Generate C coverage report
+        run: |
+          cd c_src
+          lcov --capture --directory . --output-file coverage.info
+          # Remove system headers from coverage
+          lcov --remove coverage.info '/usr/*' --output-file coverage.info
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v5
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: ./_build/test/covertool/katipo.covertool.xml,./c_src/coverage.info
+          flags: erlang,c
+          disable_search: true
+          fail_ci_if_error: false
 
       - name: Run dialyzer
         run: rebar3 dialyzer

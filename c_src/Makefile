@@ -49,6 +49,18 @@ endif
 CFLAGS += -fPIC -I $(ERTS_INCLUDE_DIR) -I $(ERL_INTERFACE_INCLUDE_DIR)
 CXXFLAGS += -fPIC -I $(ERTS_INCLUDE_DIR) -I $(ERL_INTERFACE_INCLUDE_DIR)
 
+# Coverage support: build with COVERAGE=1 to enable
+ifdef COVERAGE
+	CFLAGS += --coverage -O0 -g
+	LDFLAGS += --coverage
+endif
+
+# AddressSanitizer support: build with SANITIZE=1 to detect memory leaks
+ifdef SANITIZE
+	CFLAGS += -fsanitize=address -fno-omit-frame-pointer -O1 -g
+	LDFLAGS += -fsanitize=address
+endif
+
 # Add curl include path from curl-config
 CFLAGS += $(shell $(CURL_CONFIG) --cflags)
 
@@ -144,3 +156,19 @@ $(C_SRC_OUTPUT): $(OBJECTS)
 
 clean:
 	@rm -f $(C_SRC_OUTPUT) $(OBJECTS)
+
+# Coverage targets
+.PHONY: coverage-html coverage-clean
+
+coverage-html:
+	@if ls *.gcda 1>/dev/null 2>&1; then \
+		lcov --capture --directory . --output-file coverage.info; \
+		genhtml coverage.info --output-directory $(BASEDIR)/_build/cover/c_src; \
+		rm -f coverage.info; \
+		echo "C coverage report: $(BASEDIR)/_build/cover/c_src/index.html"; \
+	else \
+		echo "No coverage data found. Run tests first with COVERAGE=1 build."; \
+	fi
+
+coverage-clean:
+	@rm -f *.gcda *.gcno *.gcov coverage.info
