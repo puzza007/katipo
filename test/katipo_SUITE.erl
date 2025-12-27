@@ -165,7 +165,9 @@ groups() ->
        doh_url,
        badopts,
        protocol_restriction,
-       dns_cache_timeout]},
+       dns_cache_timeout,
+       ca_cache_timeout,
+       pipewait]},
      {digest, [],
       [basic_authorised,
        basic_authorised_userpwd,
@@ -723,6 +725,24 @@ dns_cache_timeout(Config) ->
     {ok, #{status := 200}} = katipo:get(?POOL, Url, BaseOpts#{dns_cache_timeout => 120}),
     %% forever cache
     {ok, #{status := 200}} = katipo:get(?POOL, Url, BaseOpts#{dns_cache_timeout => -1}).
+
+ca_cache_timeout(Config) ->
+    Url = httpbin_url(Config, <<"/get">>),
+    BaseOpts = ?config(httpbin_opts, Config),
+    %% cache disabled
+    {ok, #{status := 200}} = katipo:get(?POOL, Url, BaseOpts#{ca_cache_timeout => 0}),
+    %% 1 hour cache
+    {ok, #{status := 200}} = katipo:get(?POOL, Url, BaseOpts#{ca_cache_timeout => 3600}),
+    %% forever cache
+    {ok, #{status := 200}} = katipo:get(?POOL, Url, BaseOpts#{ca_cache_timeout => -1}).
+
+pipewait(Config) ->
+    Url = httpbin_url(Config, <<"/get">>),
+    BaseOpts = ?config(httpbin_opts, Config),
+    %% pipewait enabled (default)
+    {ok, #{status := 200}} = katipo:get(?POOL, Url, BaseOpts#{pipewait => true}),
+    %% pipewait disabled
+    {ok, #{status := 200}} = katipo:get(?POOL, Url, BaseOpts#{pipewait => false}).
 
 timeout_ms(Config) ->
     {req_opts, Opts} = lists:keyfind(req_opts, 1, Config),
