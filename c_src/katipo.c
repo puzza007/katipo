@@ -543,9 +543,12 @@ static void send_error_to_erlang(CURLcode curl_code, ConnInfo *conn) {
   ei_x_buff result;
   size_t error_msg_len;
   const char *error_code;
+  const char *error_msg;
 
   error_code = curl_error_code(curl_code);
-  error_msg_len = strlen(conn->error);
+  /* Use ERRORBUFFER if available, otherwise fall back to curl_easy_strerror */
+  error_msg = conn->error[0] ? conn->error : curl_easy_strerror(curl_code);
+  error_msg_len = strlen(error_msg);
 
   if (ei_x_new_with_version(&result) ||
       ei_x_encode_tuple_header(&result, 2) ||
@@ -556,7 +559,7 @@ static void send_error_to_erlang(CURLcode curl_code, ConnInfo *conn) {
       ei_x_encode_ref(&result, conn->ref) ||
       ei_x_encode_tuple_header(&result, 3) ||
       ei_x_encode_atom(&result, error_code) ||
-      ei_x_encode_binary(&result, conn->error, error_msg_len)) {
+      ei_x_encode_binary(&result, error_msg, error_msg_len)) {
     errx(2, "Failed to encode result");
   }
 
