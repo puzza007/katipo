@@ -135,6 +135,23 @@
 -define(PIPEWAIT_TRUE, 1).
 -define(PIPEWAIT_FALSE, 0).
 
+%% CURLOPT_HTTP_VERSION values
+-define(CURL_HTTP_VERSION_NONE, 0).
+-define(CURL_HTTP_VERSION_1_0, 1).
+-define(CURL_HTTP_VERSION_1_1, 2).
+-define(CURL_HTTP_VERSION_2_0, 3).
+-define(CURL_HTTP_VERSION_2TLS, 4).
+-define(CURL_HTTP_VERSION_2_PRIOR_KNOWLEDGE, 5).
+-define(CURL_HTTP_VERSION_3, 30).
+
+%% CURLOPT_SSLVERSION values
+-define(CURL_SSLVERSION_DEFAULT, 0).
+-define(CURL_SSLVERSION_TLSV1, 1).
+-define(CURL_SSLVERSION_TLSV1_0, 4).
+-define(CURL_SSLVERSION_TLSV1_1, 5).
+-define(CURL_SSLVERSION_TLSV1_2, 6).
+-define(CURL_SSLVERSION_TLSV1_3, 7).
+
 -define(METHODS, [get, post, put, head, options, patch, delete]).
 
 -type method() :: get | post | put | head | options | patch | delete.
@@ -449,8 +466,8 @@
           lock_data_ssl_session = ?LOCK_DATA_SSL_SESSION_FALSE ::
             ?LOCK_DATA_SSL_SESSION_FALSE | ?LOCK_DATA_SSL_SESSION_TRUE,
           doh_url = undefined :: undefined | doh_url(),
-          http_version = curl_http_version_none :: curlopt_http_version(),
-          sslversion = sslversion_default :: curlopt_sslversion(),
+          http_version = ?CURL_HTTP_VERSION_NONE :: integer(),
+          sslversion = ?CURL_SSLVERSION_DEFAULT :: integer(),
           verbose = ?VERBOSE_FALSE :: ?VERBOSE_FALSE | ?VERBOSE_TRUE,
           sslcert = undefined :: undefined | binary() | file:name_all(),
           sslkey = undefined :: undefined | binary() | file:name_all(),
@@ -941,34 +958,31 @@ opt(lock_data_ssl_session, false, {Req, Errors}) ->
 opt(doh_url, DOHURL, {Req, Errors}) when ?DOH_URL_AVAILABLE andalso is_binary(DOHURL) ->
     {Req#req{doh_url = DOHURL}, Errors};
 opt(http_version, curl_http_version_none, {Req, Errors}) ->
-    {Req#req{http_version = 0}, Errors};
+    {Req#req{http_version = ?CURL_HTTP_VERSION_NONE}, Errors};
 opt(http_version, curl_http_version_1_0, {Req, Errors}) ->
-    {Req#req{http_version = 1}, Errors};
+    {Req#req{http_version = ?CURL_HTTP_VERSION_1_0}, Errors};
 opt(http_version, curl_http_version_1_1, {Req, Errors}) ->
-    {Req#req{http_version = 2}, Errors};
+    {Req#req{http_version = ?CURL_HTTP_VERSION_1_1}, Errors};
 opt(http_version, curl_http_version_2_0, {Req, Errors}) ->
-    {Req#req{http_version = 3}, Errors};
+    {Req#req{http_version = ?CURL_HTTP_VERSION_2_0}, Errors};
 opt(http_version, curl_http_version_2tls, {Req, Errors}) ->
-    {Req#req{http_version = 4}, Errors};
+    {Req#req{http_version = ?CURL_HTTP_VERSION_2TLS}, Errors};
 opt(http_version, curl_http_version_2_prior_knowledge, {Req, Errors}) ->
-    {Req#req{http_version = 5}, Errors};
-%% CURL_HTTP_VERSION_3 = 30
-%% See: https://github.com/curl/curl/blob/
-%%      32d64b2e875f0d74cd433dff8bda9f8a98dcd44e/include/curl/curl.h#L1983
+    {Req#req{http_version = ?CURL_HTTP_VERSION_2_PRIOR_KNOWLEDGE}, Errors};
 opt(http_version, curl_http_version_3, {Req, Errors}) when ?HTTP3_AVAILABLE ->
-    {Req#req{http_version = 30}, Errors};
+    {Req#req{http_version = ?CURL_HTTP_VERSION_3}, Errors};
 opt(sslversion, sslversion_default, {Req, Errors}) ->
-    {Req#req{sslversion = 0}, Errors};
+    {Req#req{sslversion = ?CURL_SSLVERSION_DEFAULT}, Errors};
 opt(sslversion, sslversion_tlsv1, {Req, Errors}) ->
-    {Req#req{sslversion = 1}, Errors};
+    {Req#req{sslversion = ?CURL_SSLVERSION_TLSV1}, Errors};
 opt(sslversion, sslversion_tlsv1_0, {Req, Errors}) ->
-    {Req#req{sslversion = 4}, Errors};
+    {Req#req{sslversion = ?CURL_SSLVERSION_TLSV1_0}, Errors};
 opt(sslversion, sslversion_tlsv1_1, {Req, Errors}) ->
-    {Req#req{sslversion = 5}, Errors};
+    {Req#req{sslversion = ?CURL_SSLVERSION_TLSV1_1}, Errors};
 opt(sslversion, sslversion_tlsv1_2, {Req, Errors}) ->
-    {Req#req{sslversion = 6}, Errors};
+    {Req#req{sslversion = ?CURL_SSLVERSION_TLSV1_2}, Errors};
 opt(sslversion, sslversion_tlsv1_3, {Req, Errors}) ->
-    {Req#req{sslversion = 7}, Errors};
+    {Req#req{sslversion = ?CURL_SSLVERSION_TLSV1_3}, Errors};
 opt(verbose, true, {Req, Errors}) ->
     {Req#req{verbose = ?VERBOSE_TRUE}, Errors};
 opt(verbose, false, {Req, Errors}) ->
