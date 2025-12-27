@@ -231,6 +231,16 @@
         obsolete16 |
         ssl_pinnedpubkeynotmatch |
         ssl_invalidcertstatus |
+        http2_stream |
+        recursive_api_call |
+        auth_error |
+        http3 |
+        proxy |
+        ssl_clientcert |
+        quic_connect_error |
+        unrecoverable_poll |
+        too_large |
+        ech_required |
         curl_last |
         %% returned by us, not curl
         bad_opts.

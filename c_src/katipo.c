@@ -267,8 +267,10 @@ static const char *curl_error_code(CURLcode error) {
     #endif
     case CURLE_BAD_CONTENT_ENCODING:
       return "bad_content_encoding";
+#if LIBCURL_VERSION_NUM < 0x075200 /* Removed in 7.82.0 */
     case CURLE_LDAP_INVALID_URL:
       return "ldap_invalid_url";
+#endif
     case CURLE_FILESIZE_EXCEEDED:
       return "filesize_exceeded";
     case CURLE_USE_SSL_FAILED:
@@ -293,10 +295,12 @@ static const char *curl_error_code(CURLcode error) {
       return "remote_file_exists";
     case CURLE_TFTP_NOSUCHUSER:
       return "tftp_nosuchuser";
+#if LIBCURL_VERSION_NUM < 0x075200 /* Removed in 7.82.0 */
     case CURLE_CONV_FAILED:
       return "conv_failed";
     case CURLE_CONV_REQD:
       return "conv_reqd";
+#endif
     case CURLE_SSL_CACERT_BADFILE:
       return "ssl_cacert_badfile";
     case CURLE_REMOTE_FILE_NOT_FOUND:
@@ -327,10 +331,54 @@ static const char *curl_error_code(CURLcode error) {
     case CURLE_OBSOLETE16:
       return "obsolete16";
     #endif
-    /* case CURLE_SSL_PINNEDPUBKEYNOTMATCH: */
-    /*   return "ssl_pinnedpubkeynotmatch"; */
-    /* case CURLE_SSL_INVALIDCERTSTATUS: */
-    /*   return "ssl_invalidcertstatus"; */
+#if LIBCURL_VERSION_NUM >= 0x072700 /* 7.39.0 */
+    case CURLE_SSL_PINNEDPUBKEYNOTMATCH:
+      return "ssl_pinnedpubkeynotmatch";
+#endif
+#if LIBCURL_VERSION_NUM >= 0x072900 /* 7.41.0 */
+    case CURLE_SSL_INVALIDCERTSTATUS:
+      return "ssl_invalidcertstatus";
+#endif
+#if LIBCURL_VERSION_NUM >= 0x073100 /* 7.49.0 */
+    case CURLE_HTTP2_STREAM:
+      return "http2_stream";
+#endif
+#if LIBCURL_VERSION_NUM >= 0x073B00 /* 7.59.0 */
+    case CURLE_RECURSIVE_API_CALL:
+      return "recursive_api_call";
+#endif
+#if LIBCURL_VERSION_NUM >= 0x074200 /* 7.66.0 */
+    case CURLE_AUTH_ERROR:
+      return "auth_error";
+#endif
+#if LIBCURL_VERSION_NUM >= 0x074400 /* 7.68.0 */
+    case CURLE_HTTP3:
+      return "http3";
+#endif
+#if LIBCURL_VERSION_NUM >= 0x074900 /* 7.73.0 */
+    case CURLE_PROXY:
+      return "proxy";
+#endif
+#if LIBCURL_VERSION_NUM >= 0x074D00 /* 7.77.0 */
+    case CURLE_SSL_CLIENTCERT:
+      return "ssl_clientcert";
+#endif
+#if LIBCURL_VERSION_NUM >= 0x074500 /* 7.69.0 */
+    case CURLE_QUIC_CONNECT_ERROR:
+      return "quic_connect_error";
+#endif
+#if LIBCURL_VERSION_NUM >= 0x075400 /* 7.84.0 */
+    case CURLE_UNRECOVERABLE_POLL:
+      return "unrecoverable_poll";
+#endif
+#if LIBCURL_VERSION_NUM >= 0x080600 /* 8.6.0 */
+    case CURLE_TOO_LARGE:
+      return "too_large";
+#endif
+#if LIBCURL_VERSION_NUM >= 0x080800 /* 8.8.0 */
+    case CURLE_ECH_REQUIRED:
+      return "ech_required";
+#endif
     case CURL_LAST:
       return "curl_last";
     default:
@@ -341,36 +389,12 @@ static const char *curl_error_code(CURLcode error) {
 /* Die if we get a bad CURLMcode somewhere */
 static void mcode_or_die(const char *where, CURLMcode code) {
   if (CURLM_OK != code) {
-    const char *s;
-    switch (code) {
-      case CURLM_BAD_HANDLE:
-        s = "CURLM_BAD_HANDLE";
-        break;
-      case CURLM_BAD_EASY_HANDLE:
-        s = "CURLM_BAD_EASY_HANDLE";
-        break;
-      case CURLM_OUT_OF_MEMORY:
-        s = "CURLM_OUT_OF_MEMORY";
-        break;
-      case CURLM_INTERNAL_ERROR:
-        s = "CURLM_INTERNAL_ERROR";
-        break;
-      case CURLM_UNKNOWN_OPTION:
-        s = "CURLM_UNKNOWN_OPTION";
-        break;
-      case CURLM_LAST:
-        s = "CURLM_LAST";
-        break;
-      default:
-        s = "CURLM_unknown";
-        break;
-      case CURLM_BAD_SOCKET:
-        s = "CURLM_BAD_SOCKET";
-        fprintf(stderr, "ERROR: %s returns %s\n", where, s);
-        /* TODO: what to do on this error? */
-        return;
+    if (code == CURLM_BAD_SOCKET) {
+      /* TODO: what to do on this error? */
+      fprintf(stderr, "ERROR: %s returns %s\n", where, curl_multi_strerror(code));
+      return;
     }
-    errx(2, "ERROR: %s returns %s\n", where, s);
+    errx(2, "ERROR: %s returns %s\n", where, curl_multi_strerror(code));
   }
 }
 
