@@ -111,6 +111,8 @@
 -define(USERPWD, 28).
 -define(SSLVERSION, 29).
 -define(DNS_CACHE_TIMEOUT, 31).
+-define(CA_CACHE_TIMEOUT, 32).
+-define(PIPEWAIT, 33).
 
 -define(DEFAULT_REQ_TIMEOUT, 30000).
 -define(FOLLOWLOCATION_TRUE, 1).
@@ -130,6 +132,8 @@
 -define(LOCK_DATA_SSL_SESSION_TRUE, 1).
 -define(VERBOSE_TRUE, 1).
 -define(VERBOSE_FALSE, 0).
+-define(PIPEWAIT_TRUE, 1).
+-define(PIPEWAIT_FALSE, 0).
 
 -define(METHODS, [get, post, put, head, options, patch, delete]).
 
@@ -322,7 +326,9 @@
                     sslcert => sslcert(),
                     sslkey => sslkey(),
                     sslkey_blob => sslkey_blob(),
-                    userpwd => userpwd()}.
+                    userpwd => userpwd(),
+                    ca_cache_timeout => integer(),
+                    pipewait => boolean()}.
 -type opts() :: #{headers => headers(),
                     cookiejar => cookiejar(),
                     body => req_body(),
@@ -349,7 +355,9 @@
                     sslcert => sslcert(),
                     sslkey => sslkey(),
                     sslkey_blob => sslkey_blob(),
-                    userpwd => userpwd()}.
+                    userpwd => userpwd(),
+                    ca_cache_timeout => integer(),
+                    pipewait => boolean()}.
 -export_type([opts/0]).
 -type metrics() :: proplists:proplist().
 -type response() :: {ok, #{status := status(),
@@ -449,7 +457,9 @@
           sslkey_blob = undefined :: undefined | binary(),
           keypasswd = undefined :: undefined | binary(),
           userpwd = undefined :: undefined | binary(),
-          dns_cache_timeout = 60 :: integer()
+          dns_cache_timeout = 60 :: integer(),
+          ca_cache_timeout = 86400 :: integer(),
+          pipewait = ?PIPEWAIT_TRUE :: ?PIPEWAIT_FALSE | ?PIPEWAIT_TRUE
          }).
 
 -type req() :: #req{}.
@@ -681,7 +691,9 @@ handle_call(#req{method = Method,
                  sslkey_blob = SSLKeyBlob,
                  keypasswd = KeyPasswd,
                  userpwd = UserPwd,
-                 dns_cache_timeout = DNSCacheTimeout},
+                 dns_cache_timeout = DNSCacheTimeout,
+                 ca_cache_timeout = CACacheTimeout,
+                 pipewait = Pipewait},
              From,
              State = #state{port = Port, reqs = Reqs}) ->
     {Self, Ref} = From,
@@ -710,7 +722,9 @@ handle_call(#req{method = Method,
             {?SSLKEY_BLOB, SSLKeyBlob},
             {?KEYPASSWD, KeyPasswd},
             {?USERPWD, UserPwd},
-            {?DNS_CACHE_TIMEOUT, DNSCacheTimeout}],
+            {?DNS_CACHE_TIMEOUT, DNSCacheTimeout},
+            {?CA_CACHE_TIMEOUT, CACacheTimeout},
+            {?PIPEWAIT, Pipewait}],
     Command = {Self, Ref, Method, Url, Headers, CookieJar, Body, Opts},
     true = port_command(Port, term_to_binary(Command)),
     Tref = erlang:start_timer(Timeout, self(), {req_timeout, From}),
@@ -964,6 +978,12 @@ opt(userpwd, UserPwd, {Req, Errors}) when is_binary(UserPwd) ->
     {Req#req{userpwd = UserPwd}, Errors};
 opt(dns_cache_timeout, Secs, {Req, Errors}) when is_integer(Secs) andalso Secs >= -1 ->
     {Req#req{dns_cache_timeout = Secs}, Errors};
+opt(ca_cache_timeout, Secs, {Req, Errors}) when is_integer(Secs) andalso Secs >= -1 ->
+    {Req#req{ca_cache_timeout = Secs}, Errors};
+opt(pipewait, true, {Req, Errors}) ->
+    {Req#req{pipewait = ?PIPEWAIT_TRUE}, Errors};
+opt(pipewait, false, {Req, Errors}) ->
+    {Req#req{pipewait = ?PIPEWAIT_FALSE}, Errors};
 opt(K, V, {Req, Errors}) ->
     {Req, [{K, V} | Errors]}.
 

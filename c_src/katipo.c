@@ -50,6 +50,8 @@
 #define K_CURLOPT_USERPWD 28
 #define K_CURLOPT_SSLVERSION 29
 #define K_CURLOPT_DNS_CACHE_TIMEOUT 31
+#define K_CURLOPT_CA_CACHE_TIMEOUT 32
+#define K_CURLOPT_PIPEWAIT 33
 
 #define K_CURLAUTH_BASIC 100
 #define K_CURLAUTH_DIGEST 101
@@ -134,6 +136,8 @@ typedef struct _EasyOpts {
   char *curlopt_userpwd;
   long curlopt_sslversion;
   long curlopt_dns_cache_timeout;
+  long curlopt_ca_cache_timeout;
+  long curlopt_pipewait;
 } EasyOpts;
 
 static const char *curl_error_code(CURLcode error) {
@@ -805,6 +809,10 @@ static void new_conn(long method, char *url, struct curl_slist *req_headers,
   if (eopts.curlopt_http_version) {
     curl_easy_setopt(conn->easy, CURLOPT_HTTP_VERSION, eopts.curlopt_http_version);
   }
+  #if LIBCURL_VERSION_NUM >= 0x072B00 /* Available since 7.43.0 */
+  /* Wait for multiplexing opportunity - better HTTP/2 stream reuse */
+  curl_easy_setopt(conn->easy, CURLOPT_PIPEWAIT, eopts.curlopt_pipewait);
+  #endif
   curl_easy_setopt(conn->easy, CURLOPT_WRITEFUNCTION, write_cb);
   curl_easy_setopt(conn->easy, CURLOPT_WRITEDATA, conn);
   curl_easy_setopt(conn->easy, CURLOPT_HEADERFUNCTION, header_cb);
@@ -834,6 +842,12 @@ static void new_conn(long method, char *url, struct curl_slist *req_headers,
     curl_easy_setopt(conn->easy, CURLOPT_CAINFO,
                      eopts.curlopt_cacert);
   }
+  #if LIBCURL_VERSION_NUM >= 0x075700 /* Available since 7.87.0 */
+  /* CA cache only works when CAPATH is not set (single file, not directory) */
+  if (eopts.curlopt_capath == NULL && eopts.curlopt_ca_cache_timeout != 0) {
+    curl_easy_setopt(conn->easy, CURLOPT_CA_CACHE_TIMEOUT, eopts.curlopt_ca_cache_timeout);
+  }
+  #endif
   curl_easy_setopt(conn->easy, CURLOPT_TIMEOUT_MS, eopts.curlopt_timeout_ms);
   curl_easy_setopt(conn->easy, CURLOPT_DNS_CACHE_TIMEOUT, eopts.curlopt_dns_cache_timeout);
   curl_easy_setopt(conn->easy, CURLOPT_MAXREDIRS, eopts.curlopt_maxredirs);
@@ -1098,6 +1112,8 @@ static void erl_input(struct bufferevent *ev, void *arg) {
     eopts.curlopt_sslkey_blob_size = 0;
     eopts.curlopt_keypasswd = NULL;
     eopts.curlopt_userpwd = NULL;
+    eopts.curlopt_ca_cache_timeout = 86400; /* 24 hours - libcurl default */
+    eopts.curlopt_pipewait = 1; /* Enable by default for better HTTP/2 multiplexing */
 
     if (ei_decode_list_header(buf, &index, &num_eopts)) {
       errx(2, "Couldn't decode eopts length");
@@ -1166,6 +1182,12 @@ static void erl_input(struct bufferevent *ev, void *arg) {
           break;
         case K_CURLOPT_DNS_CACHE_TIMEOUT:
           eopts.curlopt_dns_cache_timeout = eopt_long;
+          break;
+        case K_CURLOPT_CA_CACHE_TIMEOUT:
+          eopts.curlopt_ca_cache_timeout = eopt_long;
+          break;
+        case K_CURLOPT_PIPEWAIT:
+          eopts.curlopt_pipewait = eopt_long;
           break;
         default:
           errx(2, "Unknown eopt long value %ld", eopt);
