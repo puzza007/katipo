@@ -164,7 +164,8 @@ groups() ->
        lock_data_ssl_session_false,
        doh_url,
        badopts,
-       protocol_restriction]},
+       protocol_restriction,
+       dns_cache_timeout]},
      {digest, [],
       [basic_authorised,
        basic_authorised_userpwd,
@@ -178,7 +179,8 @@ groups() ->
        port_death,
        port_late_response,
        pool_opts,
-       max_pipeline_length]},
+       max_pipeline_length,
+       max_concurrent_streams]},
      {https, [parallel],
       [verify_host_verify_peer_ok,
        %% TODO :Fix this test. See https://github.com/puzza007/katipo/runs/5281801454?check_suite_focus=true
@@ -712,6 +714,16 @@ proxy_couldnt_connect(Config) ->
 protocol_restriction(_) ->
     {error, #{code := unsupported_protocol}} = katipo:get(?POOL, <<"dict.org">>).
 
+dns_cache_timeout(Config) ->
+    Url = httpbin_url(Config, <<"/get">>),
+    BaseOpts = ?config(httpbin_opts, Config),
+    %% cache disabled
+    {ok, #{status := 200}} = katipo:get(?POOL, Url, BaseOpts#{dns_cache_timeout => 0}),
+    %% 120 second cache
+    {ok, #{status := 200}} = katipo:get(?POOL, Url, BaseOpts#{dns_cache_timeout => 120}),
+    %% forever cache
+    {ok, #{status := 200}} = katipo:get(?POOL, Url, BaseOpts#{dns_cache_timeout => -1}).
+
 timeout_ms(Config) ->
     {req_opts, Opts} = lists:keyfind(req_opts, 1, Config),
     ok = case katipo:get(?POOL, httpbin_url(Config, <<"/delay/1">>), Opts#{timeout_ms => 500}) of
@@ -823,6 +835,14 @@ max_pipeline_length(_) ->
     PoolOpts = [{pipelining, multiplex},
                 {max_pipeline_length, 5},
                 {max_total_connections, 10}],
+    {ok, _} = katipo_pool:start(PoolName, PoolSize, PoolOpts),
+    ok = katipo_pool:stop(PoolName).
+
+max_concurrent_streams(_) ->
+    PoolName = pool_max_streams,
+    PoolSize = 1,
+    PoolOpts = [{pipelining, multiplex},
+                {max_concurrent_streams, 50}],
     {ok, _} = katipo_pool:start(PoolName, PoolSize, PoolOpts),
     ok = katipo_pool:stop(PoolName).
 
