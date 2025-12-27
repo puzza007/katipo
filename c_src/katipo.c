@@ -430,32 +430,16 @@ static int is_status_line(const char *header) {
 }
 
 static void encode_metrics(ei_x_buff *result, ConnInfo *conn) {
-  if (ei_x_encode_list_header(result, 7)) {
-    errx(2, "Failed to encode stats list header");
-  }
-  if (ei_x_encode_tuple_header(result, 2) ||
-      ei_x_encode_atom(result, "total_time") ||
-      ei_x_encode_double(result, conn->total_time) ||
-      ei_x_encode_tuple_header(result, 2) ||
-      ei_x_encode_atom(result, "namelookup_time") ||
-      ei_x_encode_double(result, conn->namelookup_time) ||
-      ei_x_encode_tuple_header(result, 2) ||
-      ei_x_encode_atom(result, "connect_time") ||
-      ei_x_encode_double(result, conn->connect_time) ||
-      ei_x_encode_tuple_header(result, 2) ||
-      ei_x_encode_atom(result, "appconnect_time") ||
-      ei_x_encode_double(result, conn->appconnect_time) ||
-      ei_x_encode_tuple_header(result, 2) ||
-      ei_x_encode_atom(result, "pretransfer_time") ||
-      ei_x_encode_double(result, conn->pretransfer_time) ||
-      ei_x_encode_tuple_header(result, 2) ||
-      ei_x_encode_atom(result, "redirect_time") ||
-      ei_x_encode_double(result, conn->redirect_time) ||
-      ei_x_encode_tuple_header(result, 2) ||
-      ei_x_encode_atom(result, "starttransfer_time") ||
-      ei_x_encode_double(result, conn->starttransfer_time) ||
-      ei_x_encode_empty_list(result)) {
-    errx(2, "Failed to encode stats");
+  if (ei_x_format_wo_ver(result,
+        "[{~a,~f},{~a,~f},{~a,~f},{~a,~f},{~a,~f},{~a,~f},{~a,~f}]",
+        "total_time", conn->total_time,
+        "namelookup_time", conn->namelookup_time,
+        "connect_time", conn->connect_time,
+        "appconnect_time", conn->appconnect_time,
+        "pretransfer_time", conn->pretransfer_time,
+        "redirect_time", conn->redirect_time,
+        "starttransfer_time", conn->starttransfer_time)) {
+    errx(2, "Failed to encode metrics");
   }
 }
 
@@ -1300,6 +1284,11 @@ int main(int argc, char **argv) {
   };
 
   memset(&global, 0, sizeof(GlobalInfo));
+
+  if (ei_init() != 0) {
+    errx(2, "ei_init failed");
+  }
+
   global.evbase = event_base_new();
   if (!global.evbase) {
     errx(2, "event_base_new failed");
