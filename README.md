@@ -86,6 +86,7 @@ katipo:Method(Pool :: atom(), URL :: binary(), ReqOptions :: map()).
 | `capath`                | `binary()`                          | `undefined` | [docs](https://curl.haxx.se/libcurl/c/CURLOPT_CAPATH.html)                          |
 | `cacert`                | `binary()`                          | `undefined` | [docs](https://curl.haxx.se/libcurl/c/CURLOPT_CAINFO.html)                          |
 | `timeout_ms`            | `pos_integer()`                     | 30000       | [docs](https://curl.haxx.se/libcurl/c/CURLOPT_TIMEOUT_MS.html)                      |
+| `dns_cache_timeout`     | `integer()`                         | 60          | [docs](https://curl.haxx.se/libcurl/c/CURLOPT_DNS_CACHE_TIMEOUT.html) (0=disable, -1=forever) |
 | `maxredirs`             | `non_neg_integer()`                 | 9           | [docs](https://curl.haxx.se/libcurl/c/CURLOPT_MAXREDIRS.html)                       |
 | `proxy`                 | `binary()`                          | `undefined` | [docs](https://curl.haxx.se/libcurl/c/CURLOPT_PROXY.html)                           |
 | `tcp_fastopen`          | `boolean()`                         | `false`     | [docs](https://curl.haxx.se/libcurl/c/CURLOPT_TCP_FASTOPEN.html) curl >= 7.49.0     |
@@ -123,6 +124,7 @@ katipo:Method(Pool :: atom(), URL :: binary(), ReqOptions :: map()).
 | `pipelining`            | `nothing` <br> `http1` <br> `multiplex` | `nothing`    | HTTP pipelining [CURLMOPT_PIPELINING](https://curl.haxx.se/libcurl/c/CURLMOPT_PIPELINING.html) |
 | `max_pipeline_length`   | `non_neg_integer()`           | 100          |                                                                                                |
 | `max_total_connections` | `non_neg_integer()`           | 0 (no limit) | [docs](https://curl.haxx.se/libcurl/c/CURLMOPT_MAX_TOTAL_CONNECTIONS.html)                     |
+| `max_concurrent_streams`| `non_neg_integer()`           | 100          | [docs](https://curl.haxx.se/libcurl/c/CURLMOPT_MAX_CONCURRENT_STREAMS.html) curl >= 7.67.0     |
 
 #### Observability
 

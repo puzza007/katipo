@@ -1,5 +1,7 @@
 #include <stdlib.h>
-#include <event.h>
+#include <event2/event.h>
+#include <event2/bufferevent.h>
+#include <event2/buffer.h>
 #include <sys/types.h>
 #include <sys/uio.h>
 #include <unistd.h>
@@ -47,6 +49,7 @@
 #define K_CURLOPT_KEYPASSWD 27
 #define K_CURLOPT_USERPWD 28
 #define K_CURLOPT_SSLVERSION 29
+#define K_CURLOPT_DNS_CACHE_TIMEOUT 31
 
 #define K_CURLAUTH_BASIC 100
 #define K_CURLAUTH_DIGEST 101
@@ -80,7 +83,7 @@ typedef struct _ConnInfo {
   struct curl_slist *resp_headers;
   struct curl_slist *req_headers;
   struct curl_slist *req_cookies;
-  int response_code;
+  long response_code;
   char *post_data;
   long post_data_size;
   // metrics
@@ -130,6 +133,7 @@ typedef struct _EasyOpts {
   char *curlopt_keypasswd;
   char *curlopt_userpwd;
   long curlopt_sslversion;
+  long curlopt_dns_cache_timeout;
 } EasyOpts;
 
 static const char *curl_error_code(CURLcode error) {
@@ -659,7 +663,8 @@ static int sock_cb(CURL *e, curl_socket_t s, int what, void *cbp, void *sockp) {
   return 0;
 }
 
-static int multi_timer_cb(CURLM *multi, long timeout_ms, GlobalInfo *global) {
+static int multi_timer_cb(CURLM *multi, long timeout_ms, void *userp) {
+  GlobalInfo *global = (GlobalInfo *)userp;
   struct timeval timeout;
 
   timeout.tv_sec = timeout_ms / 1000;
@@ -715,7 +720,7 @@ static void set_method(long method, ConnInfo *conn) {
     case KATIPO_GET:
       break;
     case KATIPO_POST:
-      curl_easy_setopt(conn->easy, CURLOPT_POST, 1);
+      curl_easy_setopt(conn->easy, CURLOPT_POST, 1L);
       curl_easy_setopt(conn->easy, CURLOPT_POSTFIELDS, conn->post_data);
       curl_easy_setopt(conn->easy, CURLOPT_POSTFIELDSIZE, conn->post_data_size);
       break;
@@ -731,7 +736,7 @@ static void set_method(long method, ConnInfo *conn) {
       break;
     case KATIPO_HEAD:
       curl_easy_setopt(conn->easy, CURLOPT_CUSTOMREQUEST, "HEAD");
-      curl_easy_setopt(conn->easy, CURLOPT_NOBODY, 1);
+      curl_easy_setopt(conn->easy, CURLOPT_NOBODY, 1L);
       break;
     case KATIPO_DELETE:
       curl_easy_setopt(conn->easy, CURLOPT_CUSTOMREQUEST, "DELETE");
@@ -819,6 +824,7 @@ static void new_conn(long method, char *url, struct curl_slist *req_headers,
                      eopts.curlopt_cacert);
   }
   curl_easy_setopt(conn->easy, CURLOPT_TIMEOUT_MS, eopts.curlopt_timeout_ms);
+  curl_easy_setopt(conn->easy, CURLOPT_DNS_CACHE_TIMEOUT, eopts.curlopt_dns_cache_timeout);
   curl_easy_setopt(conn->easy, CURLOPT_MAXREDIRS, eopts.curlopt_maxredirs);
   if (eopts.curlopt_http_auth != -1) {
     curl_easy_setopt(conn->easy, CURLOPT_HTTPAUTH,
@@ -1147,6 +1153,9 @@ static void erl_input(struct bufferevent *ev, void *arg) {
         case K_CURLOPT_SSLVERSION:
           eopts.curlopt_sslversion = eopt_long;
           break;
+        case K_CURLOPT_DNS_CACHE_TIMEOUT:
+          eopts.curlopt_dns_cache_timeout = eopt_long;
+          break;
         default:
           errx(2, "Unknown eopt long value %ld", eopt);
         }
@@ -1231,15 +1240,17 @@ static void erl_error(struct bufferevent *ev, short event, void *ud) {
 
 static void erlang_init(GlobalInfo *global) {
   from_erlang =
-      bufferevent_new(STDIN_FILENO, erl_input, NULL, erl_error, global);
+      bufferevent_socket_new(global->evbase, STDIN_FILENO, 0);
   if (from_erlang == NULL) {
-    errx(2, "bufferevent_new");
+    errx(2, "bufferevent_socket_new");
   }
+  bufferevent_setcb(from_erlang, erl_input, NULL, erl_error, global);
 
-  to_erlang = bufferevent_new(STDOUT_FILENO, NULL, NULL, erl_error, global);
+  to_erlang = bufferevent_socket_new(global->evbase, STDOUT_FILENO, 0);
   if (to_erlang == NULL) {
-    errx(2, "bufferevent_new");
+    errx(2, "bufferevent_socket_new");
   }
+  bufferevent_setcb(to_erlang, NULL, NULL, erl_error, global);
 
   bufferevent_setwatermark(from_erlang, EV_READ, 4, 0);
   bufferevent_enable(from_erlang, EV_READ);
@@ -1257,11 +1268,15 @@ int main(int argc, char **argv) {
     { "pipelining", required_argument, 0, 'p' },
     { "max-pipeline-length", required_argument, 0, 'a' },
     { "max-total-connections", required_argument, 0, 'c' },
+    { "max-concurrent-streams", required_argument, 0, 's' },
     { 0, 0, 0, 0 }
   };
 
   memset(&global, 0, sizeof(GlobalInfo));
-  global.evbase = event_init();
+  global.evbase = event_base_new();
+  if (!global.evbase) {
+    errx(2, "event_base_new failed");
+  }
 
   if (curl_global_init(CURL_GLOBAL_ALL)) {
     errx(2, "curl_global_init failed");
@@ -1308,6 +1323,10 @@ int main(int argc, char **argv) {
         curl_multi_setopt(global.multi, CURLMOPT_MAX_TOTAL_CONNECTIONS,
                           atoi(optarg));
         break;
+      case 's':
+        curl_multi_setopt(global.multi, CURLMOPT_MAX_CONCURRENT_STREAMS,
+                          atoi(optarg));
+        break;
       default:
         errx(2, "Unknown option '%c'\n", c);
     }
@@ -1316,6 +1335,14 @@ int main(int argc, char **argv) {
   erlang_init(&global);
 
   event_base_dispatch(global.evbase);
+
+  /* Cleanup */
+  bufferevent_free(from_erlang);
+  bufferevent_free(to_erlang);
+  curl_multi_cleanup(global.multi);
+  curl_share_cleanup(global.shobject);
+  curl_global_cleanup();
+  event_base_free(global.evbase);
 
   return (0);
 }

@@ -110,6 +110,7 @@
 -define(KEYPASSWD, 27).
 -define(USERPWD, 28).
 -define(SSLVERSION, 29).
+-define(DNS_CACHE_TIMEOUT, 31).
 
 -define(DEFAULT_REQ_TIMEOUT, 30000).
 -define(FOLLOWLOCATION_TRUE, 1).
@@ -374,7 +375,8 @@
 %% see [https://curl.se/libcurl/c/CURLOPT_SSLVERSION.html]
 -type curlmopts() :: [{max_pipeline_length, non_neg_integer()} |
                       {pipelining, pipelining()} |
-                      {max_total_connections, non_neg_integer()}].
+                      {max_total_connections, non_neg_integer()} |
+                      {max_concurrent_streams, non_neg_integer()}].
 
 -export_type([method/0]).
 -export_type([url/0]).
@@ -436,7 +438,8 @@
           sslkey = undefined :: undefined | binary() | file:name_all(),
           sslkey_blob = undefined :: undefined | binary(),
           keypasswd = undefined :: undefined | binary(),
-          userpwd = undefined :: undefined | binary()
+          userpwd = undefined :: undefined | binary(),
+          dns_cache_timeout = 60 :: integer()
          }).
 
 -type req() :: #req{}.
@@ -667,7 +670,8 @@ handle_call(#req{method = Method,
                  sslkey = SSLKey,
                  sslkey_blob = SSLKeyBlob,
                  keypasswd = KeyPasswd,
-                 userpwd = UserPwd},
+                 userpwd = UserPwd,
+                 dns_cache_timeout = DNSCacheTimeout},
              From,
              State = #state{port = Port, reqs = Reqs}) ->
     {Self, Ref} = From,
@@ -695,7 +699,8 @@ handle_call(#req{method = Method,
             {?SSLKEY, SSLKey},
             {?SSLKEY_BLOB, SSLKeyBlob},
             {?KEYPASSWD, KeyPasswd},
-            {?USERPWD, UserPwd}],
+            {?USERPWD, UserPwd},
+            {?DNS_CACHE_TIMEOUT, DNSCacheTimeout}],
     Command = {Self, Ref, Method, Url, Headers, CookieJar, Body, Opts},
     true = port_command(Port, term_to_binary(Command)),
     Tref = erlang:start_timer(Timeout, self(), {req_timeout, From}),
@@ -816,6 +821,9 @@ mopt_supported({pipelining, multiplex}) ->
 mopt_supported({max_total_connections, Val})
   when is_integer(Val) andalso Val >= 0 ->
     {true, "--max-total-connections " ++ integer_to_list(Val)};
+mopt_supported({max_concurrent_streams, Val})
+  when is_integer(Val) andalso Val >= 0 ->
+    {true, "--max-concurrent-streams " ++ integer_to_list(Val)};
 mopt_supported({_, _}) ->
     false.
 
@@ -944,6 +952,8 @@ opt(keypasswd, Pass, {Req, Errors}) when is_binary(Pass) ->
     {Req#req{keypasswd = Pass}, Errors};
 opt(userpwd, UserPwd, {Req, Errors}) when is_binary(UserPwd) ->
     {Req#req{userpwd = UserPwd}, Errors};
+opt(dns_cache_timeout, Secs, {Req, Errors}) when is_integer(Secs) andalso Secs >= -1 ->
+    {Req#req{dns_cache_timeout = Secs}, Errors};
 opt(K, V, {Req, Errors}) ->
     {Req, [{K, V} | Errors]}.
 

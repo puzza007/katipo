@@ -24,3 +24,9 @@ local/
 /rebar3.crashdump
 doc
 /.claude/
+
+# C coverage artifacts
+*.gcda
+*.gcno
+*.gcov
+coverage.info
