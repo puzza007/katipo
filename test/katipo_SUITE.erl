@@ -190,6 +190,9 @@ groups() ->
        %% TODO: Fix this test. See https://github.com/puzza007/katipo/runs/5281750037?check_suite_focus=true
        %% cacert_self_signed,
        capath,
+       capath_string,
+       cacert_string,
+       path_opts_bad_list,
        sslversion,
        badssl]},
      {https_mutual, [],
@@ -913,6 +916,41 @@ capath(Config) ->
                    #{ssl_verifyhost => true,
                      ssl_verifypeer => true,
                      capath => CAPath}).
+
+capath_string(Config) ->
+    %% Test that capath accepts string (charlist) paths, not just binaries
+    DataDir = ?config(data_dir, Config),
+    CAPath = filename:join(DataDir, "capath"),  %% string, not binary
+    {ok, #{status := 301}} =
+        katipo:get(?POOL, <<"https://google.com">>,
+                   #{ssl_verifyhost => true,
+                     ssl_verifypeer => true,
+                     capath => CAPath}).
+
+cacert_string(Config) ->
+    %% Test that cacert accepts string (charlist) paths, not just binaries
+    CACert = binary_to_list(?config(cacert_file, Config)),  %% string, not binary
+    {ok, #{status := 301}} =
+        katipo:get(?POOL, <<"https://google.com">>,
+                   #{ssl_verifyhost => true,
+                     ssl_verifypeer => true,
+                     cacert => CACert}).
+
+path_opts_bad_list(_) ->
+    %% Test that invalid lists for path options return bad_opts error
+    InvalidList = [invalid, {tuple, data}, 12345],
+    {error, #{code := bad_opts}} =
+        katipo:get(?POOL, <<"https://localhost/">>,
+                   #{capath => InvalidList}),
+    {error, #{code := bad_opts}} =
+        katipo:get(?POOL, <<"https://localhost/">>,
+                   #{cacert => InvalidList}),
+    {error, #{code := bad_opts}} =
+        katipo:get(?POOL, <<"https://localhost/">>,
+                   #{sslcert => InvalidList}),
+    {error, #{code := bad_opts}} =
+        katipo:get(?POOL, <<"https://localhost/">>,
+                   #{sslkey => InvalidList}).
 
 sslversion(_) ->
     %% Test the sslversion option to set minimum TLS version

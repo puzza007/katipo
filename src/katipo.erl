@@ -897,8 +897,16 @@ opt(ssl_verifypeer, false, {Req, Errors}) ->
     {Req#req{ssl_verifypeer = ?SSL_VERIFYPEER_FALSE}, Errors};
 opt(capath, CAPath, {Req, Errors}) when is_binary(CAPath) ->
     {Req#req{capath = CAPath}, Errors};
+opt(capath, CAPath, {Req, Errors}) when is_list(CAPath) ->
+    try unicode:characters_to_binary(CAPath) of
+        Bin when is_binary(Bin) -> {Req#req{capath = Bin}, Errors}
+    catch _:_ -> {Req, [{capath, CAPath} | Errors]} end;
 opt(cacert, CACert, {Req, Errors}) when is_binary(CACert) ->
     {Req#req{cacert = CACert}, Errors};
+opt(cacert, CACert, {Req, Errors}) when is_list(CACert) ->
+    try unicode:characters_to_binary(CACert) of
+        Bin when is_binary(Bin) -> {Req#req{cacert = Bin}, Errors}
+    catch _:_ -> {Req, [{cacert, CACert} | Errors]} end;
 opt(timeout_ms, Ms, {Req, Errors}) when is_integer(Ms) andalso Ms > 0 ->
     {Req#req{timeout_ms = Ms}, Errors};
 opt(maxredirs, M, {Req, Errors}) when is_integer(M) andalso M >= -1 ->
@@ -967,8 +975,16 @@ opt(verbose, false, {Req, Errors}) ->
     {Req#req{verbose = ?VERBOSE_FALSE}, Errors};
 opt(sslcert, Cert, {Req, Errors}) when is_binary(Cert) ->
     {Req#req{sslcert = Cert}, Errors};
+opt(sslcert, Cert, {Req, Errors}) when is_list(Cert) ->
+    try unicode:characters_to_binary(Cert) of
+        Bin when is_binary(Bin) -> {Req#req{sslcert = Bin}, Errors}
+    catch _:_ -> {Req, [{sslcert, Cert} | Errors]} end;
 opt(sslkey, Key, {Req, Errors}) when is_binary(Key) ->
     {Req#req{sslkey = Key}, Errors};
+opt(sslkey, Key, {Req, Errors}) when is_list(Key) ->
+    try unicode:characters_to_binary(Key) of
+        Bin when is_binary(Bin) -> {Req#req{sslkey = Bin}, Errors}
+    catch _:_ -> {Req, [{sslkey, Key} | Errors]} end;
 opt(sslkey_blob, Key, {Req, Errors})
   when ?SSLKEY_BLOB_AVAILABLE andalso is_binary(Key) ->
     {Req#req{sslkey_blob = Key}, Errors};
