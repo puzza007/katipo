@@ -1364,10 +1364,12 @@ int main(int argc, char **argv) {
         curl_multi_setopt(global.multi, CURLMOPT_MAX_TOTAL_CONNECTIONS,
                           atoi(optarg));
         break;
+#if LIBCURL_VERSION_NUM >= 0x074300 /* 7.67.0 */
       case 's':
         curl_multi_setopt(global.multi, CURLMOPT_MAX_CONCURRENT_STREAMS,
                           atoi(optarg));
         break;
+#endif
       default:
         errx(2, "Unknown option '%c'\n", c);
     }
@@ -1383,6 +1385,7 @@ int main(int argc, char **argv) {
   curl_multi_cleanup(global.multi);
   curl_share_cleanup(global.shobject);
   curl_global_cleanup();
+  event_free(global.timer_event);
   event_base_free(global.evbase);
 
   return (0);
