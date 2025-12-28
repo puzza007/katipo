@@ -38,7 +38,6 @@
 #define K_CURLOPT_TCP_FASTOPEN 17
 #define K_CURLOPT_INTERFACE 18
 #define K_CURLOPT_UNIX_SOCKET_PATH 19
-#define K_CURLOPT_LOCK_DATA_SSL_SESSION 20
 #define K_CURLOPT_DOH_URL 21
 #define K_CURLOPT_HTTP_VERSION 22
 #define K_CURLOPT_VERBOSE 23
@@ -123,7 +122,6 @@ typedef struct _EasyOpts {
   long curlopt_tcp_fastopen;
   char *curlopt_interface;
   char *curlopt_unix_socket_path;
-  long curlopt_lock_data_ssl_session;
   char *curlopt_doh_url;
   long curlopt_http_version;
   long curlopt_verbose;
@@ -895,9 +893,8 @@ static void new_conn(long method, char *url, struct curl_slist *req_headers,
   #if LIBCURL_VERSION_NUM >= 0x073E00 /* Available since 7.62.0 */
   curl_easy_setopt(conn->easy, CURLOPT_DOH_URL, eopts.curlopt_doh_url);
   #endif
-  if (eopts.curlopt_lock_data_ssl_session) {
-    curl_easy_setopt(conn->easy, CURLOPT_SHARE, global->shobject);
-  }
+  /* Always attach share object for DNS caching; SSL session sharing is also enabled */
+  curl_easy_setopt(conn->easy, CURLOPT_SHARE, global->shobject);
   if (eopts.curlopt_sslcert != NULL) {
     curl_easy_setopt(conn->easy, CURLOPT_SSLCERT,
                      eopts.curlopt_sslcert);
@@ -1174,9 +1171,6 @@ static void erl_input(struct bufferevent *ev, void *arg) {
             errx(2, "Unknown curlopt_http_auth value %ld", eopt_long);
           }
           break;
-        case K_CURLOPT_LOCK_DATA_SSL_SESSION:
-          eopts.curlopt_lock_data_ssl_session = eopt_long;
-          break;
         case K_CURLOPT_HTTP_VERSION:
           eopts.curlopt_http_version = eopt_long;
           break;
@@ -1334,7 +1328,10 @@ int main(int argc, char **argv) {
     errx(2, "curl_share_init failed");
   }
   if (CURLSHE_OK != curl_share_setopt(global.shobject, CURLSHOPT_SHARE, CURL_LOCK_DATA_SSL_SESSION)) {
-    errx(2, "curl_share_setopt failed");
+    errx(2, "curl_share_setopt SSL_SESSION failed");
+  }
+  if (CURLSHE_OK != curl_share_setopt(global.shobject, CURLSHOPT_SHARE, CURL_LOCK_DATA_DNS)) {
+    errx(2, "curl_share_setopt DNS failed");
   }
   global.timer_event = evtimer_new(global.evbase, timer_cb, &global);
   global.to_get = 0;
@@ -1347,7 +1344,7 @@ int main(int argc, char **argv) {
   curl_multi_setopt(global.multi, CURLMOPT_TIMERDATA, &global);
 
   while (1) {
-    c = getopt_long(argc, argv, "pac:", long_options, &option_index);
+    c = getopt_long(argc, argv, "pa:c:s:", long_options, &option_index);
     if (c == -1)
       break;
     switch (c) {

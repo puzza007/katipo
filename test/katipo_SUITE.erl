@@ -160,8 +160,6 @@ groups() ->
        interface_unknown,
        unix_socket_path,
        unix_socket_path_cant_connect,
-       lock_data_ssl_session_true,
-       lock_data_ssl_session_false,
        doh_url,
        badopts,
        protocol_restriction,
@@ -674,22 +672,6 @@ digest_authorised_userpwd(Config) ->
     Json = jsx:decode(Body),
     ?assert(maps:get(<<"authenticated">>, Json)),
     ?assertEqual(Username, maps:get(<<"user">>, Json)).
-
-lock_data_ssl_session_true(Config) ->
-    BaseOpts = ?config(httpbin_opts, Config),
-    Url = httpbin_url(Config, <<"/get?a=%21%40%23%24%25%5E%26%2A%28%29_%2B">>),
-    {ok, #{status := 200, body := Body}} =
-        katipo:get(?POOL, Url, BaseOpts#{lock_data_ssl_session => true}),
-    Json = jsx:decode(Body),
-    ?assertEqual(<<"!@#$%^&*()_+">>, maps:get(<<"a">>, maps:get(<<"args">>, Json))).
-
-lock_data_ssl_session_false(Config) ->
-    BaseOpts = ?config(httpbin_opts, Config),
-    Url = httpbin_url(Config, <<"/get?a=%21%40%23%24%25%5E%26%2A%28%29_%2B">>),
-    {ok, #{status := 200, body := Body}} =
-        katipo:get(?POOL, Url, BaseOpts#{lock_data_ssl_session => false}),
-    Json = jsx:decode(Body),
-    ?assertEqual(<<"!@#$%^&*()_+">>, maps:get(<<"a">>, maps:get(<<"args">>, Json))).
 
 doh_url(_) ->
     case katipo:doh_url_available() of
