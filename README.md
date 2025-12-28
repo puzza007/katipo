@@ -85,11 +85,13 @@ katipo:Method(Pool :: atom(), URL :: binary(), ReqOptions :: map()).
 | `ssl_verifypeer`        | `boolean()`                         | `true`      | [docs](https://curl.haxx.se/libcurl/c/CURLOPT_SSL_VERIFYPEER.html)                  |
 | `capath`                | `binary()`                          | `undefined` | [docs](https://curl.haxx.se/libcurl/c/CURLOPT_CAPATH.html)                          |
 | `cacert`                | `binary()`                          | `undefined` | [docs](https://curl.haxx.se/libcurl/c/CURLOPT_CAINFO.html)                          |
+| `ca_cache_timeout`      | `integer()`                         | 86400       | [docs](https://curl.haxx.se/libcurl/c/CURLOPT_CA_CACHE_TIMEOUT.html) curl >= 7.87.0 (0=disable, -1=forever) |
 | `timeout_ms`            | `pos_integer()`                     | 30000       | [docs](https://curl.haxx.se/libcurl/c/CURLOPT_TIMEOUT_MS.html)                      |
 | `dns_cache_timeout`     | `integer()`                         | 60          | [docs](https://curl.haxx.se/libcurl/c/CURLOPT_DNS_CACHE_TIMEOUT.html) (0=disable, -1=forever) |
 | `maxredirs`             | `non_neg_integer()`                 | 9           | [docs](https://curl.haxx.se/libcurl/c/CURLOPT_MAXREDIRS.html)                       |
 | `proxy`                 | `binary()`                          | `undefined` | [docs](https://curl.haxx.se/libcurl/c/CURLOPT_PROXY.html)                           |
 | `tcp_fastopen`          | `boolean()`                         | `false`     | [docs](https://curl.haxx.se/libcurl/c/CURLOPT_TCP_FASTOPEN.html) curl >= 7.49.0     |
+| `pipewait`              | `boolean()`                         | `true`      | [docs](https://curl.haxx.se/libcurl/c/CURLOPT_PIPEWAIT.html) curl >= 7.43.0         |
 | `interface`             | `binary()`                          | `undefined` | [docs](https://curl.haxx.se/libcurl/c/CURLOPT_INTERFACE.html)                       |
 | `unix_socket_path`      | `binary()`                          | `undefined` | [docs](https://curl.haxx.se/libcurl/c/CURLOPT_UNIX_SOCKET_PATH.html) curl >= 7.40.0 |
 | `doh_url`               | `binary()`                          | `undefined` | [docs](https://curl.haxx.se/libcurl/c/CURLOPT_DOH_URL.html) curl >= 7.62.0          |
