@@ -100,7 +100,6 @@
 -define(TCP_FASTOPEN, 17).
 -define(INTERFACE, 18).
 -define(UNIX_SOCKET_PATH, 19).
--define(LOCK_DATA_SSL_SESSION, 20).
 -define(DOH_URL, 21).
 -define(HTTP_VERSION, 22).
 -define(VERBOSE, 23).
@@ -128,8 +127,6 @@
 -define(CURLAUTH_NEGOTIATE, 104).
 -define(TCP_FASTOPEN_FALSE, 0).
 -define(TCP_FASTOPEN_TRUE, 1).
--define(LOCK_DATA_SSL_SESSION_FALSE, 0).
--define(LOCK_DATA_SSL_SESSION_TRUE, 1).
 -define(VERBOSE_TRUE, 1).
 -define(VERBOSE_FALSE, 0).
 -define(PIPEWAIT_TRUE, 1).
@@ -335,7 +332,6 @@
                     tcp_fastopen => tcp_fastopen(),
                     interface => interface(),
                     unix_socket_path => unix_socket_path(),
-                    lock_data_ssl_session => boolean(),
                     doh_url => doh_url(),
                     http_version => curlopt_http_version(),
                     sslversion => curlopt_sslversion(),
@@ -344,6 +340,7 @@
                     sslkey => sslkey(),
                     sslkey_blob => sslkey_blob(),
                     userpwd => userpwd(),
+                    dns_cache_timeout => integer(),
                     ca_cache_timeout => integer(),
                     pipewait => boolean()}.
 -type opts() :: #{headers => headers(),
@@ -364,7 +361,6 @@
                     tcp_fastopen => tcp_fastopen(),
                     interface => interface(),
                     unix_socket_path => unix_socket_path(),
-                    lock_data_ssl_session => boolean(),
                     doh_url => doh_url(),
                     http_version => curlopt_http_version(),
                     sslversion => curlopt_sslversion(),
@@ -373,6 +369,7 @@
                     sslkey => sslkey(),
                     sslkey_blob => sslkey_blob(),
                     userpwd => userpwd(),
+                    dns_cache_timeout => integer(),
                     ca_cache_timeout => integer(),
                     pipewait => boolean()}.
 -export_type([opts/0]).
@@ -463,8 +460,6 @@
           tcp_fastopen = ?TCP_FASTOPEN_FALSE :: ?TCP_FASTOPEN_FALSE | ?TCP_FASTOPEN_TRUE,
           interface = undefined :: undefined | binary(),
           unix_socket_path = undefined :: undefined | binary(),
-          lock_data_ssl_session = ?LOCK_DATA_SSL_SESSION_FALSE ::
-            ?LOCK_DATA_SSL_SESSION_FALSE | ?LOCK_DATA_SSL_SESSION_TRUE,
           doh_url = undefined :: undefined | doh_url(),
           http_version = ?CURL_HTTP_VERSION_NONE :: integer(),
           sslversion = ?CURL_SSLVERSION_DEFAULT :: integer(),
@@ -698,7 +693,6 @@ handle_call(#req{method = Method,
                  tcp_fastopen = TCPFastOpen,
                  interface = Interface,
                  unix_socket_path = UnixSocketPath,
-                 lock_data_ssl_session = LockDataSslSession,
                  doh_url = DOHURL,
                  http_version = HTTPVersion,
                  sslversion = SSLVersion,
@@ -729,7 +723,6 @@ handle_call(#req{method = Method,
             {?TCP_FASTOPEN, TCPFastOpen},
             {?INTERFACE, Interface},
             {?UNIX_SOCKET_PATH, UnixSocketPath},
-            {?LOCK_DATA_SSL_SESSION, LockDataSslSession},
             {?DOH_URL, DOHURL},
             {?HTTP_VERSION, HTTPVersion},
             {?SSLVERSION, SSLVersion},
@@ -951,10 +944,6 @@ opt(interface, Interface, {Req, Errors}) when is_binary(Interface) ->
 opt(unix_socket_path, UnixSocketPath, {Req, Errors})
   when is_binary(UnixSocketPath) andalso ?UNIX_SOCKET_PATH_AVAILABLE ->
     {Req#req{unix_socket_path = UnixSocketPath}, Errors};
-opt(lock_data_ssl_session, true, {Req, Errors}) ->
-    {Req#req{lock_data_ssl_session = ?LOCK_DATA_SSL_SESSION_TRUE}, Errors};
-opt(lock_data_ssl_session, false, {Req, Errors}) ->
-    {Req#req{lock_data_ssl_session = ?LOCK_DATA_SSL_SESSION_FALSE}, Errors};
 opt(doh_url, DOHURL, {Req, Errors}) when ?DOH_URL_AVAILABLE andalso is_binary(DOHURL) ->
     {Req#req{doh_url = DOHURL}, Errors};
 opt(http_version, curl_http_version_none, {Req, Errors}) ->
