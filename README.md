@@ -79,33 +79,33 @@ katipo:Method(Pool :: atom(), URL :: binary(), ReqOptions :: map()).
 | `headers`               | `[{binary(), iodata()}]`            | `[]`        |                                                                                     |
 | `cookiejar`             | opaque (returned in response)       | `[]`        |                                                                                     |
 | `body`                  | `iodata()`                          | `<<>>`      |                                                                                     |
-| `connecttimeout_ms`     | `pos_integer()`                     | 30000       | [docs](https://curl.haxx.se/libcurl/c/CURLOPT_CONNECTTIMEOUT.html)                  |
-| `followlocation`        | `boolean()`                         | `false`     | [docs](https://curl.haxx.se/libcurl/c/CURLOPT_FOLLOWLOCATION.html)                  |
-| `ssl_verifyhost`        | `boolean()`                         | `true`      | [docs](https://curl.haxx.se/libcurl/c/CURLOPT_SSL_VERIFYHOST.html)                  |
-| `ssl_verifypeer`        | `boolean()`                         | `true`      | [docs](https://curl.haxx.se/libcurl/c/CURLOPT_SSL_VERIFYPEER.html)                  |
-| `capath`                | `binary()`                          | `undefined` | [docs](https://curl.haxx.se/libcurl/c/CURLOPT_CAPATH.html)                          |
-| `cacert`                | `binary()`                          | `undefined` | [docs](https://curl.haxx.se/libcurl/c/CURLOPT_CAINFO.html)                          |
-| `ca_cache_timeout`      | `integer()`                         | 86400       | [docs](https://curl.haxx.se/libcurl/c/CURLOPT_CA_CACHE_TIMEOUT.html) curl >= 7.87.0 (0=disable, -1=forever) |
-| `timeout_ms`            | `pos_integer()`                     | 30000       | [docs](https://curl.haxx.se/libcurl/c/CURLOPT_TIMEOUT_MS.html)                      |
-| `dns_cache_timeout`     | `integer()`                         | 60          | [docs](https://curl.haxx.se/libcurl/c/CURLOPT_DNS_CACHE_TIMEOUT.html) (0=disable, -1=forever) |
-| `maxredirs`             | `non_neg_integer()`                 | 9           | [docs](https://curl.haxx.se/libcurl/c/CURLOPT_MAXREDIRS.html)                       |
-| `proxy`                 | `binary()`                          | `undefined` | [docs](https://curl.haxx.se/libcurl/c/CURLOPT_PROXY.html)                           |
-| `tcp_fastopen`          | `boolean()`                         | `false`     | [docs](https://curl.haxx.se/libcurl/c/CURLOPT_TCP_FASTOPEN.html) curl >= 7.49.0     |
-| `pipewait`              | `boolean()`                         | `true`      | [docs](https://curl.haxx.se/libcurl/c/CURLOPT_PIPEWAIT.html) curl >= 7.43.0         |
-| `interface`             | `binary()`                          | `undefined` | [docs](https://curl.haxx.se/libcurl/c/CURLOPT_INTERFACE.html)                       |
-| `unix_socket_path`      | `binary()`                          | `undefined` | [docs](https://curl.haxx.se/libcurl/c/CURLOPT_UNIX_SOCKET_PATH.html) curl >= 7.40.0 |
-| `doh_url`               | `binary()`                          | `undefined` | [docs](https://curl.haxx.se/libcurl/c/CURLOPT_DOH_URL.html) curl >= 7.62.0          |
-| `http_version`          | `curl_http_version_none` <br> `curl_http_version_1_0` <br> `curl_http_version_1_1` <br> `curl_http_version_2_0` <br> `curl_http_version_2tls` <br> `curl_http_version_2_prior_knowledge` <br> `curl_http_version_3` | `curl_http_version_none` | [docs](https://curl.haxx.se/libcurl/c/CURLOPT_HTTP_VERSION.html) HTTP/3 requires curl >= 7.66.0 |
-| `sslversion`            | `sslversion_default` <br> `sslversion_tlsv1` <br> `sslversion_tlsv1_0` <br> `sslversion_tlsv1_1` <br> `sslversion_tlsv1_2` <br> `sslversion_tlsv1_3` | `sslversion_default` | [docs](https://curl.haxx.se/libcurl/c/CURLOPT_SSLVERSION.html) |
-| `sslcert`               | `binary()`                          | `undefined` | [docs](https://curl.haxx.se/libcurl/c/CURLOPT_SSLCERT.html)                         |
-| `sslkey`                | `binary()`                          | `undefined` | [docs](https://curl.haxx.se/libcurl/c/CURLOPT_SSLKEY.html)                          |
-| `sslkey_blob`           | `binary()` (DER format)             | `undefined` | [docs](https://curl.haxx.se/libcurl/c/CURLOPT_SSLKEY_BLOB.html) curl >= 7.71.0      |
-| `keypasswd`             | `binary()`                          | `undefined` | [docs](https://curl.haxx.se/libcurl/c/CURLOPT_KEYPASSWD.html)                       |
-| `http_auth`             | `basic` <br> `digest` <br> `ntlm` <br> `negotiate` | `undefined` | [docs](https://curl.haxx.se/libcurl/c/CURLOPT_HTTPAUTH.html)                        |
-| `username`              | `binary()`                          | `undefined` | [docs](https://curl.haxx.se/libcurl/c/CURLOPT_USERNAME.html)                        |
-| `password`              | `binary()`                          | `undefined` | [docs](https://curl.haxx.se/libcurl/c/CURLOPT_PASSWORD.html)                        |
-| `userpwd`               | `binary()`                          | `undefined` | [docs](https://curl.haxx.se/libcurl/c/CURLOPT_USERPWD.html)                         |
-| `verbose`               | `boolean()`                         | `false`     | [docs](https://curl.haxx.se/libcurl/c/CURLOPT_VERBOSE.html)                         |
+| `connecttimeout_ms`     | `pos_integer()`                     | 30000       | [docs](https://curl.se/libcurl/c/CURLOPT_CONNECTTIMEOUT.html)                  |
+| `followlocation`        | `boolean()`                         | `false`     | [docs](https://curl.se/libcurl/c/CURLOPT_FOLLOWLOCATION.html)                  |
+| `ssl_verifyhost`        | `boolean()`                         | `true`      | [docs](https://curl.se/libcurl/c/CURLOPT_SSL_VERIFYHOST.html)                  |
+| `ssl_verifypeer`        | `boolean()`                         | `true`      | [docs](https://curl.se/libcurl/c/CURLOPT_SSL_VERIFYPEER.html)                  |
+| `capath`                | `binary()`                          | `undefined` | [docs](https://curl.se/libcurl/c/CURLOPT_CAPATH.html)                          |
+| `cacert`                | `binary()`                          | `undefined` | [docs](https://curl.se/libcurl/c/CURLOPT_CAINFO.html)                          |
+| `ca_cache_timeout`      | `integer()`                         | 86400       | [docs](https://curl.se/libcurl/c/CURLOPT_CA_CACHE_TIMEOUT.html) curl >= 7.87.0 (0=disable, -1=forever) |
+| `timeout_ms`            | `pos_integer()`                     | 30000       | [docs](https://curl.se/libcurl/c/CURLOPT_TIMEOUT_MS.html)                      |
+| `dns_cache_timeout`     | `integer()`                         | 60          | [docs](https://curl.se/libcurl/c/CURLOPT_DNS_CACHE_TIMEOUT.html) (0=disable, -1=forever) |
+| `maxredirs`             | `non_neg_integer()`                 | 9           | [docs](https://curl.se/libcurl/c/CURLOPT_MAXREDIRS.html)                       |
+| `proxy`                 | `binary()`                          | `undefined` | [docs](https://curl.se/libcurl/c/CURLOPT_PROXY.html)                           |
+| `tcp_fastopen`          | `boolean()`                         | `false`     | [docs](https://curl.se/libcurl/c/CURLOPT_TCP_FASTOPEN.html) curl >= 7.49.0     |
+| `pipewait`              | `boolean()`                         | `true`      | [docs](https://curl.se/libcurl/c/CURLOPT_PIPEWAIT.html) curl >= 7.43.0         |
+| `interface`             | `binary()`                          | `undefined` | [docs](https://curl.se/libcurl/c/CURLOPT_INTERFACE.html)                       |
+| `unix_socket_path`      | `binary()`                          | `undefined` | [docs](https://curl.se/libcurl/c/CURLOPT_UNIX_SOCKET_PATH.html) curl >= 7.40.0 |
+| `doh_url`               | `binary()`                          | `undefined` | [docs](https://curl.se/libcurl/c/CURLOPT_DOH_URL.html) curl >= 7.62.0          |
+| `http_version`          | `curl_http_version_none` <br> `curl_http_version_1_0` <br> `curl_http_version_1_1` <br> `curl_http_version_2_0` <br> `curl_http_version_2tls` <br> `curl_http_version_2_prior_knowledge` <br> `curl_http_version_3` | `curl_http_version_none` | [docs](https://curl.se/libcurl/c/CURLOPT_HTTP_VERSION.html) HTTP/3 requires curl >= 7.66.0 |
+| `sslversion`            | `sslversion_default` <br> `sslversion_tlsv1` <br> `sslversion_tlsv1_0` <br> `sslversion_tlsv1_1` <br> `sslversion_tlsv1_2` <br> `sslversion_tlsv1_3` | `sslversion_default` | [docs](https://curl.se/libcurl/c/CURLOPT_SSLVERSION.html) |
+| `sslcert`               | `binary()`                          | `undefined` | [docs](https://curl.se/libcurl/c/CURLOPT_SSLCERT.html)                         |
+| `sslkey`                | `binary()`                          | `undefined` | [docs](https://curl.se/libcurl/c/CURLOPT_SSLKEY.html)                          |
+| `sslkey_blob`           | `binary()` (DER format)             | `undefined` | [docs](https://curl.se/libcurl/c/CURLOPT_SSLKEY_BLOB.html) curl >= 7.71.0      |
+| `keypasswd`             | `binary()`                          | `undefined` | [docs](https://curl.se/libcurl/c/CURLOPT_KEYPASSWD.html)                       |
+| `http_auth`             | `basic` <br> `digest` <br> `ntlm` <br> `negotiate` | `undefined` | [docs](https://curl.se/libcurl/c/CURLOPT_HTTPAUTH.html)                        |
+| `username`              | `binary()`                          | `undefined` | [docs](https://curl.se/libcurl/c/CURLOPT_USERNAME.html)                        |
+| `password`              | `binary()`                          | `undefined` | [docs](https://curl.se/libcurl/c/CURLOPT_PASSWORD.html)                        |
+| `userpwd`               | `binary()`                          | `undefined` | [docs](https://curl.se/libcurl/c/CURLOPT_USERPWD.html)                         |
+| `verbose`               | `boolean()`                         | `false`     | [docs](https://curl.se/libcurl/c/CURLOPT_VERBOSE.html)                         |
 
 #### Responses
 
@@ -122,10 +122,10 @@ katipo:Method(Pool :: atom(), URL :: binary(), ReqOptions :: map()).
 
 | Option                  | Type                          | Default      | Note                                                                                           |
 |:------------------------|:------------------------------|:-------------|:-----------------------------------------------------------------------------------------------|
-| `pipelining`            | `nothing` <br> `http1` <br> `multiplex` | `nothing`    | HTTP pipelining [CURLMOPT_PIPELINING](https://curl.haxx.se/libcurl/c/CURLMOPT_PIPELINING.html) |
+| `pipelining`            | `nothing` <br> `http1` <br> `multiplex` | `nothing`    | HTTP pipelining [CURLMOPT_PIPELINING](https://curl.se/libcurl/c/CURLMOPT_PIPELINING.html) |
 | `max_pipeline_length`   | `non_neg_integer()`           | 100          |                                                                                                |
-| `max_total_connections` | `non_neg_integer()`           | 0 (no limit) | [docs](https://curl.haxx.se/libcurl/c/CURLMOPT_MAX_TOTAL_CONNECTIONS.html)                     |
-| `max_concurrent_streams`| `non_neg_integer()`           | 100          | [docs](https://curl.haxx.se/libcurl/c/CURLMOPT_MAX_CONCURRENT_STREAMS.html) curl >= 7.67.0     |
+| `max_total_connections` | `non_neg_integer()`           | 0 (no limit) | [docs](https://curl.se/libcurl/c/CURLMOPT_MAX_TOTAL_CONNECTIONS.html)                     |
+| `max_concurrent_streams`| `non_neg_integer()`           | 100          | [docs](https://curl.se/libcurl/c/CURLMOPT_MAX_CONCURRENT_STREAMS.html) curl >= 7.67.0     |
 
 #### Observability
 

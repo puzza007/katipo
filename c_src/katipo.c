@@ -822,7 +822,7 @@ static void new_conn(long method, char *url, struct curl_slist *req_headers,
   curl_easy_setopt(conn->easy, CURLOPT_VERBOSE, eopts.curlopt_verbose);
   curl_easy_setopt(conn->easy, CURLOPT_ERRORBUFFER, conn->error);
   curl_easy_setopt(conn->easy, CURLOPT_PRIVATE, conn);
-  curl_easy_setopt(conn->easy, CURLOPT_ACCEPT_ENCODING, "gzip,deflate");
+  curl_easy_setopt(conn->easy, CURLOPT_ACCEPT_ENCODING, "");
 
   curl_easy_setopt(conn->easy, CURLOPT_CONNECTTIMEOUT_MS,
                    eopts.curlopt_connecttimeout_ms);
