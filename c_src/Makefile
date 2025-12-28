@@ -31,7 +31,7 @@ ifeq ($(UNAME_SYS), Darwin)
 	endif
 	CFLAGS ?= -O3 -std=c99 -Wall -Wmissing-prototypes $(shell pkg-config --cflags libevent)
 	CXXFLAGS ?= -O3 -Wall
-	LDFLAGS ?= -flat_namespace -undefined suppress $(shell pkg-config --libs libevent)
+	LDFLAGS ?= -flat_namespace -undefined dynamic_lookup $(shell pkg-config --libs libevent)
 else ifeq ($(UNAME_SYS), FreeBSD)
 	CC ?= cc
 	CURL_CONFIG ?= curl-config
@@ -66,7 +66,11 @@ CFLAGS += $(shell $(CURL_CONFIG) --cflags)
 
 # Use CURL_CONFIG for curl libs
 CURL_LIBS ?= $(shell $(CURL_CONFIG) --libs)
-LDLIBS += $(CURL_LIBS) -L $(ERL_INTERFACE_LIB_DIR) -lei -levent
+# On Darwin, -levent comes from pkg-config in LDFLAGS; on Linux/FreeBSD it's added below
+LDLIBS += $(CURL_LIBS) -L $(ERL_INTERFACE_LIB_DIR) -lei
+ifneq ($(UNAME_SYS), Darwin)
+	LDLIBS += -levent
+endif
 
 # Detect curl features
 CURL_VERSION := $(shell $(CURL_CONFIG) --version)

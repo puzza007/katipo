@@ -644,7 +644,7 @@ static void setsock(SockInfo *f, curl_socket_t s, CURL *e, int act,
 
 static void addsock(curl_socket_t s, CURL *easy, int action,
                     GlobalInfo *global) {
-  SockInfo *fdp = calloc(sizeof(SockInfo), 1);
+  SockInfo *fdp = calloc(1, sizeof(*fdp));
 
   fdp->global = global;
   setsock(fdp, s, easy, action, global);
@@ -775,7 +775,7 @@ static void new_conn(long method, char *url, struct curl_slist *req_headers,
   CURLMcode rc;
   struct curl_slist *nc;
 
-  conn = calloc(1, sizeof(ConnInfo));
+  conn = calloc(1, sizeof(*conn));
   conn->error[0] = '\0';
 
   conn->memory = (char *)malloc(1);
@@ -1009,8 +1009,8 @@ static void erl_input(struct bufferevent *ev, void *arg) {
 
     index = 0;
 
-    pid = (erlang_pid *)malloc(sizeof(erlang_pid));
-    ref = (erlang_ref *)malloc(sizeof(erlang_ref));
+    pid = malloc(sizeof(*pid));
+    ref = malloc(sizeof(*ref));
     if (ei_decode_version(buf, &index, &version) ||
         ei_decode_tuple_header(buf, &index, &arity) ||
         ei_decode_pid(buf, &index, pid) ||
