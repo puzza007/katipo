@@ -1088,35 +1088,17 @@ static void erl_input(struct bufferevent *ev, void *arg) {
     }
 
 
-    eopts.curlopt_connecttimeout_ms = 30000;
-    eopts.curlopt_followlocation = 0;
-    eopts.curlopt_ssl_verifyhost = 2;
-    eopts.curlopt_ssl_verifypeer = 1;
-    eopts.curlopt_capath = NULL;
-    eopts.curlopt_cacert = NULL;
-    eopts.curlopt_timeout_ms = 30000;
-    eopts.curlopt_maxredirs = 9;
-    eopts.curlopt_http_auth = -1;
-    eopts.curlopt_username = NULL;
-    eopts.curlopt_password = NULL;
-    eopts.curlopt_proxy = NULL;
-    eopts.curlopt_tcp_fastopen = 0;
-    eopts.curlopt_interface = NULL;
-    eopts.curlopt_unix_socket_path = NULL;
-    eopts.curlopt_lock_data_ssl_session = 0;
-    eopts.curlopt_doh_url = NULL;
-    eopts.curlopt_http_version = 0;
-    eopts.curlopt_verbose = 0;
-    eopts.curlopt_sslcert = NULL;
-    eopts.curlopt_sslkey = NULL;
-    eopts.curlopt_sslkey_blob = NULL;
-    eopts.curlopt_sslkey_blob_size = 0;
-    eopts.curlopt_keypasswd = NULL;
-    eopts.curlopt_userpwd = NULL;
-    eopts.curlopt_sslversion = 0;
-    eopts.curlopt_dns_cache_timeout = 60;
-    eopts.curlopt_ca_cache_timeout = 86400; /* 24 hours - libcurl default */
-    eopts.curlopt_pipewait = 1; /* Enable by default for better HTTP/2 multiplexing */
+    eopts = (EasyOpts){
+        .curlopt_connecttimeout_ms = 30000,
+        .curlopt_ssl_verifyhost = 2,
+        .curlopt_ssl_verifypeer = 1,
+        .curlopt_timeout_ms = 30000,
+        .curlopt_maxredirs = 9,
+        .curlopt_http_auth = -1,
+        .curlopt_dns_cache_timeout = 60,
+        .curlopt_ca_cache_timeout = 86400,  /* 24 hours - libcurl default */
+        .curlopt_pipewait = 1,              /* Enable by default for better HTTP/2 multiplexing */
+    };
 
     if (ei_decode_list_header(buf, &index, &num_eopts)) {
       errx(2, "Couldn't decode eopts length");
