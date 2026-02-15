@@ -1,4 +1,5 @@
 -module(katipo_app).
+-moduledoc false.
 
 -behaviour(application).
 
