@@ -22,7 +22,6 @@
            "src/katipo.app.src",
            "src/katipo.erl",
            "src/katipo_app.erl",
-           "src/katipo_cow_qs.erl",
            "src/katipo_metrics.erl",
            "src/katipo_pool.erl",
            "src/katipo_sup.erl"]}
