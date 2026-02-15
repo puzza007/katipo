@@ -1,5 +1,5 @@
-%% @hidden
 -module(katipo_metrics).
+-moduledoc false.
 
 -include_lib("opentelemetry_api_experimental/include/otel_meter.hrl").
 
@@ -74,7 +74,6 @@ notify({error, _Error}, Metrics, TotalUs, Method) ->
     notify_timing_metrics(Metrics, TotalUs, Method).
 
 
-%% @private
 notify_timing_metrics(Metrics, TotalUs, Method) ->
     %% Curl metrics are in seconds, convert to milliseconds
     Metrics1 = [{K, 1000 * V} || {K, V} <- Metrics],
@@ -92,7 +91,6 @@ notify_timing_metrics(Metrics, TotalUs, Method) ->
     lists:foreach(fun({K, V}) -> record_timing(K, V, Attrs) end, Metrics3),
     Metrics3.
 
-%% @private
 record_timing(total_time, V, Attrs) ->
     ?histogram_record(?DURATION_HISTOGRAM, V, Attrs);
 record_timing(curl_time, V, Attrs) ->
