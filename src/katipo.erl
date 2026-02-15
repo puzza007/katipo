@@ -1,4 +1,31 @@
 -module(katipo).
+-moduledoc """
+An HTTP/HTTP2/HTTP3 client library for Erlang built around libcurl-multi and libevent.
+
+## Quick Start
+
+```erlang
+{ok, _} = application:ensure_all_started(katipo).
+{ok, _} = katipo_pool:start(my_pool, 2, [{pipelining, multiplex}]).
+{ok, #{status := 200, body := Body}} = katipo:get(my_pool, <<"https://example.com">>).
+```
+
+## Request Options
+
+Options can be passed as the third argument to HTTP method functions, or included
+directly in the request map passed to `req/2`.
+
+See `t:opts/0` for all available options and `t:request/0` for the full request map type.
+
+## Responses
+
+All request functions return `t:response/0`:
+
+```erlang
+{ok, #{status := pos_integer(), headers := headers(), cookiejar := cookiejar(), body := body()}}
+{error, #{code := error_code(), message := error_msg()}}
+```
+""".
 
 -behaviour(gen_server).
 
@@ -477,92 +504,99 @@
 
 -type req() :: #req{}.
 
-%% @private
+-doc "Returns whether TCP Fast Open is available (curl >= 7.49.0).".
 tcp_fastopen_available() ->
     ?TCP_FASTOPEN_AVAILABLE.
 
-%% @private
+-doc "Returns whether Unix socket paths are available (curl >= 7.40.0).".
 unix_socket_path_available() ->
     ?UNIX_SOCKET_PATH_AVAILABLE.
 
-%% @private
+-doc "Returns whether DNS-over-HTTPS is available (curl >= 7.62.0).".
 doh_url_available() ->
     ?DOH_URL_AVAILABLE.
 
-%% @private
+-doc "Returns whether SSL key blob is available (curl >= 7.71.0).".
 sslkey_blob_available() ->
     ?SSLKEY_BLOB_AVAILABLE.
 
-%% @private
+-doc "Returns whether HTTP/3 is available (curl >= 7.66.0).".
 http3_available() ->
     ?HTTP3_AVAILABLE.
 
 -dialyzer({nowarn_function, opt/3}).
 
-%% @equiv get(Poolname, Url, #{})
+-doc #{equiv => get/3}.
 -spec get(katipo_pool:name(), url()) -> response().
 get(PoolName, Url) ->
     req(PoolName, #{url => Url, method => get}).
 
+-doc "Performs an HTTP GET request.".
 -spec get(katipo_pool:name(), url(), opts()) -> response().
 get(PoolName, Url, Opts) ->
     req(PoolName, Opts#{url => Url, method => get}).
 
-%% @equiv post(Poolname, Url, #{})
+-doc #{equiv => post/3}.
 -spec post(katipo_pool:name(), url()) -> response().
 post(PoolName, Url) ->
     req(PoolName, #{url => Url, method => post}).
 
+-doc "Performs an HTTP POST request.".
 -spec post(katipo_pool:name(), url(), opts()) -> response().
 post(PoolName, Url, Opts) ->
     req(PoolName, Opts#{url => Url, method => post}).
 
-%% @equiv put(Poolname, Url, #{})
+-doc #{equiv => put/3}.
 -spec put(katipo_pool:name(), url()) -> response().
 put(PoolName, Url) ->
     req(PoolName, #{url => Url, method => put}).
 
+-doc "Performs an HTTP PUT request.".
 -spec put(katipo_pool:name(), url(), opts()) -> response().
 put(PoolName, Url, Opts) ->
     req(PoolName, Opts#{url => Url, method => put}).
 
-%% @equiv head(Poolname, Url, #{})
+-doc #{equiv => head/3}.
 -spec head(katipo_pool:name(), url()) -> response().
 head(PoolName, Url) ->
     req(PoolName, #{url => Url, method => head}).
 
+-doc "Performs an HTTP HEAD request.".
 -spec head(katipo_pool:name(), url(), opts()) -> response().
 head(PoolName, Url, Opts) ->
     req(PoolName, Opts#{url => Url, method => head}).
 
-%% @equiv options(Poolname, Url, #{})
+-doc #{equiv => options/3}.
 -spec options(katipo_pool:name(), url()) -> response().
 options(PoolName, Url) ->
     req(PoolName, #{url => Url, method => options}).
 
+-doc "Performs an HTTP OPTIONS request.".
 -spec options(katipo_pool:name(), url(), opts()) -> response().
 options(PoolName, Url, Opts) ->
     req(PoolName, Opts#{url => Url, method => options}).
 
-%% @equiv patch(Poolname, Url, #{})
+-doc #{equiv => patch/3}.
 -spec patch(katipo_pool:name(), url()) -> response().
 patch(PoolName, Url) ->
     req(PoolName, #{url => Url, method => patch}).
 
+-doc "Performs an HTTP PATCH request.".
 -spec patch(katipo_pool:name(), url(), opts()) -> response().
 patch(PoolName, Url, Opts) ->
     req(PoolName, Opts#{url => Url, method => patch}).
 
-%% @equiv delete(Poolname, Url, #{})
+-doc #{equiv => delete/3}.
 -spec delete(katipo_pool:name(), url()) -> response().
 delete(PoolName, Url) ->
     req(PoolName, #{url => Url, method => delete}).
 
+-doc "Performs an HTTP DELETE request.".
 -spec delete(katipo_pool:name(), url(), opts()) -> response().
 delete(PoolName, Url, Opts) ->
     req(PoolName, Opts#{url => Url, method => delete}).
 
-%% @private
+-doc "Performs an HTTP request using the full request map.".
 -spec req(katipo_pool:name(), request()) -> response().
 req(PoolName, Opts)
   when is_map(Opts) ->
@@ -575,7 +609,7 @@ req(PoolName, Opts)
             Error
     end.
 
-%% @private
+-doc false.
 do_req_with_span(PoolName, Req) ->
     #req{method = MethodInt, url = Url} = Req,
     Method = method_int_to_binary(MethodInt),
@@ -602,7 +636,7 @@ do_req_with_span(PoolName, Req) ->
         {Result, Response}
     end).
 
-%% @private
+-doc false.
 set_response_span_attrs(ok, #{status := Status}) ->
     ?set_attribute('http.response.status_code', Status),
     case Status >= 400 of
@@ -616,7 +650,7 @@ set_response_span_attrs(error, #{code := Code, message := _Msg}) ->
 set_response_span_attrs(_, _) ->
     ok.
 
-%% @private
+-doc false.
 method_int_to_binary(?GET) -> <<"GET">>;
 method_int_to_binary(?POST) -> <<"POST">>;
 method_int_to_binary(?PUT) -> <<"PUT">>;
@@ -625,7 +659,7 @@ method_int_to_binary(?OPTIONS) -> <<"OPTIONS">>;
 method_int_to_binary(?PATCH) -> <<"PATCH">>;
 method_int_to_binary(?DELETE) -> <<"DELETE">>.
 
-%% @private
+-doc false.
 set_url_span_attrs(Url) ->
     case parse_url_for_span(Url) of
         {<<>>, _} ->
@@ -635,8 +669,7 @@ set_url_span_attrs(Url) ->
             ?set_attribute('server.address', Host)
     end.
 
-%% @private
-%% Parse URL once, returning sanitized URL (no query/fragment) and host
+-doc false.
 parse_url_for_span(Url) when is_binary(Url) ->
     case uri_string:parse(Url) of
         #{host := Host} = Parsed ->
@@ -646,8 +679,7 @@ parse_url_for_span(Url) when is_binary(Url) ->
             {<<>>, <<>>}
     end.
 
-%% @private
-%% Remove query, fragment, and userinfo (credentials) from URL
+-doc false.
 sanitize_parsed_url(Parsed) ->
     Sanitized = maps:without([query, fragment, userinfo], Parsed),
     case uri_string:recompose(Sanitized) of
@@ -655,12 +687,12 @@ sanitize_parsed_url(Parsed) ->
         Recomposed -> iolist_to_binary(Recomposed)
     end.
 
-%% @private
+-doc false.
 start_link(CurlOpts) when is_list(CurlOpts) ->
     Args = [CurlOpts],
     gen_server:start_link(?MODULE, Args, []).
 
-%% @private
+-doc false.
 init([CurlOpts]) ->
     process_flag(trap_exit, true),
     case get_mopts(CurlOpts) of
@@ -672,7 +704,7 @@ init([CurlOpts]) ->
             {stop, Error}
     end.
 
-%% @private
+-doc false.
 handle_call(#req{method = Method,
                  url = Url,
                  headers = Headers,
@@ -742,12 +774,12 @@ handle_call(#req{method = Method,
     Reqs2 = Reqs#{From => Tref},
     {noreply, State#state{reqs = Reqs2}}.
 
-%% @private
+-doc false.
 handle_cast(Msg, State) ->
     logger:error("Unexpected cast: ~p", [Msg]),
     {noreply, State}.
 
-%% @private
+-doc false.
 handle_info({Port, {data, Data}}, State = #state{port = Port, reqs = Reqs}) ->
     {Result, {From, Response}} =
         case binary_to_term(Data) of
@@ -786,12 +818,12 @@ handle_info({'EXIT', Port, Reason}, State = #state{port = Port}) ->
     logger:error("Port ~p died with reason: ~p", [Port, Reason]),
     {stop, port_died, State}.
 
-%% @private
+-doc false.
 terminate(_Reason, #state{port = Port}) ->
     true = port_close(Port),
     ok.
 
-%% @private
+-doc false.
 code_change(_OldVsn, State, _Extra) ->
     {ok, State}.
 
@@ -862,7 +894,7 @@ mopt_supported({max_concurrent_streams, Val})
 mopt_supported({_, _}) ->
     false.
 
-%% @private
+-doc false.
 -spec get_timeout(req()) -> pos_integer().
 get_timeout(#req{connecttimeout_ms = ConnMs, timeout_ms = ReqMs}) ->
     max(ConnMs, ReqMs).
@@ -1016,7 +1048,7 @@ process_opts(Opts) ->
             {error, error_map(bad_opts, Errors)}
     end.
 
-%% @private
+-doc "Validates request options without performing the request.".
 -spec check_opts(request()) -> ok | {error, map()}.
 check_opts(Opts) when is_map(Opts) ->
     case process_opts(Opts) of
