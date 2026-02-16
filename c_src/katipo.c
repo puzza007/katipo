@@ -4,6 +4,7 @@
 #include <event2/buffer.h>
 #include <sys/types.h>
 #include <sys/uio.h>
+#include <sys/resource.h>
 #include <unistd.h>
 #include <assert.h>
 #include <stdio.h>
@@ -1288,6 +1289,18 @@ int main(int argc, char **argv) {
   };
 
   memset(&global, 0, sizeof(GlobalInfo));
+
+  /* Cap RLIMIT_NOFILE to prevent ei_init() failure.
+   * ei_init() calls sysconf(_SC_OPEN_MAX) and allocates a tracking structure
+   * sized for that many fds. When ulimit is unlimited, sysconf returns
+   * LONG_MAX causing malloc to fail with ENOMEM. */
+  {
+    struct rlimit rl;
+    if (getrlimit(RLIMIT_NOFILE, &rl) == 0 && rl.rlim_cur > 1048576) {
+      rl.rlim_cur = 1048576;
+      setrlimit(RLIMIT_NOFILE, &rl);
+    }
+  }
 
   if (ei_init() != 0) {
     errx(2, "ei_init failed");
