@@ -67,10 +67,10 @@ init() ->
 notify({ok, Response}, Metrics, TotalUs, Method) ->
     #{status := Status} = Response,
     Attrs = #{result => ok, 'http.response.status_code' => Status},
-    ?counter_add(?REQUESTS_COUNTER, 1, Attrs),
+    try ?counter_add(?REQUESTS_COUNTER, 1, Attrs) catch error:undef -> ok end,
     notify_timing_metrics(Metrics, TotalUs, Method);
 notify({error, _Error}, Metrics, TotalUs, Method) ->
-    ?counter_add(?REQUESTS_COUNTER, 1, #{result => error}),
+    try ?counter_add(?REQUESTS_COUNTER, 1, #{result => error}) catch error:undef -> ok end,
     notify_timing_metrics(Metrics, TotalUs, Method).
 
 
@@ -94,20 +94,20 @@ notify_timing_metrics(Metrics, TotalUs, Method) ->
 
 %% @private
 record_timing(total_time, V, Attrs) ->
-    ?histogram_record(?DURATION_HISTOGRAM, V, Attrs);
+    try ?histogram_record(?DURATION_HISTOGRAM, V, Attrs) catch error:undef -> ok end;
 record_timing(curl_time, V, Attrs) ->
-    ?histogram_record(?CURL_TIME_HISTOGRAM, V, Attrs);
+    try ?histogram_record(?CURL_TIME_HISTOGRAM, V, Attrs) catch error:undef -> ok end;
 record_timing(namelookup_time, V, Attrs) ->
-    ?histogram_record(?NAMELOOKUP_TIME_HISTOGRAM, V, Attrs);
+    try ?histogram_record(?NAMELOOKUP_TIME_HISTOGRAM, V, Attrs) catch error:undef -> ok end;
 record_timing(connect_time, V, Attrs) ->
-    ?histogram_record(?CONNECT_TIME_HISTOGRAM, V, Attrs);
+    try ?histogram_record(?CONNECT_TIME_HISTOGRAM, V, Attrs) catch error:undef -> ok end;
 record_timing(appconnect_time, V, Attrs) ->
-    ?histogram_record(?APPCONNECT_TIME_HISTOGRAM, V, Attrs);
+    try ?histogram_record(?APPCONNECT_TIME_HISTOGRAM, V, Attrs) catch error:undef -> ok end;
 record_timing(pretransfer_time, V, Attrs) ->
-    ?histogram_record(?PRETRANSFER_TIME_HISTOGRAM, V, Attrs);
+    try ?histogram_record(?PRETRANSFER_TIME_HISTOGRAM, V, Attrs) catch error:undef -> ok end;
 record_timing(redirect_time, V, Attrs) ->
-    ?histogram_record(?REDIRECT_TIME_HISTOGRAM, V, Attrs);
+    try ?histogram_record(?REDIRECT_TIME_HISTOGRAM, V, Attrs) catch error:undef -> ok end;
 record_timing(starttransfer_time, V, Attrs) ->
-    ?histogram_record(?STARTTRANSFER_TIME_HISTOGRAM, V, Attrs);
+    try ?histogram_record(?STARTTRANSFER_TIME_HISTOGRAM, V, Attrs) catch error:undef -> ok end;
 record_timing(_, _, _) ->
     ok.
