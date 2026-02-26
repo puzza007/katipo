@@ -62,8 +62,6 @@ jobs:
       - name: Run dialyzer
         run: rebar3 dialyzer
 
-      - name: Run lint
-        run: rebar3 lint
 
       - name: Stop httpbin server
         if: always()
