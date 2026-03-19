@@ -1,5 +1,5 @@
-%% @hidden
 -module(katipo_sup).
+-moduledoc false.
 
 -behaviour(supervisor).
 
