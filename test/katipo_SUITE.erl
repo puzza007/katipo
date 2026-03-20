@@ -92,6 +92,10 @@ init_per_group(digest, Config) ->
      {req_opts, #{http_version => curl_http_version_1_1,
                   ssl_verifyhost => false,
                   ssl_verifypeer => false}}] ++ Config;
+init_per_group(async, Config) ->
+    [{httpbin_base, <<"https://localhost:8443">>},
+     {req_opts, #{ssl_verifyhost => false,
+                  ssl_verifypeer => false}}] ++ Config;
 init_per_group(_, Config) ->
     Config.
 
@@ -219,6 +223,19 @@ groups() ->
       [badssl_client_cert]},
      {port, [],
       [max_total_connections]},
+     {async, [parallel],
+      [async_get,
+       async_get_with_opts,
+       async_post,
+       async_req,
+       async_reply_to,
+       async_error,
+       async_timeout,
+       async_await,
+       async_await_timeout,
+       async_await_explicit_timeout,
+       async_await_own_timeout,
+       async_multiple_outstanding]},
      {otel, [],
       [otel_span_created,
        otel_metrics_recorded,
@@ -242,6 +259,7 @@ all() ->
                   {group, pool},
                   {group, https_mutual},
                   {group, port},
+                  {group, async},
                   {group, otel}],
     %% HTTP/2 tests always run (local httpbin supports HTTP/2)
     Http2Groups = [{group, http2}],
@@ -1392,3 +1410,125 @@ otel_url_sanitization(_Config) ->
     ?assertEqual(<<"example.com">>, Host6),
 
     ok.
+
+%% Async API tests
+
+async_get(Config) ->
+    {req_opts, Opts} = lists:keyfind(req_opts, 1, Config),
+    Url = httpbin_url(Config, <<"/get">>),
+    {ok, Ref} = katipo:async_get(?POOL, Url, Opts),
+    receive
+        {katipo_response, Ref, #{status := 200}} -> ok
+    after 10000 ->
+        ct:fail(timeout)
+    end.
+
+async_get_with_opts(Config) ->
+    {req_opts, Opts} = lists:keyfind(req_opts, 1, Config),
+    Url = httpbin_url(Config, <<"/get?a=1">>),
+    {ok, Ref} = katipo:async_get(?POOL, Url, Opts),
+    receive
+        {katipo_response, Ref, #{status := 200, body := Body}} ->
+            Json = jsx:decode(Body),
+            ?assertEqual(<<"1">>, maps:get(<<"a">>, maps:get(<<"args">>, Json)))
+    after 10000 ->
+        ct:fail(timeout)
+    end.
+
+async_post(Config) ->
+    {req_opts, Opts} = lists:keyfind(req_opts, 1, Config),
+    Url = httpbin_url(Config, <<"/post">>),
+    {ok, Ref} = katipo:async_post(?POOL, Url,
+                                  Opts#{headers => [{<<"Content-Type">>, <<"application/json">>}],
+                                        body => <<"hello">>}),
+    receive
+        {katipo_response, Ref, #{status := 200, body := Body}} ->
+            Json = jsx:decode(Body),
+            ?assertEqual(<<"hello">>, maps:get(<<"data">>, Json))
+    after 10000 ->
+        ct:fail(timeout)
+    end.
+
+async_req(Config) ->
+    {req_opts, Opts} = lists:keyfind(req_opts, 1, Config),
+    Url = httpbin_url(Config, <<"/get">>),
+    {ok, Ref} = katipo:async_req(?POOL, Opts#{url => Url, method => get}),
+    receive
+        {katipo_response, Ref, #{status := 200}} -> ok
+    after 10000 ->
+        ct:fail(timeout)
+    end.
+
+async_reply_to(Config) ->
+    {req_opts, Opts} = lists:keyfind(req_opts, 1, Config),
+    Url = httpbin_url(Config, <<"/get">>),
+    Self = self(),
+    Pid = spawn_link(fun() ->
+        receive
+            {katipo_response, _Ref, #{status := 200}} ->
+                Self ! async_reply_to_ok
+        after 10000 ->
+            Self ! async_reply_to_fail
+        end
+    end),
+    {ok, _Ref} = katipo:async_get(?POOL, Url, Opts#{reply_to => Pid}),
+    receive
+        async_reply_to_ok -> ok;
+        async_reply_to_fail -> ct:fail(reply_to_timeout)
+    after 15000 ->
+        ct:fail(timeout)
+    end.
+
+async_error(_Config) ->
+    {error, #{code := bad_opts}} =
+        katipo:async_get(?POOL, <<"https://localhost">>, #{bad_option => bad_value}).
+
+async_timeout(_Config) ->
+    {ok, Ref} = katipo:async_get(?POOL, <<"http://google.com">>,
+                                 #{connecttimeout_ms => 1}),
+    receive
+        {katipo_error, Ref, #{code := operation_timedout}} -> ok
+    after 10000 ->
+        ct:fail(timeout)
+    end.
+
+async_await(Config) ->
+    {req_opts, Opts} = lists:keyfind(req_opts, 1, Config),
+    Url = httpbin_url(Config, <<"/get">>),
+    {ok, Ref} = katipo:async_get(?POOL, Url, Opts),
+    {ok, #{status := 200}} = katipo:await(Ref).
+
+async_await_timeout(_Config) ->
+    %% Request itself times out — await collects the error
+    {ok, Ref} = katipo:async_get(?POOL, <<"http://google.com">>,
+                                 #{connecttimeout_ms => 1}),
+    {error, #{code := operation_timedout}} = katipo:await(Ref).
+
+async_await_explicit_timeout(Config) ->
+    %% await/2 with an explicit timeout that is long enough
+    {req_opts, Opts} = lists:keyfind(req_opts, 1, Config),
+    Url = httpbin_url(Config, <<"/get">>),
+    {ok, Ref} = katipo:async_get(?POOL, Url, Opts),
+    {ok, #{status := 200}} = katipo:await(Ref, 10000).
+
+async_await_own_timeout(_Config) ->
+    %% await/2 timeout fires before the response arrives
+    {ok, Ref} = katipo:async_get(?POOL, <<"http://google.com">>,
+                                 #{timeout_ms => 30000, connecttimeout_ms => 30000}),
+    {error, #{code := await_timeout}} = katipo:await(Ref, 1).
+
+async_multiple_outstanding(Config) ->
+    {req_opts, Opts} = lists:keyfind(req_opts, 1, Config),
+    Urls = [httpbin_url(Config, <<"/get?n=", (integer_to_binary(N))/binary>>)
+            || N <- lists:seq(1, 5)],
+    Refs = [{N, begin
+                    {ok, Ref} = katipo:async_get(?POOL, Url, Opts),
+                    Ref
+                end}
+            || {N, Url} <- lists:zip(lists:seq(1, 5), Urls)],
+    Results = [{N, katipo:await(Ref)} || {N, Ref} <- Refs],
+    lists:foreach(fun({N, {ok, #{status := 200, body := Body}}}) ->
+        Json = jsx:decode(Body),
+        Expected = integer_to_binary(N),
+        ?assertEqual(Expected, maps:get(<<"n">>, maps:get(<<"args">>, Json)))
+    end, Results).
