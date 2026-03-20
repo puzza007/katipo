@@ -19,12 +19,27 @@ See `t:opts/0` for all available options and `t:request/0` for the full request 
 
 ## Responses
 
-All request functions return `t:response/0`:
+Synchronous request functions return `t:response/0`:
 
 ```erlang
 {ok, #{status := pos_integer(), headers := headers(), cookiejar := cookiejar(), body := body()}}
 {error, #{code := error_code(), message := error_msg()}}
 ```
+
+## Async Requests
+
+Async functions (`async_get/2,3`, `async_req/2`, etc.) return `{ok, Ref}` immediately
+and deliver the response as a message to the calling process (or the pid specified
+by the `reply_to` option):
+
+```erlang
+{katipo_response, Ref, #{status := pos_integer(), headers := headers(), ...}}
+{katipo_error, Ref, #{code := error_code(), message := error_msg()}}
+```
+
+Use `await/1,2` to block until the response arrives.
+
+Note: async requests do not currently emit OTel spans or metrics.
 """.
 
 -behaviour(gen_server).
@@ -711,18 +726,23 @@ Use `await/1,2` to block until the response arrives.
 async_req(PoolName, Opts)
   when is_map(Opts) ->
     ReplyTo = maps:get(reply_to, Opts, self()),
-    Opts2 = maps:remove(reply_to, Opts),
-    case process_opts(Opts2) of
-        {ok, #req{url = undefined}} ->
-            {error, error_map(bad_opts, <<"[{url,undefined}]">>)};
-        {ok, Req} ->
-            UserRef = make_ref(),
-            Timeout = ?MODULE:get_timeout(Req),
-            Req2 = Req#req{timeout = Timeout},
-            wpool:cast(PoolName, {async_req, ReplyTo, UserRef, Req2}, random_worker),
-            {ok, UserRef};
-        {error, _} = Error ->
-            Error
+    case is_pid(ReplyTo) of
+        false ->
+            {error, error_map(bad_opts, <<"[{reply_to,invalid}]">>)};
+        true ->
+            Opts2 = maps:remove(reply_to, Opts),
+            case process_opts(Opts2) of
+                {ok, #req{url = undefined}} ->
+                    {error, error_map(bad_opts, <<"[{url,undefined}]">>)};
+                {ok, Req} ->
+                    UserRef = make_ref(),
+                    Timeout = ?MODULE:get_timeout(Req),
+                    Req2 = Req#req{timeout = Timeout},
+                    wpool:cast(PoolName, {async_req, ReplyTo, UserRef, Req2}, random_worker),
+                    {ok, UserRef};
+                {error, _} = Error ->
+                    Error
+            end
     end.
 
 -doc #{equiv => await/2}.
