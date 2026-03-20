@@ -877,11 +877,11 @@ handle_info({Port, {data, Data}}, State = #state{port = Port, reqs = Reqs}) ->
                 Error = #{code => Code, message => Message},
                 {error, {From0, {Error, Metrics}}}
         end,
-    case maps:find(From, Reqs) of
+    _ = case maps:find(From, Reqs) of
         {ok, Tref} when is_reference(Tref) ->
             %% Sync path
             _ = erlang:cancel_timer(Tref),
-            _ = gen_server:reply(From, {Result, Response});
+            gen_server:reply(From, {Result, Response});
         {ok, {Tref, {async, ReplyTo, UserRef}}} ->
             %% Async path — flatten into separate ok/error messages
             {ResponseMap, _Metrics} = Response,
@@ -907,7 +907,7 @@ handle_info({timeout, Tref, {req_timeout, From}}, State = #state{reqs = Reqs}) -
             {ok, {Tref, {async, ReplyTo, UserRef}}} ->
                 %% Async path
                 Error = #{code => operation_timedout, message => <<>>},
-                ReplyTo ! {katipo_error, UserRef, Error},
+                _ = ReplyTo ! {katipo_error, UserRef, Error},
                 maps:remove(From, Reqs);
             error ->
                 Reqs

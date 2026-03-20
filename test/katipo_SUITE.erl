@@ -568,8 +568,9 @@ redirect_to(Config) ->
     {ok, #{status := 302}} = katipo:get(?POOL, httpbin_url(Config, <<"/redirect-to?url=https://google.com">>), Opts).
 
 connecttimeout_ms(_) ->
+    %% Use TEST-NET-1 (RFC 5737) — guaranteed non-routable, so connect always times out
     {error, #{code := operation_timedout}} =
-        katipo:get(?POOL, <<"http://google.com">>, #{connecttimeout_ms => 1}).
+        katipo:get(?POOL, <<"http://192.0.2.1">>, #{connecttimeout_ms => 1}).
 
 followlocation_true(Config) ->
     {req_opts, Opts} = lists:keyfind(req_opts, 1, Config),
@@ -1484,7 +1485,7 @@ async_error(_Config) ->
         katipo:async_get(?POOL, <<"https://localhost">>, #{bad_option => bad_value}).
 
 async_timeout(_Config) ->
-    {ok, Ref} = katipo:async_get(?POOL, <<"http://google.com">>,
+    {ok, Ref} = katipo:async_get(?POOL, <<"http://192.0.2.1">>,
                                  #{connecttimeout_ms => 1}),
     receive
         {katipo_error, Ref, #{code := operation_timedout}} -> ok
@@ -1500,7 +1501,7 @@ async_await(Config) ->
 
 async_await_timeout(_Config) ->
     %% Request itself times out — await collects the error
-    {ok, Ref} = katipo:async_get(?POOL, <<"http://google.com">>,
+    {ok, Ref} = katipo:async_get(?POOL, <<"http://192.0.2.1">>,
                                  #{connecttimeout_ms => 1}),
     {error, #{code := operation_timedout}} = katipo:await(Ref).
 
@@ -1513,7 +1514,7 @@ async_await_explicit_timeout(Config) ->
 
 async_await_own_timeout(_Config) ->
     %% await/2 timeout fires before the response arrives
-    {ok, Ref} = katipo:async_get(?POOL, <<"http://google.com">>,
+    {ok, Ref} = katipo:async_get(?POOL, <<"http://192.0.2.1">>,
                                  #{timeout_ms => 30000, connecttimeout_ms => 30000}),
     {error, #{code := await_timeout}} = katipo:await(Ref, 1).
 
