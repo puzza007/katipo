@@ -51,6 +51,7 @@
 #define K_CURLOPT_DNS_CACHE_TIMEOUT 31
 #define K_CURLOPT_CA_CACHE_TIMEOUT 32
 #define K_CURLOPT_PIPEWAIT 33
+#define K_CURLOPT_STREAMING 34
 
 #define K_CURLAUTH_BASIC 100
 #define K_CURLAUTH_DIGEST 101
@@ -87,6 +88,8 @@ typedef struct _ConnInfo {
   long response_code;
   char *post_data;
   long post_data_size;
+  int streaming;
+  int headers_sent;
   // metrics
   double total_time;
   double namelookup_time;
@@ -136,6 +139,7 @@ typedef struct _EasyOpts {
   long curlopt_dns_cache_timeout;
   long curlopt_ca_cache_timeout;
   long curlopt_pipewait;
+  long curlopt_streaming;
 } EasyOpts;
 
 static const char *curl_error_code(CURLcode error) {
@@ -555,6 +559,71 @@ static void send_error_to_erlang(CURLcode curl_code, ConnInfo *conn) {
   ei_x_free(&result);
 }
 
+static void send_stream_headers_to_erlang(ConnInfo *conn) {
+  ei_x_buff result;
+
+  curl_easy_getinfo(conn->easy, CURLINFO_RESPONSE_CODE, &conn->response_code);
+
+  if (ei_x_new_with_version(&result) ||
+      ei_x_encode_tuple_header(&result, 3) ||
+      ei_x_encode_atom(&result, "headers") ||
+
+      ei_x_encode_tuple_header(&result, 2) ||
+      ei_x_encode_pid(&result, conn->pid) ||
+      ei_x_encode_ref(&result, conn->ref) ||
+
+      ei_x_encode_tuple_header(&result, 3) ||
+      ei_x_encode_long(&result, conn->response_code) ||
+      ei_x_encode_list_header(&result, conn->num_headers)) {
+    errx(2, "Failed to encode stream headers");
+  }
+
+  encode_headers(&result, conn);
+  encode_cookies(&result, conn);
+
+  send_to_erlang(result.buff, result.index);
+  ei_x_free(&result);
+  conn->headers_sent = 1;
+}
+
+static void send_stream_chunk_to_erlang(ConnInfo *conn, void *data, size_t len) {
+  ei_x_buff result;
+
+  if (ei_x_new_with_version(&result) ||
+      ei_x_encode_tuple_header(&result, 3) ||
+      ei_x_encode_atom(&result, "chunk") ||
+
+      ei_x_encode_tuple_header(&result, 2) ||
+      ei_x_encode_pid(&result, conn->pid) ||
+      ei_x_encode_ref(&result, conn->ref) ||
+
+      ei_x_encode_binary(&result, data, len)) {
+    errx(2, "Failed to encode stream chunk");
+  }
+
+  send_to_erlang(result.buff, result.index);
+  ei_x_free(&result);
+}
+
+static void send_stream_done_to_erlang(ConnInfo *conn) {
+  ei_x_buff result;
+
+  if (ei_x_new_with_version(&result) ||
+      ei_x_encode_tuple_header(&result, 3) ||
+      ei_x_encode_atom(&result, "done") ||
+
+      ei_x_encode_tuple_header(&result, 2) ||
+      ei_x_encode_pid(&result, conn->pid) ||
+      ei_x_encode_ref(&result, conn->ref)) {
+    errx(2, "Failed to encode stream done");
+  }
+
+  encode_metrics(&result, conn);
+
+  send_to_erlang(result.buff, result.index);
+  ei_x_free(&result);
+}
+
 static void check_multi_info(GlobalInfo *global) {
   CURLMsg *msg;
   int msgs_left;
@@ -577,7 +646,14 @@ static void check_multi_info(GlobalInfo *global) {
       curl_easy_getinfo(easy, CURLINFO_STARTTRANSFER_TIME, &conn->starttransfer_time);
 
       if (res == CURLE_OK) {
-        send_ok_to_erlang(conn);
+        if (conn->streaming) {
+          if (!conn->headers_sent) {
+            send_stream_headers_to_erlang(conn);
+          }
+          send_stream_done_to_erlang(conn);
+        } else {
+          send_ok_to_erlang(conn);
+        }
       } else {
         send_error_to_erlang(res, conn);
       }
@@ -690,15 +766,22 @@ static int multi_timer_cb(CURLM *multi, long timeout_ms, void *userp) {
 static size_t write_cb(void *ptr, size_t size, size_t nmemb, void *data) {
   size_t realsize = size * nmemb;
   ConnInfo *conn = (ConnInfo *)data;
-  char *new_memory;
 
-  new_memory = (char *)realloc(conn->memory, conn->size + realsize);
-  if (new_memory == NULL) {
-    return 0;
+  if (conn->streaming) {
+    if (!conn->headers_sent) {
+      send_stream_headers_to_erlang(conn);
+    }
+    send_stream_chunk_to_erlang(conn, ptr, realsize);
+  } else {
+    char *new_memory;
+    new_memory = (char *)realloc(conn->memory, conn->size + realsize);
+    if (new_memory == NULL) {
+      return 0;
+    }
+    conn->memory = new_memory;
+    memcpy(&(conn->memory[conn->size]), ptr, realsize);
+    conn->size += realsize;
   }
-  conn->memory = new_memory;
-  memcpy(&(conn->memory[conn->size]), ptr, realsize);
-  conn->size += realsize;
 
   return realsize;
 }
@@ -783,6 +866,8 @@ static void new_conn(long method, char *url, struct curl_slist *req_headers,
   conn->size = 0;
   conn->num_headers = 0;
   conn->resp_headers = NULL;
+  conn->streaming = eopts.curlopt_streaming;
+  conn->headers_sent = 0;
 
   conn->easy = curl_easy_init();
   if (!conn->easy) {
@@ -1171,6 +1256,9 @@ static void erl_input(struct bufferevent *ev, void *arg) {
           break;
         case K_CURLOPT_PIPEWAIT:
           eopts.curlopt_pipewait = eopt_long;
+          break;
+        case K_CURLOPT_STREAMING:
+          eopts.curlopt_streaming = eopt_long;
           break;
         default:
           errx(2, "Unknown eopt long value %ld", eopt);

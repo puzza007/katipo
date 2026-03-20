@@ -55,6 +55,24 @@ All request functions return `t:response/0`:
 -export([delete/2]).
 -export([delete/3]).
 
+-export([async_req/2]).
+-export([async_get/2]).
+-export([async_get/3]).
+-export([async_post/2]).
+-export([async_post/3]).
+-export([async_put/2]).
+-export([async_put/3]).
+-export([async_head/2]).
+-export([async_head/3]).
+-export([async_options/2]).
+-export([async_options/3]).
+-export([async_patch/2]).
+-export([async_patch/3]).
+-export([async_delete/2]).
+-export([async_delete/3]).
+-export([await/1]).
+-export([await/2]).
+
 -export([check_opts/1]).
 
 %% only for mocking during tests
@@ -139,6 +157,7 @@ All request functions return `t:response/0`:
 -define(DNS_CACHE_TIMEOUT, 31).
 -define(CA_CACHE_TIMEOUT, 32).
 -define(PIPEWAIT, 33).
+-define(STREAMING, 34).
 
 -define(DEFAULT_REQ_TIMEOUT, 30000).
 -define(FOLLOWLOCATION_TRUE, 1).
@@ -288,7 +307,8 @@ All request functions return `t:response/0`:
         ech_required |
         curl_last |
         %% returned by us, not curl
-        bad_opts.
+        bad_opts |
+        await_timeout.
 
 -type curlmopt() ::
         %% curlmopt_chunk_length_penalty_size |
@@ -342,6 +362,8 @@ All request functions return `t:response/0`:
 %% See [https://curl.haxx.se/libcurl/c/CURLOPT_USERPWD.html]
 -type request() :: #{url := binary(),
                     method := method(),
+                    reply_to => pid(),
+                    stream => boolean(),
                     headers => headers(),
                     cookiejar => cookiejar(),
                     body => req_body(),
@@ -371,7 +393,9 @@ All request functions return `t:response/0`:
                     dns_cache_timeout => integer(),
                     ca_cache_timeout => integer(),
                     pipewait => boolean()}.
--type opts() :: #{headers => headers(),
+-type opts() :: #{reply_to => pid(),
+                    stream => boolean(),
+                    headers => headers(),
                     cookiejar => cookiejar(),
                     body => req_body(),
                     connecttimeout_ms => connecttimeout_ms(),
@@ -409,6 +433,9 @@ All request functions return `t:response/0`:
                            metrics => proplists:proplist()}} |
                     {error, #{code := error_code(),
                               message := error_msg()}}.
+-type async_response() :: {ok, reference()} |
+                          {error, #{code := error_code(),
+                                    message := error_msg()}}.
 -type http_auth() :: basic | digest | ntlm | negotiate.
 -type http_auth_int() :: ?CURLAUTH_UNDEFINED |
                          ?CURLAUTH_BASIC |
@@ -465,6 +492,7 @@ All request functions return `t:response/0`:
 -export_type([sslkey/0]).
 -export_type([sslkey_blob/0]).
 -export_type([userpwd/0]).
+-export_type([async_response/0]).
 
 -record(req, {
           method = ?GET :: method_int(),
@@ -499,7 +527,8 @@ All request functions return `t:response/0`:
           userpwd = undefined :: undefined | binary(),
           dns_cache_timeout = 60 :: integer(),
           ca_cache_timeout = 86400 :: integer(),
-          pipewait = ?PIPEWAIT_TRUE :: ?PIPEWAIT_FALSE | ?PIPEWAIT_TRUE
+          pipewait = ?PIPEWAIT_TRUE :: ?PIPEWAIT_FALSE | ?PIPEWAIT_TRUE,
+          streaming = 0 :: 0 | 1
          }).
 
 -type req() :: #req{}.
@@ -596,6 +625,76 @@ delete(PoolName, Url) ->
 delete(PoolName, Url, Opts) ->
     req(PoolName, Opts#{url => Url, method => delete}).
 
+-doc #{equiv => async_get/3}.
+-spec async_get(katipo_pool:name(), url()) -> async_response().
+async_get(PoolName, Url) ->
+    async_req(PoolName, #{url => Url, method => get}).
+
+-doc "Performs an async HTTP GET request. Returns `{ok, Ref}` immediately. The response is delivered as a `{katipo_response, Ref, Response}` message.".
+-spec async_get(katipo_pool:name(), url(), opts()) -> async_response().
+async_get(PoolName, Url, Opts) ->
+    async_req(PoolName, Opts#{url => Url, method => get}).
+
+-doc #{equiv => async_post/3}.
+-spec async_post(katipo_pool:name(), url()) -> async_response().
+async_post(PoolName, Url) ->
+    async_req(PoolName, #{url => Url, method => post}).
+
+-doc "Performs an async HTTP POST request. Returns `{ok, Ref}` immediately.".
+-spec async_post(katipo_pool:name(), url(), opts()) -> async_response().
+async_post(PoolName, Url, Opts) ->
+    async_req(PoolName, Opts#{url => Url, method => post}).
+
+-doc #{equiv => async_put/3}.
+-spec async_put(katipo_pool:name(), url()) -> async_response().
+async_put(PoolName, Url) ->
+    async_req(PoolName, #{url => Url, method => put}).
+
+-doc "Performs an async HTTP PUT request. Returns `{ok, Ref}` immediately.".
+-spec async_put(katipo_pool:name(), url(), opts()) -> async_response().
+async_put(PoolName, Url, Opts) ->
+    async_req(PoolName, Opts#{url => Url, method => put}).
+
+-doc #{equiv => async_head/3}.
+-spec async_head(katipo_pool:name(), url()) -> async_response().
+async_head(PoolName, Url) ->
+    async_req(PoolName, #{url => Url, method => head}).
+
+-doc "Performs an async HTTP HEAD request. Returns `{ok, Ref}` immediately.".
+-spec async_head(katipo_pool:name(), url(), opts()) -> async_response().
+async_head(PoolName, Url, Opts) ->
+    async_req(PoolName, Opts#{url => Url, method => head}).
+
+-doc #{equiv => async_options/3}.
+-spec async_options(katipo_pool:name(), url()) -> async_response().
+async_options(PoolName, Url) ->
+    async_req(PoolName, #{url => Url, method => options}).
+
+-doc "Performs an async HTTP OPTIONS request. Returns `{ok, Ref}` immediately.".
+-spec async_options(katipo_pool:name(), url(), opts()) -> async_response().
+async_options(PoolName, Url, Opts) ->
+    async_req(PoolName, Opts#{url => Url, method => options}).
+
+-doc #{equiv => async_patch/3}.
+-spec async_patch(katipo_pool:name(), url()) -> async_response().
+async_patch(PoolName, Url) ->
+    async_req(PoolName, #{url => Url, method => patch}).
+
+-doc "Performs an async HTTP PATCH request. Returns `{ok, Ref}` immediately.".
+-spec async_patch(katipo_pool:name(), url(), opts()) -> async_response().
+async_patch(PoolName, Url, Opts) ->
+    async_req(PoolName, Opts#{url => Url, method => patch}).
+
+-doc #{equiv => async_delete/3}.
+-spec async_delete(katipo_pool:name(), url()) -> async_response().
+async_delete(PoolName, Url) ->
+    async_req(PoolName, #{url => Url, method => delete}).
+
+-doc "Performs an async HTTP DELETE request. Returns `{ok, Ref}` immediately.".
+-spec async_delete(katipo_pool:name(), url(), opts()) -> async_response().
+async_delete(PoolName, Url, Opts) ->
+    async_req(PoolName, Opts#{url => Url, method => delete}).
+
 -doc "Performs an HTTP request using the full request map.".
 -spec req(katipo_pool:name(), request()) -> response().
 req(PoolName, Opts)
@@ -603,10 +702,63 @@ req(PoolName, Opts)
     case process_opts(Opts) of
         {ok, #req{url = undefined}} ->
             {error, error_map(bad_opts, <<"[{url,undefined}]">>)};
+        {ok, #req{streaming = 1}} ->
+            {error, error_map(bad_opts, <<"stream requires async_req">>)};
         {ok, Req} ->
             do_req_with_span(PoolName, Req);
         {error, _} = Error ->
             Error
+    end.
+
+-doc """
+Performs an async HTTP request using the full request map.
+
+Returns `{ok, Ref}` immediately. The response is delivered as a
+`{katipo_response, Ref, ResponseMap}` or `{katipo_error, Ref, ErrorMap}`
+message to the process specified by the `reply_to` option (defaults to `self()`).
+
+Use `await/1,2` to block until the response arrives.
+""".
+-spec async_req(katipo_pool:name(), request()) -> async_response().
+async_req(PoolName, Opts)
+  when is_map(Opts) ->
+    ReplyTo = maps:get(reply_to, Opts, self()),
+    Opts2 = maps:remove(reply_to, Opts),
+    case process_opts(Opts2) of
+        {ok, #req{url = undefined}} ->
+            {error, error_map(bad_opts, <<"[{url,undefined}]">>)};
+        {ok, Req} ->
+            UserRef = make_ref(),
+            Timeout = ?MODULE:get_timeout(Req),
+            Req2 = Req#req{timeout = Timeout},
+            wpool:cast(PoolName, {async_req, ReplyTo, UserRef, Req2}, random_worker),
+            {ok, UserRef};
+        {error, _} = Error ->
+            Error
+    end.
+
+-doc #{equiv => await/2}.
+-spec await(reference()) -> response().
+await(Ref) ->
+    await(Ref, ?DEFAULT_REQ_TIMEOUT).
+
+-doc "Blocks until an async response for `Ref` arrives or the timeout expires.".
+-spec await(reference(), timeout()) -> response().
+await(Ref, Timeout) ->
+    receive
+        {katipo_response, Ref, Response} ->
+            {ok, Response};
+        {katipo_error, Ref, Error} ->
+            {error, Error}
+    after Timeout ->
+        %% Flush any late-arriving response for this Ref
+        receive
+            {katipo_response, Ref, _} -> ok;
+            {katipo_error, Ref, _} -> ok
+        after 0 ->
+            ok
+        end,
+        {error, #{code => await_timeout, message => <<>>}}
     end.
 
 -doc false.
@@ -705,42 +857,156 @@ init([CurlOpts]) ->
     end.
 
 -doc false.
-handle_call(#req{method = Method,
-                 url = Url,
-                 headers = Headers,
-                 cookiejar = CookieJar,
-                 body = Body,
-                 connecttimeout_ms = ConnTimeoutMs,
-                 followlocation = FollowLocation,
-                 ssl_verifyhost = SslVerifyHost,
-                 ssl_verifypeer = SslVerifyPeer,
-                 capath = CAPath,
-                 cacert = CACert,
-                 timeout_ms = TimeoutMs,
-                 maxredirs = MaxRedirs,
-                 timeout = Timeout,
-                 http_auth = HTTPAuth,
-                 username = Username,
-                 password = Password,
-                 proxy = Proxy,
-                 tcp_fastopen = TCPFastOpen,
-                 interface = Interface,
-                 unix_socket_path = UnixSocketPath,
-                 doh_url = DOHURL,
-                 http_version = HTTPVersion,
-                 sslversion = SSLVersion,
-                 verbose = Verbose,
-                 sslcert = SSLCert,
-                 sslkey = SSLKey,
-                 sslkey_blob = SSLKeyBlob,
-                 keypasswd = KeyPasswd,
-                 userpwd = UserPwd,
-                 dns_cache_timeout = DNSCacheTimeout,
-                 ca_cache_timeout = CACacheTimeout,
-                 pipewait = Pipewait},
-             From,
-             State = #state{port = Port, reqs = Reqs}) ->
-    {Self, Ref} = From,
+handle_call(Req = #req{timeout = Timeout}, From, State = #state{port = Port, reqs = Reqs}) ->
+    send_to_port(Port, From, Req),
+    Tref = erlang:start_timer(Timeout, self(), {req_timeout, From}),
+    Reqs2 = Reqs#{From => Tref},
+    {noreply, State#state{reqs = Reqs2}}.
+
+-doc false.
+handle_cast({async_req, ReplyTo, UserRef, Req = #req{timeout = Timeout}},
+            State = #state{port = Port, reqs = Reqs}) ->
+    InternalFrom = {self(), make_ref()},
+    send_to_port(Port, InternalFrom, Req),
+    Tref = erlang:start_timer(Timeout, self(), {req_timeout, InternalFrom}),
+    Reqs2 = Reqs#{InternalFrom => {Tref, {async, ReplyTo, UserRef}}},
+    {noreply, State#state{reqs = Reqs2}};
+handle_cast(Msg, State) ->
+    logger:error("Unexpected cast: ~p", [Msg]),
+    {noreply, State}.
+
+-doc false.
+handle_info({Port, {data, Data}}, State = #state{port = Port, reqs = Reqs}) ->
+    case binary_to_term(Data) of
+        {ok, {From, {Status, Headers, CookieJar, Body, Metrics}}} ->
+            R = #{status => Status,
+                  headers => parse_headers(Headers),
+                  cookiejar => CookieJar,
+                  body => Body},
+            handle_complete_response(ok, From, {R, Metrics}, Reqs, State);
+        {error, {From, {Code, Message, Metrics}}} ->
+            Error = #{code => Code, message => Message},
+            handle_complete_response(error, From, {Error, Metrics}, Reqs, State);
+        {headers, From, {Status, RawHeaders, CookieJar}} ->
+            handle_stream_headers(From, Status, RawHeaders, CookieJar, Reqs, State);
+        {chunk, From, Chunk} ->
+            handle_stream_chunk(From, Chunk, Reqs, State);
+        {done, From, Metrics} ->
+            handle_stream_done(From, Metrics, Reqs, State)
+    end;
+handle_info({timeout, Tref, {req_timeout, From}}, State = #state{reqs = Reqs}) ->
+    Reqs2 =
+        case maps:find(From, Reqs) of
+            {ok, Tref} when is_reference(Tref) ->
+                %% Sync path
+                Error = #{code => operation_timedout, message => <<>>},
+                Metrics = [],
+                _ = gen_server:reply(From, {error, {Error, Metrics}}),
+                maps:remove(From, Reqs);
+            {ok, {Tref, {async, ReplyTo, UserRef}}} ->
+                %% Async path
+                Error = #{code => operation_timedout, message => <<>>},
+                ReplyTo ! {katipo_error, UserRef, Error},
+                maps:remove(From, Reqs);
+            error ->
+                Reqs
+        end,
+    {noreply, State#state{reqs = Reqs2}};
+handle_info({'EXIT', Port, Reason}, State = #state{port = Port}) ->
+    logger:error("Port ~p died with reason: ~p", [Port, Reason]),
+    {stop, port_died, State}.
+
+-doc false.
+terminate(_Reason, #state{port = Port}) ->
+    true = port_close(Port),
+    ok.
+
+-doc false.
+code_change(_OldVsn, State, _Extra) ->
+    {ok, State}.
+
+handle_complete_response(Result, From, Response, Reqs, State) ->
+    case maps:find(From, Reqs) of
+        {ok, Tref} when is_reference(Tref) ->
+            _ = erlang:cancel_timer(Tref),
+            _ = gen_server:reply(From, {Result, Response});
+        {ok, {Tref, {async, ReplyTo, UserRef}}} ->
+            {ResponseMap, _Metrics} = Response,
+            _ = erlang:cancel_timer(Tref),
+            case Result of
+                ok    -> ReplyTo ! {katipo_response, UserRef, ResponseMap};
+                error -> ReplyTo ! {katipo_error, UserRef, ResponseMap}
+            end;
+        error ->
+            ok
+    end,
+    Reqs2 = maps:remove(From, Reqs),
+    {noreply, State#state{reqs = Reqs2}}.
+
+handle_stream_headers(From, Status, RawHeaders, CookieJar, Reqs, State) ->
+    case maps:find(From, Reqs) of
+        {ok, {_Tref, {async, ReplyTo, UserRef}}} ->
+            Headers = parse_headers(RawHeaders),
+            ReplyTo ! {katipo_response, UserRef, {status, Status, Headers, CookieJar}};
+        _ ->
+            ok
+    end,
+    {noreply, State}.
+
+handle_stream_chunk(From, Chunk, Reqs, State) ->
+    case maps:find(From, Reqs) of
+        {ok, {_Tref, {async, ReplyTo, UserRef}}} ->
+            ReplyTo ! {katipo_data, UserRef, Chunk};
+        _ ->
+            ok
+    end,
+    {noreply, State}.
+
+handle_stream_done(From, _Metrics, Reqs, State) ->
+    case maps:find(From, Reqs) of
+        {ok, {Tref, {async, ReplyTo, UserRef}}} ->
+            _ = erlang:cancel_timer(Tref),
+            ReplyTo ! {katipo_done, UserRef};
+        _ ->
+            ok
+    end,
+    Reqs2 = maps:remove(From, Reqs),
+    {noreply, State#state{reqs = Reqs2}}.
+
+send_to_port(Port, {Self, Ref},
+             #req{method = Method,
+                  url = Url,
+                  headers = Headers,
+                  cookiejar = CookieJar,
+                  body = Body,
+                  connecttimeout_ms = ConnTimeoutMs,
+                  followlocation = FollowLocation,
+                  ssl_verifyhost = SslVerifyHost,
+                  ssl_verifypeer = SslVerifyPeer,
+                  capath = CAPath,
+                  cacert = CACert,
+                  timeout_ms = TimeoutMs,
+                  maxredirs = MaxRedirs,
+                  http_auth = HTTPAuth,
+                  username = Username,
+                  password = Password,
+                  proxy = Proxy,
+                  tcp_fastopen = TCPFastOpen,
+                  interface = Interface,
+                  unix_socket_path = UnixSocketPath,
+                  doh_url = DOHURL,
+                  http_version = HTTPVersion,
+                  sslversion = SSLVersion,
+                  verbose = Verbose,
+                  sslcert = SSLCert,
+                  sslkey = SSLKey,
+                  sslkey_blob = SSLKeyBlob,
+                  keypasswd = KeyPasswd,
+                  userpwd = UserPwd,
+                  dns_cache_timeout = DNSCacheTimeout,
+                  ca_cache_timeout = CACacheTimeout,
+                  pipewait = Pipewait,
+                  streaming = Streaming}) ->
     Opts = [{?CONNECTTIMEOUT_MS, ConnTimeoutMs},
             {?FOLLOWLOCATION, FollowLocation},
             {?SSL_VERIFYHOST, SslVerifyHost},
@@ -767,65 +1033,10 @@ handle_call(#req{method = Method,
             {?USERPWD, UserPwd},
             {?DNS_CACHE_TIMEOUT, DNSCacheTimeout},
             {?CA_CACHE_TIMEOUT, CACacheTimeout},
-            {?PIPEWAIT, Pipewait}],
+            {?PIPEWAIT, Pipewait},
+            {?STREAMING, Streaming}],
     Command = {Self, Ref, Method, Url, Headers, CookieJar, Body, Opts},
-    true = port_command(Port, term_to_binary(Command)),
-    Tref = erlang:start_timer(Timeout, self(), {req_timeout, From}),
-    Reqs2 = Reqs#{From => Tref},
-    {noreply, State#state{reqs = Reqs2}}.
-
--doc false.
-handle_cast(Msg, State) ->
-    logger:error("Unexpected cast: ~p", [Msg]),
-    {noreply, State}.
-
--doc false.
-handle_info({Port, {data, Data}}, State = #state{port = Port, reqs = Reqs}) ->
-    {Result, {From, Response}} =
-        case binary_to_term(Data) of
-            {ok, {From0, {Status, Headers, CookieJar, Body, Metrics}}} ->
-                R = #{status => Status,
-                      headers => parse_headers(Headers),
-                      cookiejar => CookieJar,
-                      body => Body},
-                {ok, {From0, {R, Metrics}}};
-            {error, {From0, {Code, Message, Metrics}}} ->
-                Error = #{code => Code, message => Message},
-                {error, {From0, {Error, Metrics}}}
-        end,
-    case maps:find(From, Reqs) of
-        {ok, Tref} ->
-            _ = erlang:cancel_timer(Tref),
-            _ = gen_server:reply(From, {Result, Response});
-        error ->
-            ok
-    end,
-    Reqs2 = maps:remove(From, Reqs),
-    {noreply, State#state{reqs = Reqs2}};
-handle_info({timeout, Tref, {req_timeout, From}}, State = #state{reqs = Reqs}) ->
-    Reqs2 =
-        case maps:find(From, Reqs) of
-            {ok, Tref} ->
-                Error = #{code => operation_timedout, message => <<>>},
-                Metrics = [],
-                _ = gen_server:reply(From, {error, {Error, Metrics}}),
-                maps:remove(From, Reqs);
-            error ->
-                Reqs
-        end,
-    {noreply, State#state{reqs = Reqs2}};
-handle_info({'EXIT', Port, Reason}, State = #state{port = Port}) ->
-    logger:error("Port ~p died with reason: ~p", [Port, Reason]),
-    {stop, port_died, State}.
-
--doc false.
-terminate(_Reason, #state{port = Port}) ->
-    true = port_close(Port),
-    ok.
-
--doc false.
-code_change(_OldVsn, State, _Extra) ->
-    {ok, State}.
+    true = port_command(Port, term_to_binary(Command)).
 
 -spec headers_to_binary(headers()) -> [binary()].
 headers_to_binary(Headers) ->
@@ -1036,6 +1247,12 @@ opt(pipewait, true, {Req, Errors}) ->
     {Req#req{pipewait = ?PIPEWAIT_TRUE}, Errors};
 opt(pipewait, false, {Req, Errors}) ->
     {Req#req{pipewait = ?PIPEWAIT_FALSE}, Errors};
+opt(reply_to, Pid, {Req, Errors}) when is_pid(Pid) ->
+    {Req, Errors};
+opt(stream, true, {Req, Errors}) ->
+    {Req#req{streaming = 1}, Errors};
+opt(stream, false, {Req, Errors}) ->
+    {Req#req{streaming = 0}, Errors};
 opt(K, V, {Req, Errors}) ->
     {Req, [{K, V} | Errors]}.
 
