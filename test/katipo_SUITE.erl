@@ -235,7 +235,14 @@ groups() ->
        async_await_timeout,
        async_await_explicit_timeout,
        async_await_own_timeout,
-       async_multiple_outstanding]},
+       async_multiple_outstanding,
+       async_put,
+       async_head,
+       async_options,
+       async_patch,
+       async_delete,
+       async_invalid_reply_to,
+       async_url_missing]},
      {otel, [],
       [otel_span_created,
        otel_metrics_recorded,
@@ -1533,3 +1540,41 @@ async_multiple_outstanding(Config) ->
         Expected = integer_to_binary(N),
         ?assertEqual(Expected, maps:get(<<"n">>, maps:get(<<"args">>, Json)))
     end, Results).
+
+async_put(Config) ->
+    {req_opts, Opts} = lists:keyfind(req_opts, 1, Config),
+    Url = httpbin_url(Config, <<"/put">>),
+    {ok, Ref} = katipo:async_put(?POOL, Url, Opts#{body => <<"data">>}),
+    {ok, #{status := 200}} = katipo:await(Ref).
+
+async_head(Config) ->
+    {req_opts, Opts} = lists:keyfind(req_opts, 1, Config),
+    Url = httpbin_url(Config, <<"/get">>),
+    {ok, Ref} = katipo:async_head(?POOL, Url, Opts),
+    {ok, #{status := 200}} = katipo:await(Ref).
+
+async_options(Config) ->
+    {req_opts, Opts} = lists:keyfind(req_opts, 1, Config),
+    Url = httpbin_url(Config, <<"/get">>),
+    {ok, Ref} = katipo:async_options(?POOL, Url, Opts),
+    {ok, #{status := 200}} = katipo:await(Ref).
+
+async_patch(Config) ->
+    {req_opts, Opts} = lists:keyfind(req_opts, 1, Config),
+    Url = httpbin_url(Config, <<"/patch">>),
+    {ok, Ref} = katipo:async_patch(?POOL, Url, Opts#{body => <<"data">>}),
+    {ok, #{status := 200}} = katipo:await(Ref).
+
+async_delete(Config) ->
+    {req_opts, Opts} = lists:keyfind(req_opts, 1, Config),
+    Url = httpbin_url(Config, <<"/delete">>),
+    {ok, Ref} = katipo:async_delete(?POOL, Url, Opts),
+    {ok, #{status := 200}} = katipo:await(Ref).
+
+async_invalid_reply_to(_Config) ->
+    {error, #{code := bad_opts, message := <<"[{reply_to,invalid}]">>}} =
+        katipo:async_get(?POOL, <<"https://localhost">>, #{reply_to => not_a_pid}).
+
+async_url_missing(_Config) ->
+    {error, #{code := bad_opts}} =
+        katipo:async_req(?POOL, #{method => get}).
