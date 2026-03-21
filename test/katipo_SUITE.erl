@@ -176,10 +176,10 @@ groups() ->
      {pool, [],
       [pool_start_stop,
        worker_death,
+       port_garbage_input,
        port_death,
        port_late_response,
        pool_opts,
-       max_pipeline_length,
        max_concurrent_streams]},
      {https, [parallel],
       [verify_host_verify_peer_ok,
@@ -791,16 +791,43 @@ worker_death(Config) ->
            end,
     true = repeat_until_true(Fun3).
 
-port_death(Config) ->
+port_garbage_input(Config) ->
+    %% Sending garbage that bypasses {packet, 4} corrupts the pipe framing.
+    %% The port detects invalid ETF and exits. Supervisor recovers.
     Url = httpbin_url(Config, <<"/get">>),
     BaseOpts = ?config(httpbin_opts, Config),
-    PoolName = this_process_will_be_killed,
+    PoolName = port_garbage_test,
     PoolSize = 1,
     {ok, _} = katipo_pool:start(PoolName, PoolSize),
     WorkerName = wpool_pool:best_worker(PoolName),
     WorkerPid = whereis(WorkerName),
     {state, _, _, {state, Port, _}, _} = sys:get_state(WorkerPid),
     true = port_command(Port, <<"hdfjkshkjsdfgjsgafdjgsdjgfj">>),
+    Fun = fun() ->
+                  WorkerName2 = wpool_pool:best_worker(PoolName),
+                  WorkerPid2 = whereis(WorkerName2),
+                  case sys:get_state(WorkerPid2) of
+                      {state, _, _, {state, Port2, _}, _} when Port =/= Port2 ->
+                          {ok, #{status := 200}} =
+                              katipo:get(PoolName, Url, BaseOpts),
+                          true
+                  end
+          end,
+    true = repeat_until_true(Fun),
+    ok = katipo_pool:stop(PoolName).
+
+port_death(Config) ->
+    %% Killing the port OS process should be recovered by the supervisor
+    Url = httpbin_url(Config, <<"/get">>),
+    BaseOpts = ?config(httpbin_opts, Config),
+    PoolName = port_death_test,
+    PoolSize = 1,
+    {ok, _} = katipo_pool:start(PoolName, PoolSize),
+    WorkerName = wpool_pool:best_worker(PoolName),
+    WorkerPid = whereis(WorkerName),
+    {state, _, _, {state, Port, _}, _} = sys:get_state(WorkerPid),
+    {os_pid, OsPid} = erlang:port_info(Port, os_pid),
+    os:cmd("kill -9 " ++ integer_to_list(OsPid)),
     Fun = fun() ->
                   WorkerName2 = wpool_pool:best_worker(PoolName),
                   WorkerPid2 = whereis(WorkerName2),
@@ -827,19 +854,9 @@ pool_opts(_) ->
     PoolName = pool_opts,
     PoolSize = 1,
     PoolOpts = [{pipelining, multiplex},
-                {max_pipeline_length, 5},
                 {max_total_connections, 10},
                 {ignore_junk_opt, hithere}],
     {error, _} = katipo_pool:start(PoolName, PoolSize, PoolOpts),
-    ok = katipo_pool:stop(PoolName).
-
-max_pipeline_length(_) ->
-    PoolName = pool_opts,
-    PoolSize = 1,
-    PoolOpts = [{pipelining, multiplex},
-                {max_pipeline_length, 5},
-                {max_total_connections, 10}],
-    {ok, _} = katipo_pool:start(PoolName, PoolSize, PoolOpts),
     ok = katipo_pool:stop(PoolName).
 
 max_concurrent_streams(_) ->

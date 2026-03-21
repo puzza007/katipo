@@ -264,13 +264,8 @@
         bad_opts.
 
 -type curlmopt() ::
-        %% curlmopt_chunk_length_penalty_size |
-        %% curlmopt_content_length_penalty_size |
-        %% curlmopt_max_host_connections |
-        max_pipeline_length |
         max_total_connections |
         max_concurrent_streams |
-        %% curlmopt_maxconnects |
         pipelining.
         %% curlmopt_pipelining_site_bl |
         %% curlmopt_pipelining_server_bl |
@@ -406,8 +401,7 @@
                               sslversion_tlsv1_3.
 %% Minimum SSL/TLS version to use
 %% see [https://curl.se/libcurl/c/CURLOPT_SSLVERSION.html]
--type curlmopts() :: [{max_pipeline_length, non_neg_integer()} |
-                      {pipelining, pipelining()} |
+-type curlmopts() :: [{pipelining, pipelining()} |
                       {max_total_connections, non_neg_integer()} |
                       {max_concurrent_streams, non_neg_integer()}].
 
@@ -844,9 +838,6 @@ get_mopts(Opts) ->
     end.
 
 -spec mopt_supported({curlmopt(), any()}) -> false | {true, any()}.
-mopt_supported({max_pipeline_length, Val})
-  when is_integer(Val) andalso Val >= 0 ->
-    {true, "--max-pipeline-length " ++ integer_to_list(Val)};
 mopt_supported({pipelining, nothing}) ->
     {true, "--pipelining 0"};
 mopt_supported({pipelining, http1}) ->
