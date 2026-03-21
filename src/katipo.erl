@@ -72,6 +72,9 @@ All request functions return `t:response/0`:
 -export([async_delete/3]).
 -export([await/1]).
 -export([await/2]).
+-export([ref/1]).
+-export([send_body/2]).
+-export([finish_body/1]).
 
 -export([check_opts/1]).
 
@@ -120,7 +123,13 @@ All request functions return `t:response/0`:
 -endif.
 
 -record(state, {port :: port(),
-                reqs = #{} :: map()}).
+                reqs = #{} :: map(),
+                user_refs = #{} :: map(),
+                caller_monitors = #{} :: map()}).
+
+-record(async_handle, {ref :: reference(),
+                       worker :: atom(),
+                       monitor :: reference()}).
 
 -define(GET, 0).
 -define(POST, 1).
@@ -158,6 +167,7 @@ All request functions return `t:response/0`:
 -define(CA_CACHE_TIMEOUT, 32).
 -define(PIPEWAIT, 33).
 -define(STREAMING, 34).
+-define(STREAM_BODY, 35).
 
 -define(DEFAULT_REQ_TIMEOUT, 30000).
 -define(FOLLOWLOCATION_TRUE, 1).
@@ -308,7 +318,8 @@ All request functions return `t:response/0`:
         curl_last |
         %% returned by us, not curl
         bad_opts |
-        await_timeout.
+        await_timeout |
+        worker_died.
 
 -type curlmopt() ::
         %% curlmopt_chunk_length_penalty_size |
@@ -392,7 +403,8 @@ All request functions return `t:response/0`:
                     userpwd => userpwd(),
                     dns_cache_timeout => integer(),
                     ca_cache_timeout => integer(),
-                    pipewait => boolean()}.
+                    pipewait => boolean(),
+                    stream_body => boolean()}.
 -type opts() :: #{reply_to => pid(),
                     stream => boolean(),
                     headers => headers(),
@@ -423,7 +435,8 @@ All request functions return `t:response/0`:
                     userpwd => userpwd(),
                     dns_cache_timeout => integer(),
                     ca_cache_timeout => integer(),
-                    pipewait => boolean()}.
+                    pipewait => boolean(),
+                    stream_body => boolean()}.
 -export_type([opts/0]).
 -type metrics() :: proplists:proplist().
 -type response() :: {ok, #{status := status(),
@@ -433,7 +446,8 @@ All request functions return `t:response/0`:
                            metrics => proplists:proplist()}} |
                     {error, #{code := error_code(),
                               message := error_msg()}}.
--type async_response() :: {ok, reference()} |
+-opaque async_handle() :: #async_handle{}.
+-type async_response() :: {ok, async_handle()} |
                           {error, #{code := error_code(),
                                     message := error_msg()}}.
 -type http_auth() :: basic | digest | ntlm | negotiate.
@@ -493,6 +507,7 @@ All request functions return `t:response/0`:
 -export_type([sslkey_blob/0]).
 -export_type([userpwd/0]).
 -export_type([async_response/0]).
+-export_type([async_handle/0]).
 
 -record(req, {
           method = ?GET :: method_int(),
@@ -528,7 +543,8 @@ All request functions return `t:response/0`:
           dns_cache_timeout = 60 :: integer(),
           ca_cache_timeout = 86400 :: integer(),
           pipewait = ?PIPEWAIT_TRUE :: ?PIPEWAIT_FALSE | ?PIPEWAIT_TRUE,
-          streaming = 0 :: 0 | 1
+          streaming = 0 :: 0 | 1,
+          stream_body = 0 :: 0 | 1
          }).
 
 -type req() :: #req{}.
@@ -630,7 +646,7 @@ delete(PoolName, Url, Opts) ->
 async_get(PoolName, Url) ->
     async_req(PoolName, #{url => Url, method => get}).
 
--doc "Performs an async HTTP GET request. Returns `{ok, Ref}` immediately. The response is delivered as a `{katipo_response, Ref, Response}` message.".
+-doc "Performs an async HTTP GET request. Returns `{ok, Handle}` immediately. The response is delivered as a `{katipo_response, Ref, Response}` message.".
 -spec async_get(katipo_pool:name(), url(), opts()) -> async_response().
 async_get(PoolName, Url, Opts) ->
     async_req(PoolName, Opts#{url => Url, method => get}).
@@ -640,7 +656,7 @@ async_get(PoolName, Url, Opts) ->
 async_post(PoolName, Url) ->
     async_req(PoolName, #{url => Url, method => post}).
 
--doc "Performs an async HTTP POST request. Returns `{ok, Ref}` immediately.".
+-doc "Performs an async HTTP POST request. Returns `{ok, Handle}` immediately.".
 -spec async_post(katipo_pool:name(), url(), opts()) -> async_response().
 async_post(PoolName, Url, Opts) ->
     async_req(PoolName, Opts#{url => Url, method => post}).
@@ -650,7 +666,7 @@ async_post(PoolName, Url, Opts) ->
 async_put(PoolName, Url) ->
     async_req(PoolName, #{url => Url, method => put}).
 
--doc "Performs an async HTTP PUT request. Returns `{ok, Ref}` immediately.".
+-doc "Performs an async HTTP PUT request. Returns `{ok, Handle}` immediately.".
 -spec async_put(katipo_pool:name(), url(), opts()) -> async_response().
 async_put(PoolName, Url, Opts) ->
     async_req(PoolName, Opts#{url => Url, method => put}).
@@ -660,7 +676,7 @@ async_put(PoolName, Url, Opts) ->
 async_head(PoolName, Url) ->
     async_req(PoolName, #{url => Url, method => head}).
 
--doc "Performs an async HTTP HEAD request. Returns `{ok, Ref}` immediately.".
+-doc "Performs an async HTTP HEAD request. Returns `{ok, Handle}` immediately.".
 -spec async_head(katipo_pool:name(), url(), opts()) -> async_response().
 async_head(PoolName, Url, Opts) ->
     async_req(PoolName, Opts#{url => Url, method => head}).
@@ -670,7 +686,7 @@ async_head(PoolName, Url, Opts) ->
 async_options(PoolName, Url) ->
     async_req(PoolName, #{url => Url, method => options}).
 
--doc "Performs an async HTTP OPTIONS request. Returns `{ok, Ref}` immediately.".
+-doc "Performs an async HTTP OPTIONS request. Returns `{ok, Handle}` immediately.".
 -spec async_options(katipo_pool:name(), url(), opts()) -> async_response().
 async_options(PoolName, Url, Opts) ->
     async_req(PoolName, Opts#{url => Url, method => options}).
@@ -680,7 +696,7 @@ async_options(PoolName, Url, Opts) ->
 async_patch(PoolName, Url) ->
     async_req(PoolName, #{url => Url, method => patch}).
 
--doc "Performs an async HTTP PATCH request. Returns `{ok, Ref}` immediately.".
+-doc "Performs an async HTTP PATCH request. Returns `{ok, Handle}` immediately.".
 -spec async_patch(katipo_pool:name(), url(), opts()) -> async_response().
 async_patch(PoolName, Url, Opts) ->
     async_req(PoolName, Opts#{url => Url, method => patch}).
@@ -690,7 +706,7 @@ async_patch(PoolName, Url, Opts) ->
 async_delete(PoolName, Url) ->
     async_req(PoolName, #{url => Url, method => delete}).
 
--doc "Performs an async HTTP DELETE request. Returns `{ok, Ref}` immediately.".
+-doc "Performs an async HTTP DELETE request. Returns `{ok, Handle}` immediately.".
 -spec async_delete(katipo_pool:name(), url(), opts()) -> async_response().
 async_delete(PoolName, Url, Opts) ->
     async_req(PoolName, Opts#{url => Url, method => delete}).
@@ -704,6 +720,8 @@ req(PoolName, Opts)
             {error, error_map(bad_opts, <<"[{url,undefined}]">>)};
         {ok, #req{streaming = 1}} ->
             {error, error_map(bad_opts, <<"stream requires async_req">>)};
+        {ok, #req{stream_body = 1}} ->
+            {error, error_map(bad_opts, <<"stream_body requires async_req">>)};
         {ok, Req} ->
             do_req_with_span(PoolName, Req);
         {error, _} = Error ->
@@ -713,11 +731,15 @@ req(PoolName, Opts)
 -doc """
 Performs an async HTTP request using the full request map.
 
-Returns `{ok, Ref}` immediately. The response is delivered as a
-`{katipo_response, Ref, ResponseMap}` or `{katipo_error, Ref, ErrorMap}`
-message to the process specified by the `reply_to` option (defaults to `self()`).
+Returns `{ok, Handle}` immediately where `Handle` is an opaque `t:async_handle/0`.
+The response is delivered as a `{katipo_response, Ref, ResponseMap}` or
+`{katipo_error, Ref, ErrorMap}` message to the process specified by the `reply_to`
+option (defaults to `self()`). Use `ref/1` to extract the `Ref` for matching.
 
 Use `await/1,2` to block until the response arrives.
+
+For streaming request bodies, pass `stream_body => true` and use
+`send_body/2` and `finish_body/1` to send the body incrementally.
 """.
 -spec async_req(katipo_pool:name(), request()) -> async_response().
 async_req(PoolName, Opts)
@@ -731,20 +753,43 @@ async_req(PoolName, Opts)
             UserRef = make_ref(),
             Timeout = ?MODULE:get_timeout(Req),
             Req2 = Req#req{timeout = Timeout},
-            wpool:cast(PoolName, {async_req, ReplyTo, UserRef, Req2}, random_worker),
-            {ok, UserRef};
+            WorkerName = wpool_pool:random_worker(PoolName),
+            MonRef = erlang:monitor(process, WorkerName),
+            gen_server:cast(WorkerName, {async_req, ReplyTo, UserRef, Req2}),
+            {ok, #async_handle{ref = UserRef, worker = WorkerName, monitor = MonRef}};
         {error, _} = Error ->
             Error
     end.
 
 -doc #{equiv => await/2}.
--spec await(reference()) -> response().
-await(Ref) ->
+-spec await(async_handle() | reference()) -> response().
+await(#async_handle{} = Handle) ->
+    await(Handle, ?DEFAULT_REQ_TIMEOUT);
+await(Ref) when is_reference(Ref) ->
     await(Ref, ?DEFAULT_REQ_TIMEOUT).
 
--doc "Blocks until an async response for `Ref` arrives or the timeout expires.".
--spec await(reference(), timeout()) -> response().
-await(Ref, Timeout) ->
+-doc "Blocks until an async response arrives or the timeout expires.".
+-spec await(async_handle() | reference(), timeout()) -> response().
+await(#async_handle{ref = Ref, monitor = MonRef}, Timeout) ->
+    Result = receive
+        {katipo_response, Ref, Response} ->
+            {ok, Response};
+        {katipo_error, Ref, Error} ->
+            {error, Error};
+        {'DOWN', MonRef, process, _, _} ->
+            {error, #{code => worker_died, message => <<>>}}
+    after Timeout ->
+        receive
+            {katipo_response, Ref, _} -> ok;
+            {katipo_error, Ref, _} -> ok
+        after 0 ->
+            ok
+        end,
+        {error, #{code => await_timeout, message => <<>>}}
+    end,
+    erlang:demonitor(MonRef, [flush]),
+    Result;
+await(Ref, Timeout) when is_reference(Ref) ->
     receive
         {katipo_response, Ref, Response} ->
             {ok, Response};
@@ -760,6 +805,22 @@ await(Ref, Timeout) ->
         end,
         {error, #{code => await_timeout, message => <<>>}}
     end.
+
+-doc "Extracts the reference from an async handle for use in receive patterns.".
+-spec ref(async_handle()) -> reference().
+ref(#async_handle{ref = Ref}) -> Ref.
+
+-doc "Sends a chunk of request body data for a streaming upload.".
+-spec send_body(async_handle(), iodata()) -> ok.
+send_body(#async_handle{worker = W, ref = Ref}, Data) ->
+    gen_server:cast(W, {body_chunk, Ref, iolist_to_binary(Data)}),
+    ok.
+
+-doc "Signals that the streaming request body is complete.".
+-spec finish_body(async_handle()) -> ok.
+finish_body(#async_handle{worker = W, ref = Ref}) ->
+    gen_server:cast(W, {body_done, Ref}),
+    ok.
 
 -doc false.
 do_req_with_span(PoolName, Req) ->
@@ -864,13 +925,40 @@ handle_call(Req = #req{timeout = Timeout}, From, State = #state{port = Port, req
     {noreply, State#state{reqs = Reqs2}}.
 
 -doc false.
-handle_cast({async_req, ReplyTo, UserRef, Req = #req{timeout = Timeout}},
-            State = #state{port = Port, reqs = Reqs}) ->
+handle_cast({async_req, ReplyTo, UserRef, Req = #req{timeout = Timeout, stream_body = StreamBody}},
+            State = #state{port = Port, reqs = Reqs, user_refs = URefs,
+                           caller_monitors = CMs}) ->
     InternalFrom = {self(), make_ref()},
     send_to_port(Port, InternalFrom, Req),
     Tref = erlang:start_timer(Timeout, self(), {req_timeout, InternalFrom}),
     Reqs2 = Reqs#{InternalFrom => {Tref, {async, ReplyTo, UserRef}}},
-    {noreply, State#state{reqs = Reqs2}};
+    URefs2 = URefs#{UserRef => InternalFrom},
+    CMs2 = case StreamBody of
+        1 ->
+            CallerMonRef = erlang:monitor(process, ReplyTo),
+            CMs#{UserRef => CallerMonRef};
+        0 ->
+            CMs
+    end,
+    {noreply, State#state{reqs = Reqs2, user_refs = URefs2, caller_monitors = CMs2}};
+handle_cast({body_chunk, UserRef, Data},
+            State = #state{port = Port, user_refs = URefs}) ->
+    case maps:find(UserRef, URefs) of
+        {ok, {Pid, Ref}} ->
+            true = port_command(Port, term_to_binary({body_chunk, Pid, Ref, Data}));
+        error ->
+            ok
+    end,
+    {noreply, State};
+handle_cast({body_done, UserRef},
+            State = #state{port = Port, user_refs = URefs}) ->
+    case maps:find(UserRef, URefs) of
+        {ok, {Pid, Ref}} ->
+            true = port_command(Port, term_to_binary({body_done, Pid, Ref}));
+        error ->
+            ok
+    end,
+    {noreply, State};
 handle_cast(Msg, State) ->
     logger:error("Unexpected cast: ~p", [Msg]),
     {noreply, State}.
@@ -894,24 +982,42 @@ handle_info({Port, {data, Data}}, State = #state{port = Port, reqs = Reqs}) ->
         {done, From, Metrics} ->
             handle_stream_done(From, Metrics, Reqs, State)
     end;
-handle_info({timeout, Tref, {req_timeout, From}}, State = #state{reqs = Reqs}) ->
-    Reqs2 =
+handle_info({timeout, Tref, {req_timeout, From}},
+            State = #state{reqs = Reqs, user_refs = URefs, caller_monitors = CMs}) ->
+    {Reqs2, URefs2, CMs2} =
         case maps:find(From, Reqs) of
             {ok, Tref} when is_reference(Tref) ->
                 %% Sync path
                 Error = #{code => operation_timedout, message => <<>>},
                 Metrics = [],
                 _ = gen_server:reply(From, {error, {Error, Metrics}}),
-                maps:remove(From, Reqs);
+                {maps:remove(From, Reqs), URefs, CMs};
             {ok, {Tref, {async, ReplyTo, UserRef}}} ->
                 %% Async path
                 Error = #{code => operation_timedout, message => <<>>},
                 ReplyTo ! {katipo_error, UserRef, Error},
-                maps:remove(From, Reqs);
+                {maps:remove(From, Reqs), maps:remove(UserRef, URefs),
+                 demonitor_caller(UserRef, CMs)};
             error ->
-                Reqs
+                {Reqs, URefs, CMs}
         end,
-    {noreply, State#state{reqs = Reqs2}};
+    {noreply, State#state{reqs = Reqs2, user_refs = URefs2, caller_monitors = CMs2}};
+handle_info({'DOWN', MonRef, process, _, _},
+            State = #state{port = Port, user_refs = URefs, caller_monitors = CMs}) ->
+    case find_by_value(MonRef, CMs) of
+        {ok, UserRef} ->
+            %% Caller died during streaming body upload — finish the body
+            %% so curl can complete (and timeout/error) promptly
+            case maps:find(UserRef, URefs) of
+                {ok, {Pid, Ref}} ->
+                    true = port_command(Port, term_to_binary({body_done, Pid, Ref}));
+                error ->
+                    ok
+            end,
+            {noreply, State#state{caller_monitors = maps:remove(UserRef, CMs)}};
+        error ->
+            {noreply, State}
+    end;
 handle_info({'EXIT', Port, Reason}, State = #state{port = Port}) ->
     logger:error("Port ~p died with reason: ~p", [Port, Reason]),
     {stop, port_died, State}.
@@ -925,23 +1031,26 @@ terminate(_Reason, #state{port = Port}) ->
 code_change(_OldVsn, State, _Extra) ->
     {ok, State}.
 
-handle_complete_response(Result, From, Response, Reqs, State) ->
-    case maps:find(From, Reqs) of
+handle_complete_response(Result, From, Response, Reqs,
+                         State = #state{user_refs = URefs, caller_monitors = CMs}) ->
+    {URefs2, CMs2} = case maps:find(From, Reqs) of
         {ok, Tref} when is_reference(Tref) ->
             _ = erlang:cancel_timer(Tref),
-            _ = gen_server:reply(From, {Result, Response});
+            _ = gen_server:reply(From, {Result, Response}),
+            {URefs, CMs};
         {ok, {Tref, {async, ReplyTo, UserRef}}} ->
-            {ResponseMap, _Metrics} = Response,
+            {ResponseMap, Metrics} = Response,
             _ = erlang:cancel_timer(Tref),
             case Result of
-                ok    -> ReplyTo ! {katipo_response, UserRef, ResponseMap};
+                ok    -> ReplyTo ! {katipo_response, UserRef, ResponseMap#{metrics => Metrics}};
                 error -> ReplyTo ! {katipo_error, UserRef, ResponseMap}
-            end;
+            end,
+            {maps:remove(UserRef, URefs), demonitor_caller(UserRef, CMs)};
         error ->
-            ok
+            {URefs, CMs}
     end,
     Reqs2 = maps:remove(From, Reqs),
-    {noreply, State#state{reqs = Reqs2}}.
+    {noreply, State#state{reqs = Reqs2, user_refs = URefs2, caller_monitors = CMs2}}.
 
 handle_stream_headers(From, Status, RawHeaders, CookieJar, Reqs, State) ->
     case maps:find(From, Reqs) of
@@ -962,16 +1071,18 @@ handle_stream_chunk(From, Chunk, Reqs, State) ->
     end,
     {noreply, State}.
 
-handle_stream_done(From, _Metrics, Reqs, State) ->
-    case maps:find(From, Reqs) of
+handle_stream_done(From, _Metrics, Reqs,
+                   State = #state{user_refs = URefs, caller_monitors = CMs}) ->
+    {URefs2, CMs2} = case maps:find(From, Reqs) of
         {ok, {Tref, {async, ReplyTo, UserRef}}} ->
             _ = erlang:cancel_timer(Tref),
-            ReplyTo ! {katipo_done, UserRef};
+            ReplyTo ! {katipo_done, UserRef},
+            {maps:remove(UserRef, URefs), demonitor_caller(UserRef, CMs)};
         _ ->
-            ok
+            {URefs, CMs}
     end,
     Reqs2 = maps:remove(From, Reqs),
-    {noreply, State#state{reqs = Reqs2}}.
+    {noreply, State#state{reqs = Reqs2, user_refs = URefs2, caller_monitors = CMs2}}.
 
 send_to_port(Port, {Self, Ref},
              #req{method = Method,
@@ -1006,7 +1117,8 @@ send_to_port(Port, {Self, Ref},
                   dns_cache_timeout = DNSCacheTimeout,
                   ca_cache_timeout = CACacheTimeout,
                   pipewait = Pipewait,
-                  streaming = Streaming}) ->
+                  streaming = Streaming,
+                  stream_body = StreamBody}) ->
     Opts = [{?CONNECTTIMEOUT_MS, ConnTimeoutMs},
             {?FOLLOWLOCATION, FollowLocation},
             {?SSL_VERIFYHOST, SslVerifyHost},
@@ -1034,7 +1146,8 @@ send_to_port(Port, {Self, Ref},
             {?DNS_CACHE_TIMEOUT, DNSCacheTimeout},
             {?CA_CACHE_TIMEOUT, CACacheTimeout},
             {?PIPEWAIT, Pipewait},
-            {?STREAMING, Streaming}],
+            {?STREAMING, Streaming},
+            {?STREAM_BODY, StreamBody}],
     Command = {Self, Ref, Method, Url, Headers, CookieJar, Body, Opts},
     true = port_command(Port, term_to_binary(Command)).
 
@@ -1253,6 +1366,10 @@ opt(stream, true, {Req, Errors}) ->
     {Req#req{streaming = 1}, Errors};
 opt(stream, false, {Req, Errors}) ->
     {Req#req{streaming = 0}, Errors};
+opt(stream_body, true, {Req, Errors}) ->
+    {Req#req{stream_body = 1}, Errors};
+opt(stream_body, false, {Req, Errors}) ->
+    {Req#req{stream_body = 0}, Errors};
 opt(K, V, {Req, Errors}) ->
     {Req, [{K, V} | Errors]}.
 
@@ -1274,6 +1391,23 @@ check_opts(Opts) when is_map(Opts) ->
         {error, _} = Error ->
             Error
     end.
+
+demonitor_caller(UserRef, CMs) ->
+    case maps:take(UserRef, CMs) of
+        {MonRef, CMs2} ->
+            erlang:demonitor(MonRef, [flush]),
+            CMs2;
+        error ->
+            CMs
+    end.
+
+find_by_value(Val, Map) ->
+    maps:fold(fun(K, V, Acc) ->
+        case V of
+            Val -> {ok, K};
+            _ -> Acc
+        end
+    end, error, Map).
 
 error_map(Code, Message) when is_atom(Code) andalso is_binary(Message) ->
     #{code => Code, message => Message};

@@ -215,7 +215,18 @@ groups() ->
        async_stream_get,
        async_stream_headers_before_data,
        async_stream_error,
-       sync_stream_rejected]},
+       async_metrics,
+       sync_stream_rejected,
+       stream_body_post,
+       stream_body_put,
+       stream_body_empty,
+       stream_body_caller_dies,
+       stream_body_worker_dies,
+       stream_body_double_finish,
+       stream_body_send_after_finish,
+       stream_body_with_response_stream,
+       stream_body_large,
+       sync_stream_body_rejected]},
      {otel, [],
       [otel_span_created,
        otel_metrics_recorded,
@@ -1202,7 +1213,8 @@ otel_url_sanitization(_Config) ->
 async_get(Config) ->
     {req_opts, Opts} = lists:keyfind(req_opts, 1, Config),
     Url = httpbin_url(Config, <<"/get">>),
-    {ok, Ref} = katipo:async_get(?POOL, Url, Opts),
+    {ok, Handle} = katipo:async_get(?POOL, Url, Opts),
+    Ref = katipo:ref(Handle),
     receive
         {katipo_response, Ref, #{status := 200}} -> ok
     after 10000 ->
@@ -1212,7 +1224,8 @@ async_get(Config) ->
 async_get_with_opts(Config) ->
     {req_opts, Opts} = lists:keyfind(req_opts, 1, Config),
     Url = httpbin_url(Config, <<"/get?a=1">>),
-    {ok, Ref} = katipo:async_get(?POOL, Url, Opts),
+    {ok, Handle} = katipo:async_get(?POOL, Url, Opts),
+    Ref = katipo:ref(Handle),
     receive
         {katipo_response, Ref, #{status := 200, body := Body}} ->
             Json = jsx:decode(Body),
@@ -1224,9 +1237,10 @@ async_get_with_opts(Config) ->
 async_post(Config) ->
     {req_opts, Opts} = lists:keyfind(req_opts, 1, Config),
     Url = httpbin_url(Config, <<"/post">>),
-    {ok, Ref} = katipo:async_post(?POOL, Url,
-                                  Opts#{headers => [{<<"Content-Type">>, <<"application/json">>}],
-                                        body => <<"hello">>}),
+    {ok, Handle} = katipo:async_post(?POOL, Url,
+                                     Opts#{headers => [{<<"Content-Type">>, <<"application/json">>}],
+                                           body => <<"hello">>}),
+    Ref = katipo:ref(Handle),
     receive
         {katipo_response, Ref, #{status := 200, body := Body}} ->
             Json = jsx:decode(Body),
@@ -1238,7 +1252,8 @@ async_post(Config) ->
 async_req(Config) ->
     {req_opts, Opts} = lists:keyfind(req_opts, 1, Config),
     Url = httpbin_url(Config, <<"/get">>),
-    {ok, Ref} = katipo:async_req(?POOL, Opts#{url => Url, method => get}),
+    {ok, Handle} = katipo:async_req(?POOL, Opts#{url => Url, method => get}),
+    Ref = katipo:ref(Handle),
     receive
         {katipo_response, Ref, #{status := 200}} -> ok
     after 10000 ->
@@ -1257,7 +1272,7 @@ async_reply_to(Config) ->
             Self ! async_reply_to_fail
         end
     end),
-    {ok, _Ref} = katipo:async_get(?POOL, Url, Opts#{reply_to => Pid}),
+    {ok, _Handle} = katipo:async_get(?POOL, Url, Opts#{reply_to => Pid}),
     receive
         async_reply_to_ok -> ok;
         async_reply_to_fail -> ct:fail(reply_to_timeout)
@@ -1270,8 +1285,9 @@ async_error(_Config) ->
         katipo:async_get(?POOL, <<"https://localhost">>, #{bad_option => bad_value}).
 
 async_timeout(_Config) ->
-    {ok, Ref} = katipo:async_get(?POOL, <<"http://google.com">>,
-                                 #{connecttimeout_ms => 1}),
+    {ok, Handle} = katipo:async_get(?POOL, <<"http://google.com">>,
+                                    #{connecttimeout_ms => 1}),
+    Ref = katipo:ref(Handle),
     receive
         {katipo_error, Ref, #{code := operation_timedout}} -> ok
     after 10000 ->
@@ -1281,38 +1297,38 @@ async_timeout(_Config) ->
 async_await(Config) ->
     {req_opts, Opts} = lists:keyfind(req_opts, 1, Config),
     Url = httpbin_url(Config, <<"/get">>),
-    {ok, Ref} = katipo:async_get(?POOL, Url, Opts),
-    {ok, #{status := 200}} = katipo:await(Ref).
+    {ok, Handle} = katipo:async_get(?POOL, Url, Opts),
+    {ok, #{status := 200}} = katipo:await(Handle).
 
 async_await_timeout(_Config) ->
     %% Request itself times out — await collects the error
-    {ok, Ref} = katipo:async_get(?POOL, <<"http://google.com">>,
-                                 #{connecttimeout_ms => 1}),
-    {error, #{code := operation_timedout}} = katipo:await(Ref).
+    {ok, Handle} = katipo:async_get(?POOL, <<"http://google.com">>,
+                                    #{connecttimeout_ms => 1}),
+    {error, #{code := operation_timedout}} = katipo:await(Handle).
 
 async_await_explicit_timeout(Config) ->
     %% await/2 with an explicit timeout that is long enough
     {req_opts, Opts} = lists:keyfind(req_opts, 1, Config),
     Url = httpbin_url(Config, <<"/get">>),
-    {ok, Ref} = katipo:async_get(?POOL, Url, Opts),
-    {ok, #{status := 200}} = katipo:await(Ref, 10000).
+    {ok, Handle} = katipo:async_get(?POOL, Url, Opts),
+    {ok, #{status := 200}} = katipo:await(Handle, 10000).
 
 async_await_own_timeout(_Config) ->
     %% await/2 timeout fires before the response arrives
-    {ok, Ref} = katipo:async_get(?POOL, <<"http://google.com">>,
-                                 #{timeout_ms => 30000, connecttimeout_ms => 30000}),
-    {error, #{code := await_timeout}} = katipo:await(Ref, 1).
+    {ok, Handle} = katipo:async_get(?POOL, <<"http://google.com">>,
+                                    #{timeout_ms => 30000, connecttimeout_ms => 30000}),
+    {error, #{code := await_timeout}} = katipo:await(Handle, 1).
 
 async_multiple_outstanding(Config) ->
     {req_opts, Opts} = lists:keyfind(req_opts, 1, Config),
     Urls = [httpbin_url(Config, <<"/get?n=", (integer_to_binary(N))/binary>>)
             || N <- lists:seq(1, 5)],
-    Refs = [{N, begin
-                    {ok, Ref} = katipo:async_get(?POOL, Url, Opts),
-                    Ref
-                end}
-            || {N, Url} <- lists:zip(lists:seq(1, 5), Urls)],
-    Results = [{N, katipo:await(Ref)} || {N, Ref} <- Refs],
+    Handles = [{N, begin
+                       {ok, Handle} = katipo:async_get(?POOL, Url, Opts),
+                       Handle
+                   end}
+               || {N, Url} <- lists:zip(lists:seq(1, 5), Urls)],
+    Results = [{N, katipo:await(Handle)} || {N, Handle} <- Handles],
     lists:foreach(fun({N, {ok, #{status := 200, body := Body}}}) ->
         Json = jsx:decode(Body),
         Expected = integer_to_binary(N),
@@ -1322,7 +1338,8 @@ async_multiple_outstanding(Config) ->
 async_stream_get(Config) ->
     {req_opts, Opts} = lists:keyfind(req_opts, 1, Config),
     Url = httpbin_url(Config, <<"/get?a=1">>),
-    {ok, Ref} = katipo:async_get(?POOL, Url, Opts#{stream => true}),
+    {ok, Handle} = katipo:async_get(?POOL, Url, Opts#{stream => true}),
+    Ref = katipo:ref(Handle),
     %% Collect status + headers
     {Status, Headers, CookieJar} = receive
         {katipo_response, Ref, {status, S, H, C}} -> {S, H, C}
@@ -1339,7 +1356,8 @@ async_stream_get(Config) ->
 async_stream_headers_before_data(Config) ->
     {req_opts, Opts} = lists:keyfind(req_opts, 1, Config),
     Url = httpbin_url(Config, <<"/bytes/1024">>),
-    {ok, Ref} = katipo:async_get(?POOL, Url, Opts#{stream => true}),
+    {ok, Handle} = katipo:async_get(?POOL, Url, Opts#{stream => true}),
+    Ref = katipo:ref(Handle),
     %% First message must be headers, not data
     receive
         {katipo_response, Ref, {status, 200, _Headers, _CookieJar}} -> ok;
@@ -1351,8 +1369,9 @@ async_stream_headers_before_data(Config) ->
     _ = collect_stream_body(Ref).
 
 async_stream_error(_Config) ->
-    {ok, Ref} = katipo:async_get(?POOL, <<"https://localhost">>,
-                                 #{stream => true, connecttimeout_ms => 1}),
+    {ok, Handle} = katipo:async_get(?POOL, <<"https://localhost">>,
+                                    #{stream => true, connecttimeout_ms => 1}),
+    Ref = katipo:ref(Handle),
     receive
         {katipo_error, Ref, #{code := _}} -> ok
     after 10000 ->
@@ -1372,8 +1391,165 @@ collect_stream_body(Ref, Acc) ->
         ct:fail(stream_timeout)
     end.
 
+async_metrics(Config) ->
+    {req_opts, Opts} = lists:keyfind(req_opts, 1, Config),
+    Url = httpbin_url(Config, <<"/get">>),
+    {ok, Handle} = katipo:async_get(?POOL, Url, Opts),
+    {ok, #{status := 200, metrics := Metrics}} = katipo:await(Handle, 10000),
+    ?assert(is_list(Metrics)),
+    ?assert(length(Metrics) > 0),
+    {total_time, TotalTime} = lists:keyfind(total_time, 1, Metrics),
+    ?assert(is_float(TotalTime) andalso TotalTime > 0).
+
 sync_stream_rejected(Config) ->
     {req_opts, Opts} = lists:keyfind(req_opts, 1, Config),
     Url = httpbin_url(Config, <<"/get">>),
     {error, #{code := bad_opts, message := <<"stream requires async_req">>}} =
         katipo:get(?POOL, Url, Opts#{stream => true}).
+
+%% Streaming request body tests
+
+stream_body_post(Config) ->
+    {req_opts, Opts} = lists:keyfind(req_opts, 1, Config),
+    Url = httpbin_url(Config, <<"/post">>),
+    {ok, Handle} = katipo:async_post(?POOL, Url,
+                                     Opts#{headers => [{<<"Content-Type">>, <<"application/octet-stream">>}],
+                                           stream_body => true}),
+    ok = katipo:send_body(Handle, <<"chunk1">>),
+    ok = katipo:send_body(Handle, <<"chunk2">>),
+    ok = katipo:send_body(Handle, <<"chunk3">>),
+    ok = katipo:finish_body(Handle),
+    {ok, #{status := 200, body := Body}} = katipo:await(Handle, 10000),
+    Json = jsx:decode(Body),
+    ?assertEqual(<<"chunk1chunk2chunk3">>, maps:get(<<"data">>, Json)).
+
+stream_body_put(Config) ->
+    {req_opts, Opts} = lists:keyfind(req_opts, 1, Config),
+    Url = httpbin_url(Config, <<"/put">>),
+    {ok, Handle} = katipo:async_put(?POOL, Url,
+                                    Opts#{headers => [{<<"Content-Type">>, <<"application/octet-stream">>}],
+                                          stream_body => true}),
+    ok = katipo:send_body(Handle, <<"put_data">>),
+    ok = katipo:finish_body(Handle),
+    {ok, #{status := 200, body := Body}} = katipo:await(Handle, 10000),
+    Json = jsx:decode(Body),
+    ?assertEqual(<<"put_data">>, maps:get(<<"data">>, Json)).
+
+stream_body_empty(Config) ->
+    {req_opts, Opts} = lists:keyfind(req_opts, 1, Config),
+    Url = httpbin_url(Config, <<"/post">>),
+    {ok, Handle} = katipo:async_post(?POOL, Url,
+                                     Opts#{headers => [{<<"Content-Type">>, <<"application/octet-stream">>}],
+                                           stream_body => true}),
+    ok = katipo:finish_body(Handle),
+    {ok, #{status := 200, body := Body}} = katipo:await(Handle, 10000),
+    Json = jsx:decode(Body),
+    ?assertEqual(<<"">>, maps:get(<<"data">>, Json)).
+
+stream_body_caller_dies(Config) ->
+    {req_opts, Opts} = lists:keyfind(req_opts, 1, Config),
+    Url = httpbin_url(Config, <<"/post">>),
+    Self = self(),
+    %% Spawn a process that starts a streaming upload and dies mid-stream.
+    %% reply_to defaults to self() inside the spawned process, so the worker
+    %% monitors the spawned process. When it dies, the worker auto-finishes
+    %% the body so the curl request can complete.
+    Pid = spawn(fun() ->
+        {ok, Handle} = katipo:async_post(?POOL, Url,
+                            Opts#{headers => [{<<"Content-Type">>, <<"application/octet-stream">>}],
+                                  stream_body => true}),
+        ok = katipo:send_body(Handle, <<"partial">>),
+        Self ! {started, Handle}
+        %% Process exits here without calling finish_body
+    end),
+    _Handle = receive {started, H} -> H after 5000 -> ct:fail(no_handle) end,
+    MRef = monitor(process, Pid),
+    receive {'DOWN', MRef, process, Pid, _Reason} -> ok
+    after 5000 -> ct:fail(caller_didnt_die)
+    end,
+    %% The worker should detect the caller death and auto-finish the body.
+    %% Give it a moment to process the DOWN and complete the curl request,
+    %% then verify the pool is still healthy (not stuck on the dead upload).
+    timer:sleep(500),
+    {ok, #{status := 200}} = katipo:get(?POOL, httpbin_url(Config, <<"/get">>), Opts).
+
+stream_body_worker_dies(Config) ->
+    {req_opts, Opts} = lists:keyfind(req_opts, 1, Config),
+    Url = httpbin_url(Config, <<"/post">>),
+    PoolName = stream_body_worker_dies_pool,
+    {ok, _} = katipo_pool:start(PoolName, 1),
+    {ok, Handle} = katipo:async_post(PoolName, Url,
+                                     Opts#{headers => [{<<"Content-Type">>, <<"application/octet-stream">>}],
+                                           stream_body => true}),
+    ok = katipo:send_body(Handle, <<"data">>),
+    %% Kill the only worker — the handle's monitor should fire
+    WorkerName = wpool_pool:random_worker(PoolName),
+    exit(whereis(WorkerName), kill),
+    {error, #{code := worker_died}} = katipo:await(Handle, 5000),
+    timer:sleep(500),
+    ok = katipo_pool:stop(PoolName).
+
+stream_body_double_finish(Config) ->
+    {req_opts, Opts} = lists:keyfind(req_opts, 1, Config),
+    Url = httpbin_url(Config, <<"/post">>),
+    {ok, Handle} = katipo:async_post(?POOL, Url,
+                                     Opts#{headers => [{<<"Content-Type">>, <<"application/octet-stream">>}],
+                                           stream_body => true}),
+    ok = katipo:send_body(Handle, <<"data">>),
+    ok = katipo:finish_body(Handle),
+    ok = katipo:finish_body(Handle),
+    {ok, #{status := 200, body := Body}} = katipo:await(Handle, 10000),
+    Json = jsx:decode(Body),
+    ?assertEqual(<<"data">>, maps:get(<<"data">>, Json)).
+
+stream_body_send_after_finish(Config) ->
+    {req_opts, Opts} = lists:keyfind(req_opts, 1, Config),
+    Url = httpbin_url(Config, <<"/post">>),
+    {ok, Handle} = katipo:async_post(?POOL, Url,
+                                     Opts#{headers => [{<<"Content-Type">>, <<"application/octet-stream">>}],
+                                           stream_body => true}),
+    ok = katipo:send_body(Handle, <<"data">>),
+    ok = katipo:finish_body(Handle),
+    %% Late send after finish — should be silently ignored
+    ok = katipo:send_body(Handle, <<"late_data">>),
+    {ok, #{status := 200, body := Body}} = katipo:await(Handle, 10000),
+    Json = jsx:decode(Body),
+    ?assertEqual(<<"data">>, maps:get(<<"data">>, Json)).
+
+stream_body_with_response_stream(Config) ->
+    {req_opts, Opts} = lists:keyfind(req_opts, 1, Config),
+    Url = httpbin_url(Config, <<"/post">>),
+    {ok, Handle} = katipo:async_post(?POOL, Url,
+                                     Opts#{headers => [{<<"Content-Type">>, <<"application/octet-stream">>}],
+                                           stream_body => true,
+                                           stream => true}),
+    ok = katipo:send_body(Handle, <<"streamed">>),
+    ok = katipo:finish_body(Handle),
+    Ref = katipo:ref(Handle),
+    receive
+        {katipo_response, Ref, {status, 200, _Headers, _CookieJar}} -> ok
+    after 10000 -> ct:fail(no_headers)
+    end,
+    Body = collect_stream_body(Ref),
+    Json = jsx:decode(Body),
+    ?assertEqual(<<"streamed">>, maps:get(<<"data">>, Json)).
+
+stream_body_large(Config) ->
+    {req_opts, Opts} = lists:keyfind(req_opts, 1, Config),
+    Url = httpbin_url(Config, <<"/post">>),
+    {ok, Handle} = katipo:async_post(?POOL, Url,
+                                     Opts#{headers => [{<<"Content-Type">>, <<"text/plain">>}],
+                                           stream_body => true}),
+    Chunk = binary:copy(<<"x">>, 4096),
+    lists:foreach(fun(_) -> ok = katipo:send_body(Handle, Chunk) end, lists:seq(1, 10)),
+    ok = katipo:finish_body(Handle),
+    {ok, #{status := 200, body := Body}} = katipo:await(Handle, 10000),
+    Json = jsx:decode(Body),
+    Expected = binary:copy(<<"x">>, 40960),
+    ?assertEqual(Expected, maps:get(<<"data">>, Json)).
+
+sync_stream_body_rejected(Config) ->
+    {req_opts, Opts} = lists:keyfind(req_opts, 1, Config),
+    Url = httpbin_url(Config, <<"/post">>),
+    {error, #{code := bad_opts, message := <<"stream_body requires async_req">>}} =
+        katipo:post(?POOL, Url, Opts#{stream_body => true}).

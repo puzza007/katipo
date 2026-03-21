@@ -52,6 +52,7 @@
 #define K_CURLOPT_CA_CACHE_TIMEOUT 32
 #define K_CURLOPT_PIPEWAIT 33
 #define K_CURLOPT_STREAMING 34
+#define K_CURLOPT_STREAM_BODY 35
 
 #define K_CURLAUTH_BASIC 100
 #define K_CURLAUTH_DIGEST 101
@@ -62,6 +63,8 @@
 struct bufferevent *to_erlang;
 struct bufferevent *from_erlang;
 
+typedef struct _ConnInfo ConnInfo;
+
 typedef struct _GlobalInfo {
   struct event_base *evbase;
   struct event *timer_event;
@@ -70,9 +73,10 @@ typedef struct _GlobalInfo {
   int still_running;
   size_t to_get;
   curl_version_info_data *ver;
+  ConnInfo *active_conns;
 } GlobalInfo;
 
-typedef struct _ConnInfo {
+struct _ConnInfo {
   CURL *easy;
   char *url;
   erlang_pid *pid;
@@ -90,6 +94,13 @@ typedef struct _ConnInfo {
   long post_data_size;
   int streaming;
   int headers_sent;
+  /* streaming request body fields */
+  int stream_body;
+  int body_finished;
+  char *upload_buf;
+  size_t upload_size;
+  size_t upload_sent;
+  ConnInfo *next;
   // metrics
   double total_time;
   double namelookup_time;
@@ -98,7 +109,7 @@ typedef struct _ConnInfo {
   double pretransfer_time;
   double redirect_time;
   double starttransfer_time;
-} ConnInfo;
+};
 
 typedef struct _SockInfo {
   curl_socket_t sockfd;
@@ -140,6 +151,7 @@ typedef struct _EasyOpts {
   long curlopt_ca_cache_timeout;
   long curlopt_pipewait;
   long curlopt_streaming;
+  long curlopt_stream_body;
 } EasyOpts;
 
 static const char *curl_error_code(CURLcode error) {
@@ -659,11 +671,24 @@ static void check_multi_info(GlobalInfo *global) {
       }
 
       curl_multi_remove_handle(global->multi, easy);
+
+      if (conn->stream_body) {
+        ConnInfo **pp = &global->active_conns;
+        while (*pp) {
+          if (*pp == conn) {
+            *pp = conn->next;
+            break;
+          }
+          pp = &(*pp)->next;
+        }
+      }
+
       free(conn->url);
       free(conn->pid);
       free(conn->ref);
       free(conn->memory);
       free(conn->post_data);
+      free(conn->upload_buf);
       curl_slist_free_all(conn->req_cookies);
       curl_slist_free_all(conn->req_headers);
       curl_slist_free_all(conn->resp_headers);
@@ -817,24 +842,60 @@ static size_t header_cb(void *ptr, size_t size, size_t nmemb, void *data) {
   return realsize;
 }
 
+static size_t upload_read_cb(char *buffer, size_t size, size_t nitems, void *userdata) {
+  ConnInfo *conn = (ConnInfo *)userdata;
+  size_t available = conn->upload_size - conn->upload_sent;
+  if (available == 0) {
+    if (conn->body_finished) return 0;  /* EOF */
+    return CURL_READFUNC_PAUSE;          /* no data yet, pause */
+  }
+  size_t to_copy = (available < size * nitems) ? available : size * nitems;
+  memcpy(buffer, conn->upload_buf + conn->upload_sent, to_copy);
+  conn->upload_sent += to_copy;
+  /* Compact buffer when fully consumed */
+  if (conn->upload_sent == conn->upload_size) {
+    conn->upload_sent = 0;
+    conn->upload_size = 0;
+  }
+  return to_copy;
+}
+
 static void set_method(long method, ConnInfo *conn) {
   switch (method) {
     case KATIPO_GET:
       break;
     case KATIPO_POST:
       curl_easy_setopt(conn->easy, CURLOPT_POST, 1L);
-      curl_easy_setopt(conn->easy, CURLOPT_POSTFIELDS, conn->post_data);
-      curl_easy_setopt(conn->easy, CURLOPT_POSTFIELDSIZE, conn->post_data_size);
+      if (conn->stream_body) {
+        curl_easy_setopt(conn->easy, CURLOPT_READFUNCTION, upload_read_cb);
+        curl_easy_setopt(conn->easy, CURLOPT_READDATA, conn);
+        curl_easy_setopt(conn->easy, CURLOPT_POSTFIELDSIZE_LARGE, (curl_off_t)-1);
+      } else {
+        curl_easy_setopt(conn->easy, CURLOPT_POSTFIELDS, conn->post_data);
+        curl_easy_setopt(conn->easy, CURLOPT_POSTFIELDSIZE, conn->post_data_size);
+      }
       break;
     case KATIPO_PUT:
-      curl_easy_setopt(conn->easy, CURLOPT_CUSTOMREQUEST, "PUT");
-      curl_easy_setopt(conn->easy, CURLOPT_POSTFIELDS, conn->post_data);
-      curl_easy_setopt(conn->easy, CURLOPT_POSTFIELDSIZE, conn->post_data_size);
+      if (conn->stream_body) {
+        curl_easy_setopt(conn->easy, CURLOPT_UPLOAD, 1L);
+        curl_easy_setopt(conn->easy, CURLOPT_READFUNCTION, upload_read_cb);
+        curl_easy_setopt(conn->easy, CURLOPT_READDATA, conn);
+      } else {
+        curl_easy_setopt(conn->easy, CURLOPT_CUSTOMREQUEST, "PUT");
+        curl_easy_setopt(conn->easy, CURLOPT_POSTFIELDS, conn->post_data);
+        curl_easy_setopt(conn->easy, CURLOPT_POSTFIELDSIZE, conn->post_data_size);
+      }
       break;
     case KATIPO_PATCH:
       curl_easy_setopt(conn->easy, CURLOPT_CUSTOMREQUEST, "PATCH");
-      curl_easy_setopt(conn->easy, CURLOPT_POSTFIELDS, conn->post_data);
-      curl_easy_setopt(conn->easy, CURLOPT_POSTFIELDSIZE, conn->post_data_size);
+      if (conn->stream_body) {
+        curl_easy_setopt(conn->easy, CURLOPT_UPLOAD, 1L);
+        curl_easy_setopt(conn->easy, CURLOPT_READFUNCTION, upload_read_cb);
+        curl_easy_setopt(conn->easy, CURLOPT_READDATA, conn);
+      } else {
+        curl_easy_setopt(conn->easy, CURLOPT_POSTFIELDS, conn->post_data);
+        curl_easy_setopt(conn->easy, CURLOPT_POSTFIELDSIZE, conn->post_data_size);
+      }
       break;
     case KATIPO_HEAD:
       curl_easy_setopt(conn->easy, CURLOPT_CUSTOMREQUEST, "HEAD");
@@ -868,6 +929,12 @@ static void new_conn(long method, char *url, struct curl_slist *req_headers,
   conn->resp_headers = NULL;
   conn->streaming = eopts.curlopt_streaming;
   conn->headers_sent = 0;
+  conn->stream_body = eopts.curlopt_stream_body;
+  conn->body_finished = 0;
+  conn->upload_buf = NULL;
+  conn->upload_size = 0;
+  conn->upload_sent = 0;
+  conn->next = NULL;
 
   conn->easy = curl_easy_init();
   if (!conn->easy) {
@@ -1033,8 +1100,83 @@ static void new_conn(long method, char *url, struct curl_slist *req_headers,
   free(eopts.curlopt_userpwd);
 
   set_method(method, conn);
+
+  if (conn->stream_body) {
+    conn->next = global->active_conns;
+    global->active_conns = conn;
+  }
+
   rc = curl_multi_add_handle(global->multi, conn->easy);
   mcode_or_die("new_conn: curl_multi_add_handle", rc);
+}
+
+static int refs_equal(erlang_ref *a, erlang_ref *b) {
+  if (a->len != b->len || a->creation != b->creation) return 0;
+  if (strcmp(a->node, b->node) != 0) return 0;
+  for (int i = 0; i < a->len; i++) {
+    if (a->n[i] != b->n[i]) return 0;
+  }
+  return 1;
+}
+
+static ConnInfo *find_conn(GlobalInfo *global, erlang_ref *ref) {
+  ConnInfo *conn = global->active_conns;
+  while (conn) {
+    if (refs_equal(conn->ref, ref)) return conn;
+    conn = conn->next;
+  }
+  return NULL;
+}
+
+static void handle_body_message(char *buf, int index, GlobalInfo *global) {
+  char atom[MAXATOMLEN];
+  erlang_ref bref;
+  int erl_type, size;
+  long sizel;
+
+  if (ei_decode_atom(buf, &index, atom)) {
+    errx(2, "Couldn't decode body message atom");
+  }
+
+  /* Skip pid (not needed for lookup), decode ref for ConnInfo lookup */
+  if (ei_skip_term(buf, &index) ||
+      ei_decode_ref(buf, &index, &bref)) {
+    errx(2, "Couldn't decode body message pid/ref");
+  }
+
+  ConnInfo *conn = find_conn(global, &bref);
+  if (!conn) return;
+
+  if (strcmp(atom, "body_chunk") == 0) {
+    if (ei_get_type(buf, &index, &erl_type, &size)) {
+      errx(2, "Couldn't read body chunk size");
+    }
+    char *chunk_data = (char *)malloc(size);
+    if (ei_decode_binary(buf, &index, chunk_data, &sizel)) {
+      errx(2, "Couldn't read body chunk data");
+    }
+
+    /* Ignore chunks arriving after body_done to avoid confusing curl */
+    if (conn->body_finished) {
+      free(chunk_data);
+      return;
+    }
+
+    char *new_buf = (char *)realloc(conn->upload_buf, conn->upload_size + (size_t)sizel);
+    if (!new_buf) {
+      free(chunk_data);
+      errx(2, "realloc failed for upload buffer");
+    }
+    conn->upload_buf = new_buf;
+    memcpy(conn->upload_buf + conn->upload_size, chunk_data, (size_t)sizel);
+    conn->upload_size += (size_t)sizel;
+    free(chunk_data);
+
+    curl_easy_pause(conn->easy, CURLPAUSE_CONT);
+  } else if (strcmp(atom, "body_done") == 0) {
+    conn->body_finished = 1;
+    curl_easy_pause(conn->easy, CURLPAUSE_CONT);
+  }
 }
 
 static void erl_input(struct bufferevent *ev, void *arg) {
@@ -1095,11 +1237,29 @@ static void erl_input(struct bufferevent *ev, void *arg) {
 
     index = 0;
 
+    if (ei_decode_version(buf, &index, &version) ||
+        ei_decode_tuple_header(buf, &index, &arity)) {
+      errx(2, "Couldn't read message header");
+    }
+
+    /* Peek at first element to distinguish request vs body message */
+    int first_type, first_size;
+    if (ei_get_type(buf, &index, &first_type, &first_size)) {
+      errx(2, "Couldn't peek at first element");
+    }
+
+    /* Atom = body control message (body_chunk or body_done) */
+    if (first_type == ERL_ATOM_EXT || first_type == ERL_ATOM_UTF8_EXT ||
+        first_type == ERL_SMALL_ATOM_UTF8_EXT) {
+      handle_body_message(buf, index, global);
+      free(buf);
+      continue;
+    }
+
+    /* Otherwise it's a request message starting with a pid */
     pid = malloc(sizeof(*pid));
     ref = malloc(sizeof(*ref));
-    if (ei_decode_version(buf, &index, &version) ||
-        ei_decode_tuple_header(buf, &index, &arity) ||
-        ei_decode_pid(buf, &index, pid) ||
+    if (ei_decode_pid(buf, &index, pid) ||
         ei_decode_ref(buf, &index, ref) ||
         ei_decode_long(buf, &index, &method) ||
         ei_get_type(buf, &index, &erl_type, &size)) {
@@ -1260,6 +1420,9 @@ static void erl_input(struct bufferevent *ev, void *arg) {
         case K_CURLOPT_STREAMING:
           eopts.curlopt_streaming = eopt_long;
           break;
+        case K_CURLOPT_STREAM_BODY:
+          eopts.curlopt_stream_body = eopt_long;
+          break;
         default:
           errx(2, "Unknown eopt long value %ld", eopt);
         }
@@ -1418,6 +1581,7 @@ int main(int argc, char **argv) {
   }
   global.timer_event = evtimer_new(global.evbase, timer_cb, &global);
   global.to_get = 0;
+  global.active_conns = NULL;
   ver = curl_version_info(CURLVERSION_NOW);
   global.ver = ver;
 
