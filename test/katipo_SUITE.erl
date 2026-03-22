@@ -226,6 +226,7 @@ groups() ->
        stream_body_send_after_finish,
        stream_body_with_response_stream,
        stream_body_large,
+       stream_body_statem,
        sync_stream_body_rejected]},
      {otel, [],
       [otel_span_created,
@@ -1547,6 +1548,14 @@ stream_body_large(Config) ->
     Json = jsx:decode(Body),
     Expected = binary:copy(<<"x">>, 40960),
     ?assertEqual(Expected, maps:get(<<"data">>, Json)).
+
+stream_body_statem(Config) ->
+    ct:timetrap({minutes, 3}),
+    {req_opts, Opts} = lists:keyfind(req_opts, 1, Config),
+    BaseUrl = ?config(httpbin_base, Config),
+    true = proper:quickcheck(
+        katipo_stream_body_statem:prop_streaming(BaseUrl, Opts),
+        [{numtests, 50}, {max_size, 30}, {to_file, user}]).
 
 sync_stream_body_rejected(Config) ->
     {req_opts, Opts} = lists:keyfind(req_opts, 1, Config),
