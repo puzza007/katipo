@@ -255,7 +255,8 @@ groups() ->
        otel_async_span_created,
        otel_async_metrics_recorded,
        otel_url_sanitization,
-       otel_noop_metrics_no_crash]},
+       otel_noop_metrics_no_crash,
+       otel_metrics_init_no_crash]},
      {http1, [parallel],
       [{group, http},
        {group, https}]},
@@ -1403,6 +1404,18 @@ otel_noop_metrics_no_crash(_Config) ->
 
     meck:unload(otel_meter),
     ok.
+
+otel_metrics_init_no_crash(_Config) ->
+    %% Instrument creation must be guarded like the record path: with no metrics
+    %% SDK the noop meter raises undef, and an unguarded init/0 would crash the
+    %% whole application at startup (katipo_app calls it).
+    ok = meck:new(otel_meter, [passthrough, no_link]),
+    meck:expect(otel_meter, create_counter, 3, meck:raise(error, undef)),
+    meck:expect(otel_meter, create_histogram, 3, meck:raise(error, undef)),
+    ok = katipo_metrics:init(),
+    meck:unload(otel_meter),
+    %% Re-create instruments against the real meter for later tests.
+    ok = katipo_metrics:init().
 
 otel_url_sanitization(_Config) ->
     %% Test that query strings are stripped (prevents leaking API keys, tokens, etc.)
