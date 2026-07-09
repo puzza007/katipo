@@ -10,6 +10,15 @@
 -define(POOL, katipo_test_pool).
 -define(POOL_SIZE, 2).
 
+%% Wire-protocol constants for the malformed_requests group, mirroring the
+%% K_CURLOPT_* values in c_src/katipo.c. These tests talk to the compiled
+%% port binary directly, so they can't reuse katipo.erl's ?GET/?HTTP_AUTH
+%% etc. macros (those are only used on the always-well-typed encode path).
+-define(RAW_GET, 0).
+-define(RAW_OPT_HTTP_AUTH, 12).
+-define(RAW_AUTH_NTLM, 103).
+-define(RAW_AUTH_NEGOTIATE, 104).
+
 suite() ->
     [{timetrap, {seconds, 30}}].
 
@@ -166,6 +175,21 @@ groups() ->
        dns_cache_timeout,
        ca_cache_timeout,
        pipewait]},
+     {malformed_requests, [],
+      [malformed_identity_bad_method,
+       malformed_url,
+       malformed_headers,
+       malformed_headers_not_list,
+       malformed_cookies,
+       malformed_body,
+       malformed_opts_not_list,
+       malformed_opts_entry_not_tuple,
+       malformed_opts_value_type,
+       malformed_http_auth_value,
+       unknown_int_opt_ignored,
+       unknown_binary_opt_ignored,
+       http_auth_ntlm_accepted,
+       http_auth_negotiate_accepted]},
      {digest, [],
       [basic_authorised,
        basic_authorised_userpwd,
@@ -213,6 +237,7 @@ groups() ->
 all() ->
     BaseGroups = [{group, http1},
                   {group, curl},
+                  {group, malformed_requests},
                   {group, digest},
                   {group, pool},
                   {group, https_mutual},
@@ -699,6 +724,180 @@ proxy_couldnt_connect(Config) ->
 
 protocol_restriction(_) ->
     {error, #{code := unsupported_protocol}} = katipo:get(?POOL, <<"dict.org">>).
+
+%% Malformed-request tests
+%%
+%% katipo:req/2 and friends validate every option in Erlang (see opt/3)
+%% before a request is ever encoded, so it's impossible to make the public
+%% API hand the C port a badly-typed request. These tests instead talk to
+%% the compiled port binary directly -- the same executable katipo.erl
+%% spawns -- and feed it well-formed ETF terms with the wrong shape, the
+%% way a version-skewed or buggy client might. That's exactly the
+%% scenario the port's graceful cleanup path (added to stop crashes on
+%% malformed input) is meant to survive.
+
+open_raw_port() ->
+    Prog = filename:join([code:priv_dir(katipo), "katipo"]),
+    open_port({spawn, Prog}, [{packet, 4}, binary]).
+
+close_raw_port(Port) ->
+    catch port_close(Port),
+    ok.
+
+raw_send(Port, Command) ->
+    true = port_command(Port, term_to_binary(Command)),
+    ok.
+
+raw_recv(Port, Timeout) ->
+    receive
+        {Port, {data, Data}} -> {ok, binary_to_term(Data)}
+    after Timeout ->
+        timeout
+    end.
+
+bad_opts_response(Self, Ref) ->
+    {ok, {error, {{Self, Ref}, {bad_opts, <<"Couldn't read req">>, []}}}}.
+
+malformed_identity_bad_method(_Config) ->
+    Port = open_raw_port(),
+    Self = self(),
+    Ref = make_ref(),
+    %% Method is decoded before the port knows it can address a response
+    %% back to us, so a bad method leaves it unable to reply -- it logs to
+    %% stderr and moves on to the next request instead of crashing.
+    ok = raw_send(Port, {Self, Ref, not_an_integer, <<"http://localhost/">>,
+                          [], [], <<>>, []}),
+    timeout = raw_recv(Port, 1000),
+    %% Prove the port is still alive and processing requests normally.
+    Ref2 = make_ref(),
+    ok = raw_send(Port, {Self, Ref2, ?RAW_GET, not_a_binary_url, [], [], <<>>, []}),
+    Expected = bad_opts_response(Self, Ref2),
+    Expected = raw_recv(Port, 5000),
+    close_raw_port(Port).
+
+malformed_url(_Config) ->
+    Port = open_raw_port(),
+    Self = self(),
+    Ref = make_ref(),
+    ok = raw_send(Port, {Self, Ref, ?RAW_GET, not_a_binary_url, [], [], <<>>, []}),
+    Expected = bad_opts_response(Self, Ref),
+    Expected = raw_recv(Port, 5000),
+    close_raw_port(Port).
+
+malformed_headers(_Config) ->
+    Port = open_raw_port(),
+    Self = self(),
+    Ref = make_ref(),
+    ok = raw_send(Port, {Self, Ref, ?RAW_GET, <<"http://localhost/">>,
+                          [12345], [], <<>>, []}),
+    Expected = bad_opts_response(Self, Ref),
+    Expected = raw_recv(Port, 5000),
+    close_raw_port(Port).
+
+malformed_headers_not_list(_Config) ->
+    Port = open_raw_port(),
+    Self = self(),
+    Ref = make_ref(),
+    ok = raw_send(Port, {Self, Ref, ?RAW_GET, <<"http://localhost/">>,
+                          not_a_list, [], <<>>, []}),
+    Expected = bad_opts_response(Self, Ref),
+    Expected = raw_recv(Port, 5000),
+    close_raw_port(Port).
+
+malformed_cookies(_Config) ->
+    Port = open_raw_port(),
+    Self = self(),
+    Ref = make_ref(),
+    ok = raw_send(Port, {Self, Ref, ?RAW_GET, <<"http://localhost/">>,
+                          [], [not_a_binary], <<>>, []}),
+    Expected = bad_opts_response(Self, Ref),
+    Expected = raw_recv(Port, 5000),
+    close_raw_port(Port).
+
+malformed_body(_Config) ->
+    Port = open_raw_port(),
+    Self = self(),
+    Ref = make_ref(),
+    ok = raw_send(Port, {Self, Ref, ?RAW_GET, <<"http://localhost/">>,
+                          [], [], {bad, iodata}, []}),
+    Expected = bad_opts_response(Self, Ref),
+    Expected = raw_recv(Port, 5000),
+    close_raw_port(Port).
+
+malformed_opts_not_list(_Config) ->
+    Port = open_raw_port(),
+    Self = self(),
+    Ref = make_ref(),
+    ok = raw_send(Port, {Self, Ref, ?RAW_GET, <<"http://localhost/">>,
+                          [], [], <<>>, not_a_list}),
+    Expected = bad_opts_response(Self, Ref),
+    Expected = raw_recv(Port, 5000),
+    close_raw_port(Port).
+
+malformed_opts_entry_not_tuple(_Config) ->
+    Port = open_raw_port(),
+    Self = self(),
+    Ref = make_ref(),
+    ok = raw_send(Port, {Self, Ref, ?RAW_GET, <<"http://localhost/">>,
+                          [], [], <<>>, [not_a_tuple]}),
+    Expected = bad_opts_response(Self, Ref),
+    Expected = raw_recv(Port, 5000),
+    close_raw_port(Port).
+
+malformed_opts_value_type(_Config) ->
+    Port = open_raw_port(),
+    Self = self(),
+    Ref = make_ref(),
+    %% CURLOPT_CONNECTTIMEOUT_MS (5) expects an integer, not a list.
+    ok = raw_send(Port, {Self, Ref, ?RAW_GET, <<"http://localhost/">>,
+                          [], [], <<>>, [{5, [1, 2, 3]}]}),
+    Expected = bad_opts_response(Self, Ref),
+    Expected = raw_recv(Port, 5000),
+    close_raw_port(Port).
+
+malformed_http_auth_value(_Config) ->
+    Port = open_raw_port(),
+    Self = self(),
+    Ref = make_ref(),
+    %% 999 isn't BASIC/DIGEST/NTLM/NEGOTIATE/UNDEFINED.
+    ok = raw_send(Port, {Self, Ref, ?RAW_GET, <<"http://localhost/">>,
+                          [], [], <<>>, [{?RAW_OPT_HTTP_AUTH, 999}]}),
+    Expected = bad_opts_response(Self, Ref),
+    Expected = raw_recv(Port, 5000),
+    close_raw_port(Port).
+
+%% These four exercise the "successfully parsed" side of parse_eopts: an
+%% unrecognised option key is silently ignored rather than rejected, and
+%% NTLM/NEGOTIATE are accepted values for http_auth (neither is reachable
+%% via katipo:req/2 today since opt/3 only maps `basic`/`digest`). Port 1
+%% on loopback refuses connections immediately, so these stay hermetic
+%% and fast while still proving the request made it past option parsing.
+raw_probe(Opts) ->
+    Port = open_raw_port(),
+    Self = self(),
+    Ref = make_ref(),
+    Url = <<"http://127.0.0.1:1/">>,
+    ok = raw_send(Port, {Self, Ref, ?RAW_GET, Url, [], [], <<>>, Opts}),
+    Result = raw_recv(Port, 5000),
+    close_raw_port(Port),
+    {ok, {error, {{Self, Ref}, {Code, _Msg, _Metrics}}}} = Result,
+    Code.
+
+unknown_int_opt_ignored(_Config) ->
+    Code = raw_probe([{9999, 42}]),
+    true = Code =/= bad_opts.
+
+unknown_binary_opt_ignored(_Config) ->
+    Code = raw_probe([{9998, <<"ignored">>}]),
+    true = Code =/= bad_opts.
+
+http_auth_ntlm_accepted(_Config) ->
+    Code = raw_probe([{?RAW_OPT_HTTP_AUTH, ?RAW_AUTH_NTLM}]),
+    true = Code =/= bad_opts.
+
+http_auth_negotiate_accepted(_Config) ->
+    Code = raw_probe([{?RAW_OPT_HTTP_AUTH, ?RAW_AUTH_NEGOTIATE}]),
+    true = Code =/= bad_opts.
 
 dns_cache_timeout(Config) ->
     Url = httpbin_url(Config, <<"/get">>),
