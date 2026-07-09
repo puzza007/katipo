@@ -39,6 +39,10 @@ by the `reply_to` option):
 
 Use `await/1,2` to block until the response arrives.
 
+If the pool worker handling an in-flight async request dies (e.g. its port
+crashes), a `{katipo_error, Ref, #{code => worker_died}}` message is delivered
+so the caller fails fast instead of blocking until the request timeout.
+
 Note: async requests do not currently emit OTel spans or metrics.
 """.
 
@@ -322,7 +326,8 @@ Note: async requests do not currently emit OTel spans or metrics.
         curl_last |
         %% returned by us, not curl
         bad_opts |
-        await_timeout.
+        await_timeout |
+        worker_died.
 
 -type curlmopt() ::
         max_total_connections |
@@ -904,13 +909,14 @@ deliver({async, ReplyTo, UserRef}, _From, Result, {ResponseMap, _Metrics}) ->
 -doc false.
 %% Deliver a request timeout to a sync caller or an async ReplyTo.
 deliver_timeout(Kind, From) ->
-    Error = #{code => operation_timedout, message => <<>>},
-    case Kind of
-        sync ->
-            gen_server:reply(From, {error, {Error, []}});
-        {async, ReplyTo, UserRef} ->
-            ReplyTo ! {katipo_error, UserRef, Error}
-    end.
+    deliver_error(Kind, From, #{code => operation_timedout, message => <<>>}).
+
+%% Deliver an error map to a sync caller (as a gen_server reply) or an async
+%% reply_to (as a katipo_error message).
+deliver_error(sync, From, Error) ->
+    gen_server:reply(From, {error, {Error, []}});
+deliver_error({async, ReplyTo, UserRef}, _From, Error) ->
+    ReplyTo ! {katipo_error, UserRef, Error}.
 
 -doc false.
 handle_info({Port, {data, Data}}, State = #state{port = Port, reqs = Reqs}) ->
@@ -950,8 +956,23 @@ handle_info({'EXIT', Port, Reason}, State = #state{port = Port}) ->
     {stop, port_died, State}.
 
 -doc false.
-terminate(_Reason, #state{port = Port}) ->
-    true = port_close(Port),
+terminate(_Reason, #state{port = Port, reqs = Reqs}) ->
+    %% The worker is going away (typically because its port died) with
+    %% requests still in flight. Sync callers are covered by wpool:call's
+    %% own monitor, but async requests were dispatched fire-and-forget, so
+    %% push a worker_died error to each async reply_to before we exit --
+    %% otherwise those callers would block until their await/request timeout.
+    maps:foreach(fun notify_worker_died/2, Reqs),
+    %% port_close/1 raises badarg if the port is already dead (the common case
+    %% when we get here via port death); ignore it -- we're terminating anyway.
+    try port_close(Port)
+    catch error:badarg -> ok
+    end,
+    ok.
+
+notify_worker_died(From, {_Tref, {async, _, _} = Kind}) ->
+    deliver_error(Kind, From, #{code => worker_died, message => <<>>});
+notify_worker_died(_From, {_Tref, sync}) ->
     ok.
 
 -doc false.

@@ -242,7 +242,9 @@ groups() ->
        async_patch,
        async_delete,
        async_invalid_reply_to,
-       async_url_missing]},
+       async_url_missing,
+       async_worker_death,
+       async_worker_death_reply_to]},
      {otel, [],
       [otel_span_created,
        otel_metrics_recorded,
@@ -1026,15 +1028,11 @@ port_garbage_input(Config) ->
     PoolName = port_garbage_test,
     PoolSize = 1,
     {ok, _} = katipo_pool:start(PoolName, PoolSize),
-    WorkerName = wpool_pool:best_worker(PoolName),
-    WorkerPid = whereis(WorkerName),
-    {state, _, _, {state, Port, _}, _} = sys:get_state(WorkerPid),
+    {Port, _} = worker_state(PoolName),
     true = port_command(Port, <<"hdfjkshkjsdfgjsgafdjgsdjgfj">>),
     Fun = fun() ->
-                  WorkerName2 = wpool_pool:best_worker(PoolName),
-                  WorkerPid2 = whereis(WorkerName2),
-                  case sys:get_state(WorkerPid2) of
-                      {state, _, _, {state, Port2, _}, _} when Port =/= Port2 ->
+                  case worker_state(PoolName) of
+                      {Port2, _} when Port =/= Port2 ->
                           {ok, #{status := 200}} =
                               katipo:get(PoolName, Url, BaseOpts),
                           true
@@ -1050,16 +1048,10 @@ port_death(Config) ->
     PoolName = port_death_test,
     PoolSize = 1,
     {ok, _} = katipo_pool:start(PoolName, PoolSize),
-    WorkerName = wpool_pool:best_worker(PoolName),
-    WorkerPid = whereis(WorkerName),
-    {state, _, _, {state, Port, _}, _} = sys:get_state(WorkerPid),
-    {os_pid, OsPid} = erlang:port_info(Port, os_pid),
-    os:cmd("kill -9 " ++ integer_to_list(OsPid)),
+    Port = kill_worker_port(PoolName),
     Fun = fun() ->
-                  WorkerName2 = wpool_pool:best_worker(PoolName),
-                  WorkerPid2 = whereis(WorkerName2),
-                  case sys:get_state(WorkerPid2) of
-                      {state, _, _, {state, Port2, _}, _} when Port =/= Port2 ->
+                  case worker_state(PoolName) of
+                      {Port2, _} when Port =/= Port2 ->
                           {ok, #{status := 200}} =
                               katipo:get(PoolName, Url, BaseOpts),
                           true
@@ -1568,3 +1560,72 @@ async_invalid_reply_to(_Config) ->
 async_url_missing(_Config) ->
     {error, #{code := bad_opts}} =
         katipo:async_req(?POOL, #{method => get}).
+
+async_worker_death(Config) ->
+    %% A worker dying (port killed) while an async request is in flight must
+    %% deliver worker_died promptly, not leave the caller blocked until its
+    %% await/request timeout.
+    {req_opts, Opts} = lists:keyfind(req_opts, 1, Config),
+    PoolName = async_worker_death_test,
+    {ok, _} = katipo_pool:start(PoolName, 1),
+    %% /delay keeps the request in flight so it's still registered on the
+    %% worker when we kill the port.
+    Url = httpbin_url(Config, <<"/delay/5">>),
+    {ok, Ref} = katipo:async_get(PoolName, Url, Opts),
+    ok = wait_for_inflight(PoolName),
+    _ = kill_worker_port(PoolName),
+    %% Prompt worker_died (well under /delay/5 and the 30s default) proves
+    %% terminate/2 pushed the error rather than us hitting a timeout.
+    {error, #{code := worker_died}} = katipo:await(Ref, 5000),
+    ok = katipo_pool:stop(PoolName).
+
+async_worker_death_reply_to(Config) ->
+    %% The death notification must reach a third-party reply_to, not just an
+    %% awaiter -- a plain message consumer gets worker_died pushed to it.
+    {req_opts, Opts} = lists:keyfind(req_opts, 1, Config),
+    PoolName = async_worker_death_reply_to_test,
+    {ok, _} = katipo_pool:start(PoolName, 1),
+    Self = self(),
+    Collector = spawn_link(fun() ->
+        receive
+            {katipo_error, _Ref, #{code := worker_died}} ->
+                Self ! worker_died_seen
+        after 5000 ->
+            Self ! worker_died_missing
+        end
+    end),
+    Url = httpbin_url(Config, <<"/delay/5">>),
+    {ok, _Ref} = katipo:async_get(PoolName, Url, Opts#{reply_to => Collector}),
+    ok = wait_for_inflight(PoolName),
+    _ = kill_worker_port(PoolName),
+    receive
+        worker_died_seen -> ok;
+        worker_died_missing -> ct:fail(no_worker_died_message)
+    after 10000 ->
+        ct:fail(timeout)
+    end,
+    ok = katipo_pool:stop(PoolName).
+
+%% Block until the (size-1) pool's worker has a request registered, so a
+%% subsequent port kill happens with the request genuinely in flight.
+wait_for_inflight(PoolName) ->
+    Fun = fun() ->
+                  {_Port, Reqs} = worker_state(PoolName),
+                  map_size(Reqs) > 0
+          end,
+    true = repeat_until_true(Fun),
+    ok.
+
+%% Kill the (size-1) pool's worker OS process and return the killed Port.
+kill_worker_port(PoolName) ->
+    {Port, _Reqs} = worker_state(PoolName),
+    {os_pid, OsPid} = erlang:port_info(Port, os_pid),
+    _ = os:cmd("kill -9 " ++ integer_to_list(OsPid)),
+    Port.
+
+%% Reach into a size-1 pool's single worker and return its {Port, Reqs}. The
+%% outer tuple is wpool_process's state wrapping katipo's #state{port, reqs}.
+worker_state(PoolName) ->
+    WorkerPid = whereis(wpool_pool:best_worker(PoolName)),
+    {state, _, _, {state, Port, Reqs}, _} = sys:get_state(WorkerPid),
+    {Port, Reqs}.
