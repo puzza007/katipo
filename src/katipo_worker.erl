@@ -3,9 +3,10 @@
 -moduledoc false.
 
 %% The gen_server that owns a single libcurl C port. wpool runs one of these per
-%% pool worker. It marshals a validated #req{} to the port, tracks in-flight
-%% requests, and delivers responses/timeouts/errors back to sync callers and
-%% async reply_to processes. Factored out of katipo.
+%% pool worker. At init it parses the pool's curl-multi options (get_mopts) into
+%% the port's spawn arguments. Thereafter it marshals a validated #req{} to the
+%% port, tracks in-flight requests, and delivers responses/timeouts/errors back
+%% to sync callers and async reply_to processes. Factored out of katipo.
 
 -behaviour(gen_server).
 

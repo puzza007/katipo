@@ -1,7 +1,12 @@
-%% Public type definitions for the katipo API. Included by katipo after
-%% katipo_internal.hrl (which supplies the ?SSL_CACERT_ERROR_CODE macro the
-%% error_code() union references). Kept out of katipo.erl to keep the facade
-%% focused on functions.
+%% Public type definitions for the katipo API. Kept out of katipo.erl to keep
+%% the facade focused on functions. Self-contained: it pulls in
+%% katipo_internal.hrl for the ?SSL_CACERT_ERROR_CODE macro that the
+%% error_code() union references, so include order does not matter.
+
+-ifndef(KATIPO_TYPES_HRL).
+-define(KATIPO_TYPES_HRL, true).
+
+-include("katipo_internal.hrl").
 
 -type method() :: get | post | put | head | options | patch | delete.
 -type url() :: binary().
@@ -273,3 +278,5 @@
 -export_type([sslkey_blob/0]).
 -export_type([userpwd/0]).
 -export_type([async_response/0]).
+
+-endif.

@@ -2,6 +2,9 @@
 %% and the numeric option/method constants of the C port wire protocol. Included
 %% by katipo, katipo_req, and katipo_worker. Not a public interface.
 
+-ifndef(KATIPO_INTERNAL_HRL).
+-define(KATIPO_INTERNAL_HRL, true).
+
 %% Compile-time curl feature availability (flags set by rebar.config.script).
 -ifdef(tcp_fastopen_available).
 -define(TCP_FASTOPEN_AVAILABLE, true).
@@ -111,11 +114,19 @@
 
 -define(METHODS, [get, post, put, head, options, patch, delete]).
 
+-type method_int() :: ?GET | ?POST | ?PUT | ?HEAD | ?OPTIONS | ?PATCH | ?DELETE.
+-type http_auth_int() :: ?CURLAUTH_UNDEFINED
+                       | ?CURLAUTH_BASIC
+                       | ?CURLAUTH_DIGEST
+                       | ?CURLAUTH_NTLM
+                       | ?CURLAUTH_NEGOTIATE.
+
 %% The validated request built from an options map (katipo_req) and consumed by
-%% the worker (katipo_worker). Field types are concrete so the record is
-%% self-contained; the precise aliases live in katipo/katipo_req.
+%% the worker (katipo_worker). The wire-value field types stay in this shared
+%% header so the record and its validators (katipo_req:opt/3) draw from one
+%% definition rather than two spellings that can drift.
 -record(req, {
-          method = ?GET :: integer(),
+          method = ?GET :: method_int(),
           url :: undefined | binary(),
           headers = [] :: [binary()],
           cookiejar = [] :: [binary()],
@@ -129,17 +140,17 @@
           timeout_ms = ?DEFAULT_REQ_TIMEOUT :: pos_integer(),
           maxredirs = 9 :: non_neg_integer(),
           timeout = ?DEFAULT_REQ_TIMEOUT :: pos_integer(),
-          http_auth = ?CURLAUTH_UNDEFINED :: integer(),
+          http_auth = ?CURLAUTH_UNDEFINED :: http_auth_int(),
           username = undefined :: undefined | binary(),
           password = undefined :: undefined | binary(),
           proxy = undefined :: undefined | binary(),
-          tcp_fastopen = ?TCP_FASTOPEN_FALSE :: integer(),
+          tcp_fastopen = ?TCP_FASTOPEN_FALSE :: ?TCP_FASTOPEN_FALSE | ?TCP_FASTOPEN_TRUE,
           interface = undefined :: undefined | binary(),
           unix_socket_path = undefined :: undefined | binary(),
           doh_url = undefined :: undefined | binary(),
           http_version = ?CURL_HTTP_VERSION_NONE :: integer(),
           sslversion = ?CURL_SSLVERSION_DEFAULT :: integer(),
-          verbose = ?VERBOSE_FALSE :: integer(),
+          verbose = ?VERBOSE_FALSE :: ?VERBOSE_FALSE | ?VERBOSE_TRUE,
           sslcert = undefined :: undefined | binary() | file:name_all(),
           sslkey = undefined :: undefined | binary() | file:name_all(),
           sslkey_blob = undefined :: undefined | binary(),
@@ -147,5 +158,7 @@
           userpwd = undefined :: undefined | binary(),
           dns_cache_timeout = 60 :: integer(),
           ca_cache_timeout = 86400 :: integer(),
-          pipewait = ?PIPEWAIT_TRUE :: integer()
+          pipewait = ?PIPEWAIT_TRUE :: ?PIPEWAIT_FALSE | ?PIPEWAIT_TRUE
          }).
+
+-endif.

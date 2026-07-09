@@ -15,7 +15,8 @@
 
 -include("katipo_internal.hrl").
 
--type method_int() :: ?GET | ?POST | ?PUT | ?HEAD | ?OPTIONS | ?PATCH | ?DELETE.
+%% method_int() and http_auth_int() come from katipo_internal.hrl (they type the
+%% #req wire fields); req() is the validated request this module produces.
 -type req() :: #req{}.
 -export_type([method_int/0, req/0]).
 

@@ -89,8 +89,6 @@ worker failure arrives.
 
 -export([check_opts/1]).
 
-%% only for mocking during tests
-
 -export([tcp_fastopen_available/0]).
 -export([unix_socket_path_available/0]).
 -export([doh_url_available/0]).
