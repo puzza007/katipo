@@ -250,6 +250,8 @@ groups() ->
      {otel, [],
       [otel_span_created,
        otel_metrics_recorded,
+       otel_async_span_created,
+       otel_async_metrics_recorded,
        otel_url_sanitization,
        otel_noop_metrics_no_crash]},
      {http1, [parallel],
@@ -1283,42 +1285,67 @@ httpbin_url(Config, Path) ->
 %% OpenTelemetry integration tests
 
 otel_span_created(_Config) ->
-    Self = self(),
-    application:set_env(opentelemetry, processors,
-                        [{otel_simple_processor, #{exporter => {otel_exporter_pid, Self}}}]),
-    application:stop(opentelemetry),
-    {ok, _} = application:ensure_all_started(opentelemetry),
-
+    ok = setup_span_exporter(),
     {ok, #{status := 200}} =
         katipo:get(?POOL, <<"https://localhost:8443/get">>,
                    #{ssl_verifyhost => false, ssl_verifypeer => false}),
-    receive
-        {span, #span{name = SpanName}} ->
-            ?assertEqual(<<"HTTP GET">>, SpanName)
-    after 5000 ->
-        ct:fail("Timeout waiting for span")
-    end.
+    assert_span_name(<<"HTTP GET">>).
 
 otel_metrics_recorded(_Config) ->
-    Self = self(),
-    ReadersConfig = [#{module => otel_metric_reader,
-                       config => #{exporter => {otel_metric_exporter_pid, Self},
-                                  export_interval_ms => 100}}],
-    application:set_env(opentelemetry_experimental, readers, ReadersConfig),
-    application:stop(opentelemetry_experimental),
-    {ok, _} = application:ensure_all_started(opentelemetry_experimental),
-
-    %% Re-register instruments with new meter provider
-    ok = katipo_metrics:init(),
-
+    ok = setup_metric_reader(),
     flush_otel_metrics(),
     {ok, #{status := 200}} =
         katipo:get(?POOL, <<"https://localhost:8443/get">>,
                    #{ssl_verifyhost => false, ssl_verifypeer => false}),
+    assert_request_counter().
 
+otel_async_span_created(_Config) ->
+    ok = setup_span_exporter(),
+    {ok, Ref} =
+        katipo:async_get(?POOL, <<"https://localhost:8443/get">>,
+                         #{ssl_verifyhost => false, ssl_verifypeer => false}),
+    {ok, #{status := 200}} = katipo:await(Ref),
+    assert_span_name(<<"HTTP GET">>).
+
+otel_async_metrics_recorded(_Config) ->
+    ok = setup_metric_reader(),
+    flush_otel_metrics(),
+    {ok, Ref} =
+        katipo:async_get(?POOL, <<"https://localhost:8443/get">>,
+                         #{ssl_verifyhost => false, ssl_verifypeer => false}),
+    {ok, #{status := 200}} = katipo:await(Ref),
+    assert_request_counter().
+
+%% Point the OTel span/metric exporters at this (the test) process so it can
+%% receive {span, _} / {otel_metric, _} messages.
+setup_span_exporter() ->
+    application:set_env(opentelemetry, processors,
+                        [{otel_simple_processor, #{exporter => {otel_exporter_pid, self()}}}]),
+    application:stop(opentelemetry),
+    {ok, _} = application:ensure_all_started(opentelemetry),
+    ok.
+
+setup_metric_reader() ->
+    ReadersConfig = [#{module => otel_metric_reader,
+                       config => #{exporter => {otel_metric_exporter_pid, self()},
+                                  export_interval_ms => 100}}],
+    application:set_env(opentelemetry_experimental, readers, ReadersConfig),
+    application:stop(opentelemetry_experimental),
+    {ok, _} = application:ensure_all_started(opentelemetry_experimental),
+    %% Re-register instruments with the new meter provider
+    ok = katipo_metrics:init().
+
+assert_span_name(Expected) ->
+    receive
+        {span, #span{name = SpanName}} ->
+            ?assertEqual(Expected, SpanName)
+    after 5000 ->
+        ct:fail("Timeout waiting for span")
+    end.
+
+assert_request_counter() ->
     ok = otel_meter_server:force_flush(),
     timer:sleep(300),
-
     Metrics = collect_otel_metrics(),
     ?assert(length(Metrics) > 0),
     HasRequestCounter = lists:any(

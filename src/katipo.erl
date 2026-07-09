@@ -44,7 +44,10 @@ If the pool worker handling an in-flight async request dies (e.g. its port
 crashes), a `{katipo_error, Ref, #{code => worker_died}}` message is delivered
 so the caller fails fast instead of blocking until the request timeout.
 
-Note: async requests do not currently emit OTel spans or metrics.
+Async requests emit the same OTel span (`HTTP <METHOD>`, parented to the
+caller's context) and metrics as their synchronous counterparts; the span
+covers the full request and is finished when the response, a timeout, or a
+worker failure arrives.
 """.
 
 -behaviour(gen_server).
@@ -742,12 +745,28 @@ async_req(PoolName, Opts)
             case build_req(Opts2) of
                 {ok, Req} ->
                     UserRef = make_ref(),
-                    wpool:cast(PoolName, {async_req, ReplyTo, UserRef, Req}, random_worker),
+                    Obs = start_async_obs(Req),
+                    wpool:cast(PoolName, {async_req, ReplyTo, UserRef, Req, Obs},
+                               random_worker),
                     {ok, UserRef};
                 {error, _} = Error ->
                     Error
             end
     end.
+
+%% @private
+%% Start the OTel span (parented to the caller's context so the async request
+%% appears under the caller's trace) and capture what the worker needs to emit
+%% metrics and finish the span when the response arrives. Mirrors the sync
+%% observability in do_req_with_span/2, but split across processes.
+start_async_obs(#req{method = MethodInt, url = Url}) ->
+    Method = method_int_to_binary(MethodInt),
+    SpanName = <<"HTTP ", Method/binary>>,
+    SpanCtx = otel_tracer:start_span(otel_ctx:get_current(),
+                                     opentelemetry:get_application_tracer(?MODULE),
+                                     SpanName, #{kind => client}),
+    set_request_span_attrs(SpanCtx, Method, Url),
+    #{method => Method, ts => os:timestamp(), span => SpanCtx}.
 
 -doc #{equiv => await/2}.
 -spec await(reference()) -> response().
@@ -811,37 +830,49 @@ do_req_with_span(PoolName, Req) ->
     Method = method_int_to_binary(MethodInt),
     SpanName = <<"HTTP ", Method/binary>>,
     ?with_span(SpanName, #{kind => client}, fun(SpanCtx) ->
-        %% Only parse URL and set attributes if span is actually recording
-        %% (avoids overhead when OTel SDK is not configured)
-        case otel_span:is_recording(SpanCtx) of
-            true ->
-                ?set_attribute('http.request.method', Method),
-                set_url_span_attrs(Url);
-            false ->
-                ok
-        end,
+        set_request_span_attrs(SpanCtx, Method, Url),
         Ts = os:timestamp(),
         {Result, {Response, Metrics}} =
             wpool:call(PoolName, Req, random_worker, infinity),
-        TotalUs = timer:now_diff(os:timestamp(), Ts),
-        %% Set span attributes based on response
-        set_response_span_attrs(Result, Response),
-        _ = katipo_metrics:notify({Result, Response}, Metrics, TotalUs, Method),
+        record_outcome(SpanCtx, Method, Ts, Result, Response, Metrics),
         {Result, Response}
     end).
 
 -doc false.
-set_response_span_attrs(ok, #{status := Status}) ->
-    ?set_attribute('http.response.status_code', Status),
+%% Set the request span attributes (method + sanitized URL), only when the span
+%% is recording (URL parsing is skipped otherwise). Shared by the sync and async
+%% start paths.
+set_request_span_attrs(SpanCtx, Method, Url) ->
+    case otel_span:is_recording(SpanCtx) of
+        true ->
+            otel_span:set_attribute(SpanCtx, 'http.request.method', Method),
+            set_url_span_attrs(SpanCtx, Url);
+        false ->
+            ok
+    end.
+
+-doc false.
+%% Set response span attributes and emit request metrics -- the shared tail of
+%% both the sync request (do_req_with_span/2) and an async request completing in
+%% the worker (finish_async_obs/4).
+record_outcome(SpanCtx, Method, Ts, Result, Response, Metrics) ->
+    TotalUs = timer:now_diff(os:timestamp(), Ts),
+    set_response_span_attrs(SpanCtx, Result, Response),
+    _ = katipo_metrics:notify({Result, Response}, Metrics, TotalUs, Method),
+    ok.
+
+-doc false.
+set_response_span_attrs(SpanCtx, ok, #{status := Status}) ->
+    otel_span:set_attribute(SpanCtx, 'http.response.status_code', Status),
     case Status >= 400 of
-        true -> ?set_status(error, <<>>);
+        true -> otel_span:set_status(SpanCtx, error, <<>>);
         false -> ok
     end;
-set_response_span_attrs(error, #{code := Code, message := _Msg}) ->
+set_response_span_attrs(SpanCtx, error, #{code := Code, message := _Msg}) ->
     %% Don't include error message in span - it may contain sensitive URL info
-    ?set_status(error, <<>>),
-    ?set_attribute('error.type', Code);
-set_response_span_attrs(_, _) ->
+    otel_span:set_status(SpanCtx, error, <<>>),
+    otel_span:set_attribute(SpanCtx, 'error.type', Code);
+set_response_span_attrs(_SpanCtx, _, _) ->
     ok.
 
 -doc false.
@@ -854,13 +885,13 @@ method_int_to_binary(?PATCH) -> <<"PATCH">>;
 method_int_to_binary(?DELETE) -> <<"DELETE">>.
 
 -doc false.
-set_url_span_attrs(Url) ->
+set_url_span_attrs(SpanCtx, Url) ->
     case parse_url_for_span(Url) of
         {<<>>, _} ->
             ok;
         {SanitizedUrl, Host} ->
-            ?set_attribute('url.full', SanitizedUrl),
-            ?set_attribute('server.address', Host)
+            otel_span:set_attribute(SpanCtx, 'url.full', SanitizedUrl),
+            otel_span:set_attribute(SpanCtx, 'server.address', Host)
     end.
 
 -doc false.
@@ -906,12 +937,12 @@ handle_call(Req = #req{timeout = Timeout}, From, State = #state{port = Port, req
     {noreply, State#state{reqs = Reqs2}}.
 
 -doc false.
-handle_cast({async_req, ReplyTo, UserRef, Req = #req{timeout = Timeout}},
+handle_cast({async_req, ReplyTo, UserRef, Req = #req{timeout = Timeout}, Obs},
             State = #state{port = Port, reqs = Reqs}) ->
     InternalFrom = {self(), make_ref()},
     send_to_port(Port, InternalFrom, Req),
     Tref = erlang:start_timer(Timeout, self(), {req_timeout, InternalFrom}),
-    Reqs2 = Reqs#{InternalFrom => {Tref, {async, ReplyTo, UserRef}}},
+    Reqs2 = Reqs#{InternalFrom => {Tref, {async, ReplyTo, UserRef, Obs}}},
     {noreply, State#state{reqs = Reqs2}};
 handle_cast({cancel, UserRef}, State = #state{port = Port, reqs = Reqs}) ->
     %% Broadcast reaches every worker; only the one holding this request acts.
@@ -926,9 +957,10 @@ handle_cast(Msg, State) ->
 %% async ReplyTo (via a flattened katipo_response/katipo_error message).
 deliver(sync, From, Result, Response) ->
     gen_server:reply(From, {Result, Response});
-deliver({async, ReplyTo, UserRef}, _From, Result, {ResponseMap, _Metrics}) ->
+deliver({async, ReplyTo, UserRef, Obs}, _From, Result, {ResponseMap, Metrics}) ->
     Tag = case Result of ok -> katipo_response; error -> katipo_error end,
-    ReplyTo ! {Tag, UserRef, ResponseMap}.
+    ReplyTo ! {Tag, UserRef, ResponseMap},
+    finish_async_obs(Obs, Result, ResponseMap, Metrics).
 
 -doc false.
 %% Deliver a request timeout to a sync caller or an async ReplyTo.
@@ -939,8 +971,9 @@ deliver_timeout(Kind, From) ->
 %% reply_to (as a katipo_error message).
 deliver_error(sync, From, Error) ->
     gen_server:reply(From, {error, {Error, []}});
-deliver_error({async, ReplyTo, UserRef}, _From, Error) ->
-    ReplyTo ! {katipo_error, UserRef, Error}.
+deliver_error({async, ReplyTo, UserRef, Obs}, _From, Error) ->
+    ReplyTo ! {katipo_error, UserRef, Error},
+    finish_async_obs(Obs, error, Error, []).
 
 -doc false.
 handle_info({Port, {data, Data}}, State = #state{port = Port, reqs = Reqs}) ->
@@ -994,9 +1027,24 @@ terminate(_Reason, #state{port = Port, reqs = Reqs}) ->
     end,
     ok.
 
-notify_worker_died(From, {_Tref, {async, _, _} = Kind}) ->
+notify_worker_died(From, {_Tref, {async, _, _, _} = Kind}) ->
     deliver_error(Kind, From, #{code => worker_died, message => <<>>});
 notify_worker_died(_From, {_Tref, sync}) ->
+    ok.
+
+%% Emit metrics and finish the OTel span for a completed async request. Mirrors
+%% the tail of do_req_with_span/2, but runs in the worker when the response
+%% (or timeout/worker-death) arrives rather than in the calling process.
+finish_async_obs(Obs = #{method := Method, ts := Ts, span := SpanCtx},
+                 Result, Response, Metrics) ->
+    record_outcome(SpanCtx, Method, Ts, Result, Response, Metrics),
+    end_obs(Obs).
+
+%% End the OTel span for an async request. Every terminal path (completion,
+%% timeout, worker death, cancel) calls this exactly once, alongside removing
+%% the request from the reqs map.
+end_obs(#{span := SpanCtx}) ->
+    _ = otel_span:end_span(SpanCtx),
     ok.
 
 %% Cancel the async request with this user Ref, if this worker holds it: tell
@@ -1004,18 +1052,19 @@ notify_worker_died(_From, {_Tref, sync}) ->
 %% no response is delivered.
 cancel_async(Port, UserRef, Reqs) ->
     case find_async(UserRef, Reqs) of
-        {ok, {Self, Ref} = From, Tref} ->
+        {ok, {Self, Ref} = From, Tref, Obs} ->
             _ = erlang:cancel_timer(Tref),
             true = port_command(Port, term_to_binary({Self, Ref, cancel})),
+            end_obs(Obs),
             maps:remove(From, Reqs);
         error ->
             Reqs
     end.
 
 find_async(UserRef, Reqs) ->
-    case [{From, Tref}
-          || From := {Tref, {async, _ReplyTo, UR}} <- Reqs, UR =:= UserRef] of
-        [{From, Tref} | _] -> {ok, From, Tref};
+    case [{From, Tref, Obs}
+          || From := {Tref, {async, _ReplyTo, UR, Obs}} <- Reqs, UR =:= UserRef] of
+        [{From, Tref, Obs} | _] -> {ok, From, Tref, Obs};
         [] -> error
     end.
 
