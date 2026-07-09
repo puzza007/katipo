@@ -775,6 +775,8 @@ static void set_method(long method, ConnInfo *conn) {
   }
 }
 
+static void free_eopts(EasyOpts *eopts);
+
 static void new_conn(long method, char *url, struct curl_slist *req_headers,
                      struct curl_slist *req_cookies, char *post_data,
                      long post_data_size, EasyOpts eopts, erlang_pid *pid,
@@ -784,13 +786,8 @@ static void new_conn(long method, char *url, struct curl_slist *req_headers,
   struct curl_slist *nc;
 
   conn = calloc(1, sizeof(*conn));
-  conn->error[0] = '\0';
-
-  conn->memory = NULL;
-  conn->size = 0;
-  conn->capacity = 0;
-  conn->num_headers = 0;
-  conn->resp_headers = NULL;
+  /* calloc zero-initializes the struct, so error/memory/size/capacity/
+   * num_headers/resp_headers already start empty. */
 
   conn->easy = curl_easy_init();
   if (!conn->easy) {
@@ -941,19 +938,7 @@ static void new_conn(long method, char *url, struct curl_slist *req_headers,
                      eopts.curlopt_userpwd);
   }
 
-  free(eopts.curlopt_capath);
-  free(eopts.curlopt_cacert);
-  free(eopts.curlopt_username);
-  free(eopts.curlopt_password);
-  free(eopts.curlopt_proxy);
-  free(eopts.curlopt_interface);
-  free(eopts.curlopt_unix_socket_path);
-  free(eopts.curlopt_doh_url);
-  free(eopts.curlopt_sslcert);
-  free(eopts.curlopt_sslkey);
-  free(eopts.curlopt_sslkey_blob);
-  free(eopts.curlopt_keypasswd);
-  free(eopts.curlopt_userpwd);
+  free_eopts(&eopts);
 
   set_method(method, conn);
   rc = curl_multi_add_handle(global->multi, conn->easy);
