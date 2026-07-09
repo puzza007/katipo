@@ -22,7 +22,7 @@ start(PoolName, PoolSize, WorkerOpts)
        is_list(WorkerOpts) ->
     Args = [WorkerOpts],
 
-    PoolOpts = [{worker, {katipo, Args}},
+    PoolOpts = [{worker, {katipo_worker, Args}},
                 {workers, PoolSize},
                 {pool_sup_shutdown, infinity}],
 

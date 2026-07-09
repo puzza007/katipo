@@ -1067,11 +1067,11 @@ port_death(Config) ->
 port_late_response(Config) ->
     Url = httpbin_url(Config, <<"/delay/1">>),
     BaseOpts = ?config(httpbin_opts, Config),
-    ok = meck:new(katipo, [passthrough]),
-    meck:expect(katipo, get_timeout, fun(_) -> 100 end),
+    ok = meck:new(katipo_req, [passthrough]),
+    meck:expect(katipo_req, get_timeout, fun(_) -> 100 end),
     {error, #{code := operation_timedout, message := <<>>}} =
         katipo:get(?POOL, Url, BaseOpts),
-    meck:unload(katipo).
+    meck:unload(katipo_req).
 
 pool_opts(_) ->
     PoolName = pool_opts,
@@ -1409,34 +1409,52 @@ otel_noop_metrics_no_crash(_Config) ->
 
 otel_url_sanitization(_Config) ->
     %% Test that query strings are stripped (prevents leaking API keys, tokens, etc.)
-    {Url1, Host1} = katipo:parse_url_for_span(<<"https://api.example.com/users?api_key=secret123&token=abc">>),
+    {Url1, Host1} = katipo_span:parse_url_for_span(<<"https://api.example.com/users?api_key=secret123&token=abc">>),
     ?assertEqual(<<"https://api.example.com/users">>, Url1),
     ?assertEqual(<<"api.example.com">>, Host1),
 
     %% Test that fragments are stripped
-    {Url2, Host2} = katipo:parse_url_for_span(<<"https://example.com/page#section">>),
+    {Url2, Host2} = katipo_span:parse_url_for_span(<<"https://example.com/page#section">>),
     ?assertEqual(<<"https://example.com/page">>, Url2),
     ?assertEqual(<<"example.com">>, Host2),
 
     %% Test that both query and fragment are stripped
-    {Url3, Host3} = katipo:parse_url_for_span(<<"https://example.com/path?foo=bar#anchor">>),
+    {Url3, Host3} = katipo_span:parse_url_for_span(<<"https://example.com/path?foo=bar#anchor">>),
     ?assertEqual(<<"https://example.com/path">>, Url3),
     ?assertEqual(<<"example.com">>, Host3),
 
     %% Test URL without query or fragment is unchanged
-    {Url4, Host4} = katipo:parse_url_for_span(<<"https://example.com/path">>),
+    {Url4, Host4} = katipo_span:parse_url_for_span(<<"https://example.com/path">>),
     ?assertEqual(<<"https://example.com/path">>, Url4),
     ?assertEqual(<<"example.com">>, Host4),
 
     %% Test URL with port
-    {Url5, Host5} = katipo:parse_url_for_span(<<"https://example.com:8443/api?secret=value">>),
+    {Url5, Host5} = katipo_span:parse_url_for_span(<<"https://example.com:8443/api?secret=value">>),
     ?assertEqual(<<"https://example.com:8443/api">>, Url5),
     ?assertEqual(<<"example.com">>, Host5),
 
     %% Test URL with userinfo - credentials are stripped for security
-    {Url6, Host6} = katipo:parse_url_for_span(<<"https://user:pass@example.com/path?token=x">>),
+    {Url6, Host6} = katipo_span:parse_url_for_span(<<"https://user:pass@example.com/path?token=x">>),
     ?assertEqual(<<"https://example.com/path">>, Url6),
     ?assertEqual(<<"example.com">>, Host6),
+
+    %% Punycode/IDN host is preserved verbatim (ASCII, no unicode conversion)
+    {Url7, Host7} = katipo_span:parse_url_for_span(<<"https://xn--mnchen-3ya.de/p">>),
+    ?assertEqual(<<"https://xn--mnchen-3ya.de/p">>, Url7),
+    ?assertEqual(<<"xn--mnchen-3ya.de">>, Host7),
+
+    %% A raw (non-punycode) unicode host is rejected by uri_string and sanitised
+    %% away rather than leaking undecoded bytes into the span.
+    ?assertEqual({<<>>, <<>>},
+                 katipo_span:parse_url_for_span(<<"https://例え.テスト/p"/utf8>>)),
+
+    %% Malformed URLs must never crash the span code -- uri_string:parse/1
+    %% *throws* on some raw byte sequences, and this runs in the worker process
+    %% on the async path. Both must yield the empty sentinel, not an exception.
+    ?assertEqual({<<>>, <<>>},
+                 katipo_span:parse_url_for_span(<<"https://ex", 255, "ample.com/">>)),
+    ?assertEqual({<<>>, <<>>},
+                 katipo_span:parse_url_for_span(<<"::::not a url::::">>)),
 
     ok.
 
@@ -1692,7 +1710,7 @@ kill_worker_port(PoolName) ->
     Port.
 
 %% Reach into a size-1 pool's single worker and return its {Port, Reqs}. The
-%% outer tuple is wpool_process's state wrapping katipo's #state{port, reqs}.
+%% outer tuple is wpool_process's state wrapping katipo_worker's #state{port, reqs}.
 worker_state(PoolName) ->
     WorkerPid = whereis(wpool_pool:best_worker(PoolName)),
     {state, _, _, {state, Port, Reqs}, _} = sys:get_state(WorkerPid),
