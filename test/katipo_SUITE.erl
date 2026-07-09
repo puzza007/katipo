@@ -1438,6 +1438,24 @@ otel_url_sanitization(_Config) ->
     ?assertEqual(<<"https://example.com/path">>, Url6),
     ?assertEqual(<<"example.com">>, Host6),
 
+    %% Punycode/IDN host is preserved verbatim (ASCII, no unicode conversion)
+    {Url7, Host7} = katipo_span:parse_url_for_span(<<"https://xn--mnchen-3ya.de/p">>),
+    ?assertEqual(<<"https://xn--mnchen-3ya.de/p">>, Url7),
+    ?assertEqual(<<"xn--mnchen-3ya.de">>, Host7),
+
+    %% A raw (non-punycode) unicode host is rejected by uri_string and sanitised
+    %% away rather than leaking undecoded bytes into the span.
+    ?assertEqual({<<>>, <<>>},
+                 katipo_span:parse_url_for_span(<<"https://例え.テスト/p"/utf8>>)),
+
+    %% Malformed URLs must never crash the span code -- uri_string:parse/1
+    %% *throws* on some raw byte sequences, and this runs in the worker process
+    %% on the async path. Both must yield the empty sentinel, not an exception.
+    ?assertEqual({<<>>, <<>>},
+                 katipo_span:parse_url_for_span(<<"https://ex", 255, "ample.com/">>)),
+    ?assertEqual({<<>>, <<>>},
+                 katipo_span:parse_url_for_span(<<"::::not a url::::">>)),
+
     ok.
 
 %% Async API tests

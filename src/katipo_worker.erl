@@ -248,7 +248,7 @@ get_mopts(Opts) ->
             {error, {bad_opts, Opts}}
     end.
 
--spec mopt_supported({curlmopt(), any()}) -> false | {true, any()}.
+-spec mopt_supported({curlmopt(), any()}) -> false | {true, string()}.
 mopt_supported({pipelining, nothing}) ->
     {true, "--pipelining 0"};
 mopt_supported({pipelining, http1}) ->

@@ -108,13 +108,20 @@ set_url_span_attrs(SpanCtx, Url) ->
 
 %% @doc Parse a URL into {SanitizedUrl, Host}, stripping query/fragment/userinfo
 %% so no secrets leak into span attributes. Returns {<<>>, <<>>} if unparseable.
+%% uri_string:parse/1 only accepts ASCII hosts (RFC 3986), so Host is already a
+%% binary when the URL is a binary -- no unicode conversion is needed. It can
+%% also *throw* on some malformed byte sequences, not just return an error, so
+%% the whole call is guarded to honour the "unparseable -> {<<>>, <<>>}"
+%% contract (relevant on the async path, where this runs in the worker process).
 -spec parse_url_for_span(binary()) -> {binary(), binary()}.
 parse_url_for_span(Url) when is_binary(Url) ->
-    case uri_string:parse(Url) of
-        #{host := Host} = Parsed ->
-            Sanitized = sanitize_parsed_url(Parsed),
-            {Sanitized, unicode:characters_to_binary(Host)};
+    try uri_string:parse(Url) of
+        #{host := Host} = Parsed when is_binary(Host) ->
+            {sanitize_parsed_url(Parsed), Host};
         _ ->
+            {<<>>, <<>>}
+    catch
+        _:_ ->
             {<<>>, <<>>}
     end.
 
