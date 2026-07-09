@@ -138,7 +138,7 @@
           capath = undefined :: undefined | binary() | file:name_all(),
           cacert = undefined :: undefined | binary() | file:name_all(),
           timeout_ms = ?DEFAULT_REQ_TIMEOUT :: pos_integer(),
-          maxredirs = 9 :: non_neg_integer(),
+          maxredirs = 9 :: -1 | non_neg_integer(),
           timeout = ?DEFAULT_REQ_TIMEOUT :: pos_integer(),
           http_auth = ?CURLAUTH_UNDEFINED :: http_auth_int(),
           username = undefined :: undefined | binary(),
