@@ -1,0 +1,44 @@
+# LeakSanitizer suppressions for the katipo C port (SANITIZE=1 builds).
+#
+# The port process normally exits via exit(-1) from erl_error (pipe EOF) or
+# errx() on malformed framing, which bypasses the curl_global_cleanup /
+# event_base_free / curl_share_cleanup calls at the end of main(). As a
+# result, one-time global state owned by curl and its transitive
+# dependencies is still reachable at exit and reported as "leaked" even
+# though it is not a katipo bug. Suppress those library globals here so the
+# job only fails on leaks originating in katipo's own code.
+#
+# Matches are by substring against frames in the leak's allocation stack.
+
+# libcurl global/init state
+leak:curl_global_init
+leak:libcurl
+leak:Curl_
+
+# OpenSSL one-time initialisation
+leak:libcrypto
+leak:libssl
+leak:CRYPTO_
+leak:OPENSSL_
+leak:SSL_
+leak:ossl_
+leak:ENGINE_
+
+# Name resolution (c-ares / libc resolver)
+leak:libcares
+leak:ares_
+leak:getaddrinfo
+
+# libevent
+leak:libevent
+leak:event_base
+leak:evdns
+
+# Compression / HTTP2 transports pulled in by curl
+leak:libz
+leak:libnghttp2
+leak:libnghttp3
+leak:libngtcp2
+leak:libbrotli
+leak:libzstd
+leak:libpsl
