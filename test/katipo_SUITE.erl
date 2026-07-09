@@ -991,8 +991,10 @@ worker_death(Config) ->
     true = repeat_until_true(Fun3).
 
 port_garbage_input(Config) ->
-    %% Sending garbage that bypasses {packet, 4} corrupts the pipe framing.
-    %% The port detects invalid ETF and exits. Supervisor recovers.
+    %% Send non-ETF garbage to the port (still framed by {packet, 4}, which
+    %% port_command/2 always applies). The payload isn't a valid Erlang term,
+    %% so the port treats the stream as corrupt and exits; the supervisor
+    %% restarts it and the pool recovers.
     Url = httpbin_url(Config, <<"/get">>),
     BaseOpts = ?config(httpbin_opts, Config),
     PoolName = port_garbage_test,

@@ -1235,7 +1235,12 @@ static void erl_input(struct bufferevent *ev, void *arg) {
       break;
     }
 
-    /* Peek at first byte — valid ETF always starts with version tag 131 */
+    /* Peek at first byte — valid ETF always starts with version tag 131.
+     * A mismatch means the pipe framing is corrupt and unrecoverable (we
+     * can no longer trust subsequent length prefixes), so exit and let the
+     * supervisor restart the port with a fresh pipe. Well-framed terms that
+     * merely decode to the wrong shape are handled gracefully via the
+     * `goto cleanup` path below, which replies with an error and continues. */
     {
       unsigned char first_byte;
       if (evbuffer_copyout(input, &first_byte, 1) != 1 || first_byte != 131) {
