@@ -704,9 +704,7 @@ async_delete(PoolName, Url, Opts) ->
 -spec req(katipo_pool:name(), request()) -> response().
 req(PoolName, Opts)
   when is_map(Opts) ->
-    case process_opts(Opts) of
-        {ok, #req{url = undefined}} ->
-            {error, error_map(bad_opts, <<"[{url,undefined}]">>)};
+    case build_req(Opts) of
         {ok, Req} ->
             do_req_with_span(PoolName, Req);
         {error, _} = Error ->
@@ -725,20 +723,19 @@ Use `await/1,2` to block until the response arrives.
 -spec async_req(katipo_pool:name(), request()) -> async_response().
 async_req(PoolName, Opts)
   when is_map(Opts) ->
-    ReplyTo = maps:get(reply_to, Opts, self()),
+    {ReplyTo, Opts2} =
+        case maps:take(reply_to, Opts) of
+            {RT, Rest} -> {RT, Rest};
+            error -> {self(), Opts}
+        end,
     case is_pid(ReplyTo) of
         false ->
             {error, error_map(bad_opts, <<"[{reply_to,invalid}]">>)};
         true ->
-            Opts2 = maps:remove(reply_to, Opts),
-            case process_opts(Opts2) of
-                {ok, #req{url = undefined}} ->
-                    {error, error_map(bad_opts, <<"[{url,undefined}]">>)};
+            case build_req(Opts2) of
                 {ok, Req} ->
                     UserRef = make_ref(),
-                    Timeout = ?MODULE:get_timeout(Req),
-                    Req2 = Req#req{timeout = Timeout},
-                    wpool:cast(PoolName, {async_req, ReplyTo, UserRef, Req2}, random_worker),
+                    wpool:cast(PoolName, {async_req, ReplyTo, UserRef, Req}, random_worker),
                     {ok, UserRef};
                 {error, _} = Error ->
                     Error
@@ -770,6 +767,20 @@ await(Ref, Timeout) ->
     end.
 
 -doc false.
+%% Build a validated, timeout-stamped #req{} from an opts map. Shared by the
+%% sync req/2 and async_req/2 entry points.
+-spec build_req(request()) -> {ok, req()} | {error, map()}.
+build_req(Opts) ->
+    case process_opts(Opts) of
+        {ok, #req{url = undefined}} ->
+            {error, error_map(bad_opts, <<"[{url,undefined}]">>)};
+        {ok, Req} ->
+            {ok, Req#req{timeout = ?MODULE:get_timeout(Req)}};
+        {error, _} = Error ->
+            Error
+    end.
+
+-doc false.
 do_req_with_span(PoolName, Req) ->
     #req{method = MethodInt, url = Url} = Req,
     Method = method_int_to_binary(MethodInt),
@@ -784,11 +795,9 @@ do_req_with_span(PoolName, Req) ->
             false ->
                 ok
         end,
-        Timeout = ?MODULE:get_timeout(Req),
-        Req2 = Req#req{timeout = Timeout},
         Ts = os:timestamp(),
         {Result, {Response, Metrics}} =
-            wpool:call(PoolName, Req2, random_worker, infinity),
+            wpool:call(PoolName, Req, random_worker, infinity),
         TotalUs = timer:now_diff(os:timestamp(), Ts),
         %% Set span attributes based on response
         set_response_span_attrs(Result, Response),
@@ -868,7 +877,7 @@ init([CurlOpts]) ->
 handle_call(Req = #req{timeout = Timeout}, From, State = #state{port = Port, reqs = Reqs}) ->
     send_to_port(Port, From, Req),
     Tref = erlang:start_timer(Timeout, self(), {req_timeout, From}),
-    Reqs2 = Reqs#{From => Tref},
+    Reqs2 = Reqs#{From => {Tref, sync}},
     {noreply, State#state{reqs = Reqs2}}.
 
 -doc false.
@@ -882,6 +891,26 @@ handle_cast({async_req, ReplyTo, UserRef, Req = #req{timeout = Timeout}},
 handle_cast(Msg, State) ->
     logger:error("Unexpected cast: ~p", [Msg]),
     {noreply, State}.
+
+-doc false.
+%% Deliver a completed response to a sync caller (via gen_server:reply) or an
+%% async ReplyTo (via a flattened katipo_response/katipo_error message).
+deliver(sync, From, Result, Response) ->
+    gen_server:reply(From, {Result, Response});
+deliver({async, ReplyTo, UserRef}, _From, Result, {ResponseMap, _Metrics}) ->
+    Tag = case Result of ok -> katipo_response; error -> katipo_error end,
+    ReplyTo ! {Tag, UserRef, ResponseMap}.
+
+-doc false.
+%% Deliver a request timeout to a sync caller or an async ReplyTo.
+deliver_timeout(Kind, From) ->
+    Error = #{code => operation_timedout, message => <<>>},
+    case Kind of
+        sync ->
+            gen_server:reply(From, {error, {Error, []}});
+        {async, ReplyTo, UserRef} ->
+            ReplyTo ! {katipo_error, UserRef, Error}
+    end.
 
 -doc false.
 handle_info({Port, {data, Data}}, State = #state{port = Port, reqs = Reqs}) ->
@@ -898,18 +927,9 @@ handle_info({Port, {data, Data}}, State = #state{port = Port, reqs = Reqs}) ->
                 {error, {From0, {Error, Metrics}}}
         end,
     _ = case maps:find(From, Reqs) of
-        {ok, Tref} when is_reference(Tref) ->
-            %% Sync path
+        {ok, {Tref, Kind}} ->
             _ = erlang:cancel_timer(Tref),
-            gen_server:reply(From, {Result, Response});
-        {ok, {Tref, {async, ReplyTo, UserRef}}} ->
-            %% Async path — flatten into separate ok/error messages
-            {ResponseMap, _Metrics} = Response,
-            _ = erlang:cancel_timer(Tref),
-            case Result of
-                ok    -> ReplyTo ! {katipo_response, UserRef, ResponseMap};
-                error -> ReplyTo ! {katipo_error, UserRef, ResponseMap}
-            end;
+            deliver(Kind, From, Result, Response);
         error ->
             ok
     end,
@@ -918,18 +938,10 @@ handle_info({Port, {data, Data}}, State = #state{port = Port, reqs = Reqs}) ->
 handle_info({timeout, Tref, {req_timeout, From}}, State = #state{reqs = Reqs}) ->
     Reqs2 =
         case maps:find(From, Reqs) of
-            {ok, Tref} when is_reference(Tref) ->
-                %% Sync path
-                Error = #{code => operation_timedout, message => <<>>},
-                Metrics = [],
-                _ = gen_server:reply(From, {error, {Error, Metrics}}),
+            {ok, {Tref, Kind}} ->
+                _ = deliver_timeout(Kind, From),
                 maps:remove(From, Reqs);
-            {ok, {Tref, {async, ReplyTo, UserRef}}} ->
-                %% Async path
-                Error = #{code => operation_timedout, message => <<>>},
-                _ = ReplyTo ! {katipo_error, UserRef, Error},
-                maps:remove(From, Reqs);
-            error ->
+            _ ->
                 Reqs
         end,
     {noreply, State#state{reqs = Reqs2}};

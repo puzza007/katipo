@@ -1425,23 +1425,15 @@ async_get(Config) ->
     {req_opts, Opts} = lists:keyfind(req_opts, 1, Config),
     Url = httpbin_url(Config, <<"/get">>),
     {ok, Ref} = katipo:async_get(?POOL, Url, Opts),
-    receive
-        {katipo_response, Ref, #{status := 200}} -> ok
-    after 10000 ->
-        ct:fail(timeout)
-    end.
+    {ok, #{status := 200}} = katipo:await(Ref).
 
 async_get_with_opts(Config) ->
     {req_opts, Opts} = lists:keyfind(req_opts, 1, Config),
     Url = httpbin_url(Config, <<"/get?a=1">>),
     {ok, Ref} = katipo:async_get(?POOL, Url, Opts),
-    receive
-        {katipo_response, Ref, #{status := 200, body := Body}} ->
-            Json = jsx:decode(Body),
-            ?assertEqual(<<"1">>, maps:get(<<"a">>, maps:get(<<"args">>, Json)))
-    after 10000 ->
-        ct:fail(timeout)
-    end.
+    {ok, #{status := 200, body := Body}} = katipo:await(Ref),
+    Json = jsx:decode(Body),
+    ?assertEqual(<<"1">>, maps:get(<<"a">>, maps:get(<<"args">>, Json))).
 
 async_post(Config) ->
     {req_opts, Opts} = lists:keyfind(req_opts, 1, Config),
@@ -1449,23 +1441,15 @@ async_post(Config) ->
     {ok, Ref} = katipo:async_post(?POOL, Url,
                                   Opts#{headers => [{<<"Content-Type">>, <<"application/json">>}],
                                         body => <<"hello">>}),
-    receive
-        {katipo_response, Ref, #{status := 200, body := Body}} ->
-            Json = jsx:decode(Body),
-            ?assertEqual(<<"hello">>, maps:get(<<"data">>, Json))
-    after 10000 ->
-        ct:fail(timeout)
-    end.
+    {ok, #{status := 200, body := Body}} = katipo:await(Ref),
+    Json = jsx:decode(Body),
+    ?assertEqual(<<"hello">>, maps:get(<<"data">>, Json)).
 
 async_req(Config) ->
     {req_opts, Opts} = lists:keyfind(req_opts, 1, Config),
     Url = httpbin_url(Config, <<"/get">>),
     {ok, Ref} = katipo:async_req(?POOL, Opts#{url => Url, method => get}),
-    receive
-        {katipo_response, Ref, #{status := 200}} -> ok
-    after 10000 ->
-        ct:fail(timeout)
-    end.
+    {ok, #{status := 200}} = katipo:await(Ref).
 
 async_reply_to(Config) ->
     {req_opts, Opts} = lists:keyfind(req_opts, 1, Config),
@@ -1492,8 +1476,12 @@ async_error(_Config) ->
         katipo:async_get(?POOL, <<"https://localhost">>, #{bad_option => bad_value}).
 
 async_timeout(_Config) ->
+    %% Cap timeout_ms so katipo's own timeout deterministically delivers the
+    %% error in ~2s. Relying on curl's connecttimeout_ms=1 alone is flaky under
+    %% load; the 30s default backstop would race the suite timetrap. Manual
+    %% receive (not await/1) to exercise the raw async message path.
     {ok, Ref} = katipo:async_get(?POOL, <<"http://192.0.2.1">>,
-                                 #{connecttimeout_ms => 1}),
+                                 #{connecttimeout_ms => 1, timeout_ms => 2000}),
     receive
         {katipo_error, Ref, #{code := operation_timedout}} -> ok
     after 10000 ->
@@ -1507,9 +1495,11 @@ async_await(Config) ->
     {ok, #{status := 200}} = katipo:await(Ref).
 
 async_await_timeout(_Config) ->
-    %% Request itself times out — await collects the error
+    %% Request itself times out — await collects the error. Cap timeout_ms so
+    %% the timeout is delivered deterministically in ~2s rather than relying on
+    %% curl's flaky 1ms connecttimeout and racing the suite timetrap.
     {ok, Ref} = katipo:async_get(?POOL, <<"http://192.0.2.1">>,
-                                 #{connecttimeout_ms => 1}),
+                                 #{connecttimeout_ms => 1, timeout_ms => 2000}),
     {error, #{code := operation_timedout}} = katipo:await(Ref).
 
 async_await_explicit_timeout(Config) ->
