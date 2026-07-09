@@ -1692,7 +1692,7 @@ kill_worker_port(PoolName) ->
     Port.
 
 %% Reach into a size-1 pool's single worker and return its {Port, Reqs}. The
-%% outer tuple is wpool_process's state wrapping katipo's #state{port, reqs}.
+%% outer tuple is wpool_process's state wrapping katipo_worker's #state{port, reqs}.
 worker_state(PoolName) ->
     WorkerPid = whereis(wpool_pool:best_worker(PoolName)),
     {state, _, _, {state, Port, Reqs}, _} = sys:get_state(WorkerPid),
