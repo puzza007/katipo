@@ -361,14 +361,18 @@ do_req_with_span(PoolName, Req) ->
     end).
 
 %% Invoke the pool worker for a sync request. If the worker dies mid-request
-%% (typically its C port died) wpool:call exits; convert that into the same
+%% (typically its C port died) the in-flight gen_server:call exits with the
+%% shape {Reason, {gen_server, call, _}}; convert only that into the same
 %% {error, worker_died} contract the async path delivers, so req/2 honours its
-%% response() spec instead of crashing the caller.
+%% response() spec instead of crashing the caller. Config errors such as
+%% wpool's bare `no_workers` (unknown/unstarted pool) are left to propagate --
+%% mislabeling them worker_died would hide a naming/startup bug behind a
+%% transient-looking error.
 call_worker(PoolName, Req) ->
     try wpool:call(PoolName, Req, random_worker, infinity) of
         {Result, {Response, Metrics}} -> {Result, Response, Metrics}
     catch
-        exit:_ ->
+        exit:{_Reason, {gen_server, call, _}} ->
             {error, #{code => worker_died, message => <<>>}, []}
     end.
 

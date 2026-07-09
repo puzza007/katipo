@@ -247,6 +247,7 @@ groups() ->
        async_worker_death,
        async_worker_death_reply_to,
        sync_worker_death,
+       unknown_pool_not_worker_died,
        async_cancel,
        async_cancel_after_complete]},
      {otel, [],
@@ -1658,6 +1659,16 @@ sync_worker_death(Config) ->
             ct:fail(no_sync_result)
     end,
     ok = katipo_pool:stop(PoolName).
+
+unknown_pool_not_worker_died(_Config) ->
+    %% A request to a pool that was never started is a config error (wpool
+    %% exits no_workers), not a transient worker death. It must propagate rather
+    %% than be relabeled {error, worker_died}, which would hide the misnamed
+    %% pool behind a transient-looking error.
+    Result = try katipo:get(nonexistent_katipo_pool, <<"http://localhost/">>)
+             catch Class:Reason -> {caught, Class, Reason} end,
+    ?assertMatch({caught, _, _}, Result),
+    ?assertNotMatch({error, #{code := worker_died}}, Result).
 
 async_worker_death_reply_to(Config) ->
     %% The death notification must reach a third-party reply_to, not just an
