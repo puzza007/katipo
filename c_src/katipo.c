@@ -1305,7 +1305,6 @@ static void erl_input(struct bufferevent *ev, void *arg) {
         ei_decode_ref(buf, &index, ref)) {
       goto cleanup;
     }
-    have_identity = 1;
 
     /* Cancel command: {Pid, Ref, cancel} (arity 3). Abort the matching
      * in-flight transfer if we still have it; no response is sent. Requests
@@ -1322,6 +1321,10 @@ static void erl_input(struct bufferevent *ev, void *arg) {
         ei_get_type(buf, &index, &erl_type, &size)) {
       goto cleanup;
     }
+    /* Only now do we consider the identity usable for a parse-error reply:
+     * a request with an undecodable method is dropped silently (have_identity
+     * stays 0), matching the behaviour before cancellation was added. */
+    have_identity = 1;
 
     url = (char *)malloc(size + 1);
     if (ei_decode_binary(buf, &index, url, &sizel)) {
