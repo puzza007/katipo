@@ -26,6 +26,7 @@
            "src/katipo_metrics.erl",
            "src/katipo_req.erl",
            "src/katipo_span.erl",
+           "src/katipo_types.hrl",
            "src/katipo_worker.erl",
            "src/katipo_pool.erl",
            "src/katipo_sup.erl"]}
