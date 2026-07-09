@@ -355,11 +355,22 @@ do_req_with_span(PoolName, Req) ->
     Method = katipo_req:method_int_to_binary(MethodInt),
     katipo_span:with_client_span(Method, Url, fun(SpanCtx) ->
         Ts = os:timestamp(),
-        {Result, {Response, Metrics}} =
-            wpool:call(PoolName, Req, random_worker, infinity),
+        {Result, Response, Metrics} = call_worker(PoolName, Req),
         katipo_span:record_outcome(SpanCtx, Method, Ts, Result, Response, Metrics),
         {Result, Response}
     end).
+
+%% Invoke the pool worker for a sync request. If the worker dies mid-request
+%% (typically its C port died) wpool:call exits; convert that into the same
+%% {error, worker_died} contract the async path delivers, so req/2 honours its
+%% response() spec instead of crashing the caller.
+call_worker(PoolName, Req) ->
+    try wpool:call(PoolName, Req, random_worker, infinity) of
+        {Result, {Response, Metrics}} -> {Result, Response, Metrics}
+    catch
+        exit:_ ->
+            {error, #{code => worker_died, message => <<>>}, []}
+    end.
 
 -doc "Validates request options without performing the request.".
 -spec check_opts(request()) -> ok | {error, map()}.

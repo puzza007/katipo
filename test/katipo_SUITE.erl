@@ -246,6 +246,7 @@ groups() ->
        async_url_missing,
        async_worker_death,
        async_worker_death_reply_to,
+       sync_worker_death,
        async_cancel,
        async_cancel_after_complete]},
      {otel, [],
@@ -1620,6 +1621,29 @@ async_worker_death(Config) ->
     %% Prompt worker_died (well under /delay/5 and the 30s default) proves
     %% terminate/2 pushed the error rather than us hitting a timeout.
     {error, #{code := worker_died}} = katipo:await(Ref, 5000),
+    ok = katipo_pool:stop(PoolName).
+
+sync_worker_death(Config) ->
+    %% A worker dying (port killed) while a *synchronous* request is in flight
+    %% must return {error, worker_died} -- honouring req/2's response() spec --
+    %% rather than propagating the worker's exit and crashing the caller.
+    {req_opts, Opts} = lists:keyfind(req_opts, 1, Config),
+    PoolName = sync_worker_death_test,
+    {ok, _} = katipo_pool:start(PoolName, 1),
+    Url = httpbin_url(Config, <<"/delay/5">>),
+    Self = self(),
+    %% Run the blocking call in a helper so we can kill the port mid-flight;
+    %% `catch` captures either the proper {error, _} return or, on regression,
+    %% an {'EXIT', _} that the assertion below will reject.
+    _ = spawn(fun() -> Self ! {result, catch katipo:get(PoolName, Url, Opts)} end),
+    ok = wait_for_inflight(PoolName),
+    _ = kill_worker_port(PoolName),
+    receive
+        {result, Result} ->
+            {error, #{code := worker_died}} = Result
+    after 10000 ->
+            ct:fail(no_sync_result)
+    end,
     ok = katipo_pool:stop(PoolName).
 
 async_worker_death_reply_to(Config) ->
