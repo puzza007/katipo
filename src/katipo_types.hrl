@@ -222,8 +222,7 @@
 -type response() :: {ok, #{status := status(),
                            headers := headers(),
                            cookiejar := cookiejar(),
-                           body := body(),
-                           metrics => proplists:proplist()}} |
+                           body := body()}} |
                     {error, #{code := error_code(),
                               message := error_msg()}}.
 -type async_response() :: {ok, reference()} |
