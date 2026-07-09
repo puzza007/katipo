@@ -68,6 +68,9 @@ typedef struct _GlobalInfo {
   curl_version_info_data *ver;
   struct bufferevent *to_erlang;
   struct bufferevent *from_erlang;
+  /* Intrusive list of in-flight transfers so a cancel can find and abort a
+   * specific request by its {pid, ref} identity. */
+  struct _ConnInfo *active_conns;
 } GlobalInfo;
 
 typedef struct _ConnInfo {
@@ -95,6 +98,7 @@ typedef struct _ConnInfo {
   double pretransfer_time;
   double redirect_time;
   double starttransfer_time;
+  struct _ConnInfo *prev, *next; /* GlobalInfo.active_conns list links */
 } ConnInfo;
 
 typedef struct _SockInfo {
@@ -555,6 +559,56 @@ static void send_error_to_erlang(CURLcode curl_code, ConnInfo *conn) {
   ei_x_free(&result);
 }
 
+static void register_conn(GlobalInfo *global, ConnInfo *conn) {
+  conn->prev = NULL;
+  conn->next = global->active_conns;
+  if (conn->next) {
+    conn->next->prev = conn;
+  }
+  global->active_conns = conn;
+}
+
+/* O(1) removal thanks to the prev link; no head-to-node scan. */
+static void unlink_conn(GlobalInfo *global, ConnInfo *conn) {
+  if (conn->prev) {
+    conn->prev->next = conn->next;
+  } else {
+    global->active_conns = conn->next;
+  }
+  if (conn->next) {
+    conn->next->prev = conn->prev;
+  }
+}
+
+/* Remove a transfer from the multi handle and free everything it owns.
+ * Shared by normal completion and cancellation. */
+static void free_conn(GlobalInfo *global, ConnInfo *conn) {
+  unlink_conn(global, conn);
+  curl_multi_remove_handle(global->multi, conn->easy);
+  free(conn->url);
+  free(conn->pid);
+  free(conn->ref);
+  free(conn->memory);
+  free(conn->post_data);
+  curl_slist_free_all(conn->req_cookies);
+  curl_slist_free_all(conn->req_headers);
+  curl_slist_free_all(conn->resp_headers);
+  curl_easy_cleanup(conn->easy);
+  free(conn);
+}
+
+/* Abort the in-flight transfer matching {pid, ref}, if we still have it. No
+ * response is sent to Erlang -- the request is simply dropped. A no-op if the
+ * request already completed (already removed from active_conns). */
+static void cancel_conn(GlobalInfo *global, erlang_pid *pid, erlang_ref *ref) {
+  for (ConnInfo *conn = global->active_conns; conn; conn = conn->next) {
+    if (ei_cmp_refs(conn->ref, ref) == 0 && ei_cmp_pids(conn->pid, pid) == 0) {
+      free_conn(global, conn);
+      return;
+    }
+  }
+}
+
 static void check_multi_info(GlobalInfo *global) {
   CURLMsg *msg;
   int msgs_left;
@@ -582,17 +636,7 @@ static void check_multi_info(GlobalInfo *global) {
         send_error_to_erlang(res, conn);
       }
 
-      curl_multi_remove_handle(global->multi, easy);
-      free(conn->url);
-      free(conn->pid);
-      free(conn->ref);
-      free(conn->memory);
-      free(conn->post_data);
-      curl_slist_free_all(conn->req_cookies);
-      curl_slist_free_all(conn->req_headers);
-      curl_slist_free_all(conn->resp_headers);
-      curl_easy_cleanup(easy);
-      free(conn);
+      free_conn(global, conn);
     }
   }
 }
@@ -794,6 +838,7 @@ static void new_conn(long method, char *url, struct curl_slist *req_headers,
     errx(2, "curl_easy_init() failed, exiting!\n");
   }
   conn->global = global;
+  register_conn(global, conn);
   conn->url = url;
   conn->pid = pid;
   conn->ref = ref;
@@ -1257,11 +1302,28 @@ static void erl_input(struct bufferevent *ev, void *arg) {
     if (ei_decode_version(buf, &index, &version) ||
         ei_decode_tuple_header(buf, &index, &arity) ||
         ei_decode_pid(buf, &index, pid) ||
-        ei_decode_ref(buf, &index, ref) ||
-        ei_decode_long(buf, &index, &method) ||
+        ei_decode_ref(buf, &index, ref)) {
+      goto cleanup;
+    }
+
+    /* Cancel command: {Pid, Ref, cancel} (arity 3). Abort the matching
+     * in-flight transfer if we still have it; no response is sent. Requests
+     * are 8-tuples, so arity discriminates the two. */
+    if (arity == 3) {
+      cancel_conn(global, pid, ref);
+      free(pid);
+      free(ref);
+      free(buf);
+      continue;
+    }
+
+    if (ei_decode_long(buf, &index, &method) ||
         ei_get_type(buf, &index, &erl_type, &size)) {
       goto cleanup;
     }
+    /* Only now do we consider the identity usable for a parse-error reply:
+     * a request with an undecodable method is dropped silently (have_identity
+     * stays 0), matching the behaviour before cancellation was added. */
     have_identity = 1;
 
     url = (char *)malloc(size + 1);

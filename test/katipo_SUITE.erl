@@ -92,6 +92,10 @@ init_per_group(digest, Config) ->
      {req_opts, #{http_version => curl_http_version_1_1,
                   ssl_verifyhost => false,
                   ssl_verifypeer => false}}] ++ Config;
+init_per_group(async, Config) ->
+    [{httpbin_base, <<"https://localhost:8443">>},
+     {req_opts, #{ssl_verifyhost => false,
+                  ssl_verifypeer => false}}] ++ Config;
 init_per_group(_, Config) ->
     Config.
 
@@ -219,9 +223,35 @@ groups() ->
       [badssl_client_cert]},
      {port, [],
       [max_total_connections]},
+     {async, [parallel],
+      [async_get,
+       async_get_with_opts,
+       async_post,
+       async_req,
+       async_reply_to,
+       async_error,
+       async_timeout,
+       async_await,
+       async_await_timeout,
+       async_await_explicit_timeout,
+       async_await_own_timeout,
+       async_multiple_outstanding,
+       async_put,
+       async_head,
+       async_options,
+       async_patch,
+       async_delete,
+       async_invalid_reply_to,
+       async_url_missing,
+       async_worker_death,
+       async_worker_death_reply_to,
+       async_cancel,
+       async_cancel_after_complete]},
      {otel, [],
       [otel_span_created,
        otel_metrics_recorded,
+       otel_async_span_created,
+       otel_async_metrics_recorded,
        otel_url_sanitization,
        otel_noop_metrics_no_crash]},
      {http1, [parallel],
@@ -242,6 +272,7 @@ all() ->
                   {group, pool},
                   {group, https_mutual},
                   {group, port},
+                  {group, async},
                   {group, otel}],
     %% HTTP/2 tests always run (local httpbin supports HTTP/2)
     Http2Groups = [{group, http2}],
@@ -550,8 +581,9 @@ redirect_to(Config) ->
     {ok, #{status := 302}} = katipo:get(?POOL, httpbin_url(Config, <<"/redirect-to?url=https://google.com">>), Opts).
 
 connecttimeout_ms(_) ->
+    %% Use TEST-NET-1 (RFC 5737) — guaranteed non-routable, so connect always times out
     {error, #{code := operation_timedout}} =
-        katipo:get(?POOL, <<"http://google.com">>, #{connecttimeout_ms => 1}).
+        katipo:get(?POOL, <<"http://192.0.2.1">>, #{connecttimeout_ms => 1}).
 
 followlocation_true(Config) ->
     {req_opts, Opts} = lists:keyfind(req_opts, 1, Config),
@@ -1000,15 +1032,11 @@ port_garbage_input(Config) ->
     PoolName = port_garbage_test,
     PoolSize = 1,
     {ok, _} = katipo_pool:start(PoolName, PoolSize),
-    WorkerName = wpool_pool:best_worker(PoolName),
-    WorkerPid = whereis(WorkerName),
-    {state, _, _, {state, Port, _}, _} = sys:get_state(WorkerPid),
+    {Port, _} = worker_state(PoolName),
     true = port_command(Port, <<"hdfjkshkjsdfgjsgafdjgsdjgfj">>),
     Fun = fun() ->
-                  WorkerName2 = wpool_pool:best_worker(PoolName),
-                  WorkerPid2 = whereis(WorkerName2),
-                  case sys:get_state(WorkerPid2) of
-                      {state, _, _, {state, Port2, _}, _} when Port =/= Port2 ->
+                  case worker_state(PoolName) of
+                      {Port2, _} when Port =/= Port2 ->
                           {ok, #{status := 200}} =
                               katipo:get(PoolName, Url, BaseOpts),
                           true
@@ -1024,16 +1052,10 @@ port_death(Config) ->
     PoolName = port_death_test,
     PoolSize = 1,
     {ok, _} = katipo_pool:start(PoolName, PoolSize),
-    WorkerName = wpool_pool:best_worker(PoolName),
-    WorkerPid = whereis(WorkerName),
-    {state, _, _, {state, Port, _}, _} = sys:get_state(WorkerPid),
-    {os_pid, OsPid} = erlang:port_info(Port, os_pid),
-    os:cmd("kill -9 " ++ integer_to_list(OsPid)),
+    Port = kill_worker_port(PoolName),
     Fun = fun() ->
-                  WorkerName2 = wpool_pool:best_worker(PoolName),
-                  WorkerPid2 = whereis(WorkerName2),
-                  case sys:get_state(WorkerPid2) of
-                      {state, _, _, {state, Port2, _}, _} when Port =/= Port2 ->
+                  case worker_state(PoolName) of
+                      {Port2, _} when Port =/= Port2 ->
                           {ok, #{status := 200}} =
                               katipo:get(PoolName, Url, BaseOpts),
                           true
@@ -1263,42 +1285,67 @@ httpbin_url(Config, Path) ->
 %% OpenTelemetry integration tests
 
 otel_span_created(_Config) ->
-    Self = self(),
-    application:set_env(opentelemetry, processors,
-                        [{otel_simple_processor, #{exporter => {otel_exporter_pid, Self}}}]),
-    application:stop(opentelemetry),
-    {ok, _} = application:ensure_all_started(opentelemetry),
-
+    ok = setup_span_exporter(),
     {ok, #{status := 200}} =
         katipo:get(?POOL, <<"https://localhost:8443/get">>,
                    #{ssl_verifyhost => false, ssl_verifypeer => false}),
-    receive
-        {span, #span{name = SpanName}} ->
-            ?assertEqual(<<"HTTP GET">>, SpanName)
-    after 5000 ->
-        ct:fail("Timeout waiting for span")
-    end.
+    assert_span_name(<<"HTTP GET">>).
 
 otel_metrics_recorded(_Config) ->
-    Self = self(),
-    ReadersConfig = [#{module => otel_metric_reader,
-                       config => #{exporter => {otel_metric_exporter_pid, Self},
-                                  export_interval_ms => 100}}],
-    application:set_env(opentelemetry_experimental, readers, ReadersConfig),
-    application:stop(opentelemetry_experimental),
-    {ok, _} = application:ensure_all_started(opentelemetry_experimental),
-
-    %% Re-register instruments with new meter provider
-    ok = katipo_metrics:init(),
-
+    ok = setup_metric_reader(),
     flush_otel_metrics(),
     {ok, #{status := 200}} =
         katipo:get(?POOL, <<"https://localhost:8443/get">>,
                    #{ssl_verifyhost => false, ssl_verifypeer => false}),
+    assert_request_counter().
 
+otel_async_span_created(_Config) ->
+    ok = setup_span_exporter(),
+    {ok, Ref} =
+        katipo:async_get(?POOL, <<"https://localhost:8443/get">>,
+                         #{ssl_verifyhost => false, ssl_verifypeer => false}),
+    {ok, #{status := 200}} = katipo:await(Ref),
+    assert_span_name(<<"HTTP GET">>).
+
+otel_async_metrics_recorded(_Config) ->
+    ok = setup_metric_reader(),
+    flush_otel_metrics(),
+    {ok, Ref} =
+        katipo:async_get(?POOL, <<"https://localhost:8443/get">>,
+                         #{ssl_verifyhost => false, ssl_verifypeer => false}),
+    {ok, #{status := 200}} = katipo:await(Ref),
+    assert_request_counter().
+
+%% Point the OTel span/metric exporters at this (the test) process so it can
+%% receive {span, _} / {otel_metric, _} messages.
+setup_span_exporter() ->
+    application:set_env(opentelemetry, processors,
+                        [{otel_simple_processor, #{exporter => {otel_exporter_pid, self()}}}]),
+    application:stop(opentelemetry),
+    {ok, _} = application:ensure_all_started(opentelemetry),
+    ok.
+
+setup_metric_reader() ->
+    ReadersConfig = [#{module => otel_metric_reader,
+                       config => #{exporter => {otel_metric_exporter_pid, self()},
+                                  export_interval_ms => 100}}],
+    application:set_env(opentelemetry_experimental, readers, ReadersConfig),
+    application:stop(opentelemetry_experimental),
+    {ok, _} = application:ensure_all_started(opentelemetry_experimental),
+    %% Re-register instruments with the new meter provider
+    ok = katipo_metrics:init().
+
+assert_span_name(Expected) ->
+    receive
+        {span, #span{name = SpanName}} ->
+            ?assertEqual(Expected, SpanName)
+    after 5000 ->
+        ct:fail("Timeout waiting for span")
+    end.
+
+assert_request_counter() ->
     ok = otel_meter_server:force_flush(),
     timer:sleep(300),
-
     Metrics = collect_otel_metrics(),
     ?assert(length(Metrics) > 0),
     HasRequestCounter = lists:any(
@@ -1392,3 +1439,261 @@ otel_url_sanitization(_Config) ->
     ?assertEqual(<<"example.com">>, Host6),
 
     ok.
+
+%% Async API tests
+
+async_get(Config) ->
+    {req_opts, Opts} = lists:keyfind(req_opts, 1, Config),
+    Url = httpbin_url(Config, <<"/get">>),
+    {ok, Ref} = katipo:async_get(?POOL, Url, Opts),
+    {ok, #{status := 200}} = katipo:await(Ref).
+
+async_get_with_opts(Config) ->
+    {req_opts, Opts} = lists:keyfind(req_opts, 1, Config),
+    Url = httpbin_url(Config, <<"/get?a=1">>),
+    {ok, Ref} = katipo:async_get(?POOL, Url, Opts),
+    {ok, #{status := 200, body := Body}} = katipo:await(Ref),
+    Json = jsx:decode(Body),
+    ?assertEqual(<<"1">>, maps:get(<<"a">>, maps:get(<<"args">>, Json))).
+
+async_post(Config) ->
+    {req_opts, Opts} = lists:keyfind(req_opts, 1, Config),
+    Url = httpbin_url(Config, <<"/post">>),
+    {ok, Ref} = katipo:async_post(?POOL, Url,
+                                  Opts#{headers => [{<<"Content-Type">>, <<"application/json">>}],
+                                        body => <<"hello">>}),
+    {ok, #{status := 200, body := Body}} = katipo:await(Ref),
+    Json = jsx:decode(Body),
+    ?assertEqual(<<"hello">>, maps:get(<<"data">>, Json)).
+
+async_req(Config) ->
+    {req_opts, Opts} = lists:keyfind(req_opts, 1, Config),
+    Url = httpbin_url(Config, <<"/get">>),
+    {ok, Ref} = katipo:async_req(?POOL, Opts#{url => Url, method => get}),
+    {ok, #{status := 200}} = katipo:await(Ref).
+
+async_reply_to(Config) ->
+    {req_opts, Opts} = lists:keyfind(req_opts, 1, Config),
+    Url = httpbin_url(Config, <<"/get">>),
+    Self = self(),
+    Pid = spawn_link(fun() ->
+        receive
+            {katipo_response, _Ref, #{status := 200}} ->
+                Self ! async_reply_to_ok
+        after 10000 ->
+            Self ! async_reply_to_fail
+        end
+    end),
+    {ok, _Ref} = katipo:async_get(?POOL, Url, Opts#{reply_to => Pid}),
+    receive
+        async_reply_to_ok -> ok;
+        async_reply_to_fail -> ct:fail(reply_to_timeout)
+    after 15000 ->
+        ct:fail(timeout)
+    end.
+
+async_error(_Config) ->
+    {error, #{code := bad_opts}} =
+        katipo:async_get(?POOL, <<"https://localhost">>, #{bad_option => bad_value}).
+
+async_timeout(_Config) ->
+    %% Cap timeout_ms so katipo's own timeout deterministically delivers the
+    %% error in ~2s. Relying on curl's connecttimeout_ms=1 alone is flaky under
+    %% load; the 30s default backstop would race the suite timetrap. Manual
+    %% receive (not await/1) to exercise the raw async message path.
+    {ok, Ref} = katipo:async_get(?POOL, <<"http://192.0.2.1">>,
+                                 #{connecttimeout_ms => 1, timeout_ms => 2000}),
+    receive
+        {katipo_error, Ref, #{code := operation_timedout}} -> ok
+    after 10000 ->
+        ct:fail(timeout)
+    end.
+
+async_await(Config) ->
+    {req_opts, Opts} = lists:keyfind(req_opts, 1, Config),
+    Url = httpbin_url(Config, <<"/get">>),
+    {ok, Ref} = katipo:async_get(?POOL, Url, Opts),
+    {ok, #{status := 200}} = katipo:await(Ref).
+
+async_await_timeout(_Config) ->
+    %% Request itself times out — await collects the error. Cap timeout_ms so
+    %% the timeout is delivered deterministically in ~2s rather than relying on
+    %% curl's flaky 1ms connecttimeout and racing the suite timetrap.
+    {ok, Ref} = katipo:async_get(?POOL, <<"http://192.0.2.1">>,
+                                 #{connecttimeout_ms => 1, timeout_ms => 2000}),
+    {error, #{code := operation_timedout}} = katipo:await(Ref).
+
+async_await_explicit_timeout(Config) ->
+    %% await/2 with an explicit timeout that is long enough
+    {req_opts, Opts} = lists:keyfind(req_opts, 1, Config),
+    Url = httpbin_url(Config, <<"/get">>),
+    {ok, Ref} = katipo:async_get(?POOL, Url, Opts),
+    {ok, #{status := 200}} = katipo:await(Ref, 10000).
+
+async_await_own_timeout(_Config) ->
+    %% await/2 timeout fires before the response arrives
+    {ok, Ref} = katipo:async_get(?POOL, <<"http://192.0.2.1">>,
+                                 #{timeout_ms => 30000, connecttimeout_ms => 30000}),
+    {error, #{code := await_timeout}} = katipo:await(Ref, 1).
+
+async_multiple_outstanding(Config) ->
+    {req_opts, Opts} = lists:keyfind(req_opts, 1, Config),
+    Urls = [httpbin_url(Config, <<"/get?n=", (integer_to_binary(N))/binary>>)
+            || N <- lists:seq(1, 5)],
+    Refs = [{N, begin
+                    {ok, Ref} = katipo:async_get(?POOL, Url, Opts),
+                    Ref
+                end}
+            || {N, Url} <- lists:zip(lists:seq(1, 5), Urls)],
+    Results = [{N, katipo:await(Ref)} || {N, Ref} <- Refs],
+    lists:foreach(fun({N, {ok, #{status := 200, body := Body}}}) ->
+        Json = jsx:decode(Body),
+        Expected = integer_to_binary(N),
+        ?assertEqual(Expected, maps:get(<<"n">>, maps:get(<<"args">>, Json)))
+    end, Results).
+
+async_put(Config) ->
+    {req_opts, Opts} = lists:keyfind(req_opts, 1, Config),
+    Url = httpbin_url(Config, <<"/put">>),
+    {ok, Ref} = katipo:async_put(?POOL, Url, Opts#{body => <<"data">>}),
+    {ok, #{status := 200}} = katipo:await(Ref).
+
+async_head(Config) ->
+    {req_opts, Opts} = lists:keyfind(req_opts, 1, Config),
+    Url = httpbin_url(Config, <<"/get">>),
+    {ok, Ref} = katipo:async_head(?POOL, Url, Opts),
+    {ok, #{status := 200}} = katipo:await(Ref).
+
+async_options(Config) ->
+    {req_opts, Opts} = lists:keyfind(req_opts, 1, Config),
+    Url = httpbin_url(Config, <<"/get">>),
+    {ok, Ref} = katipo:async_options(?POOL, Url, Opts),
+    {ok, #{status := 200}} = katipo:await(Ref).
+
+async_patch(Config) ->
+    {req_opts, Opts} = lists:keyfind(req_opts, 1, Config),
+    Url = httpbin_url(Config, <<"/patch">>),
+    {ok, Ref} = katipo:async_patch(?POOL, Url, Opts#{body => <<"data">>}),
+    {ok, #{status := 200}} = katipo:await(Ref).
+
+async_delete(Config) ->
+    {req_opts, Opts} = lists:keyfind(req_opts, 1, Config),
+    Url = httpbin_url(Config, <<"/delete">>),
+    {ok, Ref} = katipo:async_delete(?POOL, Url, Opts),
+    {ok, #{status := 200}} = katipo:await(Ref).
+
+async_invalid_reply_to(_Config) ->
+    {error, #{code := bad_opts, message := <<"[{reply_to,invalid}]">>}} =
+        katipo:async_get(?POOL, <<"https://localhost">>, #{reply_to => not_a_pid}).
+
+async_url_missing(_Config) ->
+    {error, #{code := bad_opts}} =
+        katipo:async_req(?POOL, #{method => get}).
+
+async_worker_death(Config) ->
+    %% A worker dying (port killed) while an async request is in flight must
+    %% deliver worker_died promptly, not leave the caller blocked until its
+    %% await/request timeout.
+    {req_opts, Opts} = lists:keyfind(req_opts, 1, Config),
+    PoolName = async_worker_death_test,
+    {ok, _} = katipo_pool:start(PoolName, 1),
+    %% /delay keeps the request in flight so it's still registered on the
+    %% worker when we kill the port.
+    Url = httpbin_url(Config, <<"/delay/5">>),
+    {ok, Ref} = katipo:async_get(PoolName, Url, Opts),
+    ok = wait_for_inflight(PoolName),
+    _ = kill_worker_port(PoolName),
+    %% Prompt worker_died (well under /delay/5 and the 30s default) proves
+    %% terminate/2 pushed the error rather than us hitting a timeout.
+    {error, #{code := worker_died}} = katipo:await(Ref, 5000),
+    ok = katipo_pool:stop(PoolName).
+
+async_worker_death_reply_to(Config) ->
+    %% The death notification must reach a third-party reply_to, not just an
+    %% awaiter -- a plain message consumer gets worker_died pushed to it.
+    {req_opts, Opts} = lists:keyfind(req_opts, 1, Config),
+    PoolName = async_worker_death_reply_to_test,
+    {ok, _} = katipo_pool:start(PoolName, 1),
+    Self = self(),
+    Collector = spawn_link(fun() ->
+        receive
+            {katipo_error, _Ref, #{code := worker_died}} ->
+                Self ! worker_died_seen
+        after 5000 ->
+            Self ! worker_died_missing
+        end
+    end),
+    Url = httpbin_url(Config, <<"/delay/5">>),
+    {ok, _Ref} = katipo:async_get(PoolName, Url, Opts#{reply_to => Collector}),
+    ok = wait_for_inflight(PoolName),
+    _ = kill_worker_port(PoolName),
+    receive
+        worker_died_seen -> ok;
+        worker_died_missing -> ct:fail(no_worker_died_message)
+    after 10000 ->
+        ct:fail(timeout)
+    end,
+    ok = katipo_pool:stop(PoolName).
+
+async_cancel(Config) ->
+    {req_opts, Opts} = lists:keyfind(req_opts, 1, Config),
+    PoolName = async_cancel_test,
+    {ok, _} = katipo_pool:start(PoolName, 1),
+    %% A slow request so it's genuinely in flight when we cancel it.
+    Url = httpbin_url(Config, <<"/delay/3">>),
+    {ok, Ref} = katipo:async_get(PoolName, Url, Opts),
+    ok = wait_for_inflight(PoolName),
+    ok = katipo:cancel(PoolName, Ref),
+    %% The worker drops the request (and tells the port to abort the transfer).
+    ok = wait_for_no_inflight(PoolName),
+    %% No response or error is delivered for a cancelled request, even past the
+    %% original /delay/3 completion time.
+    receive
+        {katipo_response, Ref, _} -> ct:fail(got_response_after_cancel);
+        {katipo_error, Ref, _} -> ct:fail(got_error_after_cancel)
+    after 5000 ->
+        ok
+    end,
+    %% The port/worker is still healthy after a cancel.
+    {ok, #{status := 200}} =
+        katipo:get(PoolName, httpbin_url(Config, <<"/get">>), Opts),
+    ok = katipo_pool:stop(PoolName).
+
+async_cancel_after_complete(Config) ->
+    {req_opts, Opts} = lists:keyfind(req_opts, 1, Config),
+    Url = httpbin_url(Config, <<"/get">>),
+    {ok, Ref} = katipo:async_get(?POOL, Url, Opts),
+    {ok, #{status := 200}} = katipo:await(Ref),
+    %% Cancelling an already-completed request is a harmless no-op.
+    ok = katipo:cancel(?POOL, Ref).
+
+%% Block until the (size-1) pool's worker has a request registered, so a
+%% subsequent port kill happens with the request genuinely in flight.
+wait_for_inflight(PoolName) ->
+    wait_for_reqs(PoolName, fun(N) -> N > 0 end).
+
+%% Poll until the (size-1) pool's worker has no requests registered.
+wait_for_no_inflight(PoolName) ->
+    wait_for_reqs(PoolName, fun(N) -> N =:= 0 end).
+
+wait_for_reqs(PoolName, Pred) ->
+    Fun = fun() ->
+                  {_Port, Reqs} = worker_state(PoolName),
+                  Pred(map_size(Reqs))
+          end,
+    true = repeat_until_true(Fun),
+    ok.
+
+%% Kill the (size-1) pool's worker OS process and return the killed Port.
+kill_worker_port(PoolName) ->
+    {Port, _Reqs} = worker_state(PoolName),
+    {os_pid, OsPid} = erlang:port_info(Port, os_pid),
+    _ = os:cmd("kill -9 " ++ integer_to_list(OsPid)),
+    Port.
+
+%% Reach into a size-1 pool's single worker and return its {Port, Reqs}. The
+%% outer tuple is wpool_process's state wrapping katipo's #state{port, reqs}.
+worker_state(PoolName) ->
+    WorkerPid = whereis(wpool_pool:best_worker(PoolName)),
+    {state, _, _, {state, Port, Reqs}, _} = sys:get_state(WorkerPid),
+    {Port, Reqs}.

@@ -19,12 +19,35 @@ See `t:opts/0` for all available options and `t:request/0` for the full request 
 
 ## Responses
 
-All request functions return `t:response/0`:
+Synchronous request functions return `t:response/0`:
 
 ```erlang
 {ok, #{status := pos_integer(), headers := headers(), cookiejar := cookiejar(), body := body()}}
 {error, #{code := error_code(), message := error_msg()}}
 ```
+
+## Async Requests
+
+Async functions (`async_get/2,3`, `async_req/2`, etc.) return `{ok, Ref}` immediately
+and deliver the response as a message to the calling process (or the pid specified
+by the `reply_to` option):
+
+```erlang
+{katipo_response, Ref, #{status := pos_integer(), headers := headers(), ...}}
+{katipo_error, Ref, #{code := error_code(), message := error_msg()}}
+```
+
+Use `await/1,2` to block until the response arrives, or `cancel/2` to abort an
+in-flight request (no response is then delivered).
+
+If the pool worker handling an in-flight async request dies (e.g. its port
+crashes), a `{katipo_error, Ref, #{code => worker_died}}` message is delivered
+so the caller fails fast instead of blocking until the request timeout.
+
+Async requests emit the same OTel span (`HTTP <METHOD>`, parented to the
+caller's context) and metrics as their synchronous counterparts; the span
+covers the full request and is finished when the response, a timeout, or a
+worker failure arrives.
 """.
 
 -behaviour(gen_server).
@@ -54,6 +77,25 @@ All request functions return `t:response/0`:
 -export([patch/3]).
 -export([delete/2]).
 -export([delete/3]).
+
+-export([async_req/2]).
+-export([async_get/2]).
+-export([async_get/3]).
+-export([async_post/2]).
+-export([async_post/3]).
+-export([async_put/2]).
+-export([async_put/3]).
+-export([async_head/2]).
+-export([async_head/3]).
+-export([async_options/2]).
+-export([async_options/3]).
+-export([async_patch/2]).
+-export([async_patch/3]).
+-export([async_delete/2]).
+-export([async_delete/3]).
+-export([await/1]).
+-export([await/2]).
+-export([cancel/2]).
 
 -export([check_opts/1]).
 
@@ -288,7 +330,9 @@ All request functions return `t:response/0`:
         ech_required |
         curl_last |
         %% returned by us, not curl
-        bad_opts.
+        bad_opts |
+        await_timeout |
+        worker_died.
 
 -type curlmopt() ::
         max_total_connections |
@@ -337,6 +381,7 @@ All request functions return `t:response/0`:
 %% See [https://curl.haxx.se/libcurl/c/CURLOPT_USERPWD.html]
 -type request() :: #{url := binary(),
                     method := method(),
+                    reply_to => pid(),
                     headers => headers(),
                     cookiejar => cookiejar(),
                     body => req_body(),
@@ -366,7 +411,8 @@ All request functions return `t:response/0`:
                     dns_cache_timeout => integer(),
                     ca_cache_timeout => integer(),
                     pipewait => boolean()}.
--type opts() :: #{headers => headers(),
+-type opts() :: #{reply_to => pid(),
+                    headers => headers(),
                     cookiejar => cookiejar(),
                     body => req_body(),
                     connecttimeout_ms => connecttimeout_ms(),
@@ -404,6 +450,9 @@ All request functions return `t:response/0`:
                            metrics => proplists:proplist()}} |
                     {error, #{code := error_code(),
                               message := error_msg()}}.
+-type async_response() :: {ok, reference()} |
+                          {error, #{code := error_code(),
+                                    message := error_msg()}}.
 -type http_auth() :: basic | digest | ntlm | negotiate.
 -type http_auth_int() :: ?CURLAUTH_UNDEFINED |
                          ?CURLAUTH_BASIC |
@@ -459,6 +508,7 @@ All request functions return `t:response/0`:
 -export_type([sslkey/0]).
 -export_type([sslkey_blob/0]).
 -export_type([userpwd/0]).
+-export_type([async_response/0]).
 
 -record(req, {
           method = ?GET :: method_int(),
@@ -590,15 +640,186 @@ delete(PoolName, Url) ->
 delete(PoolName, Url, Opts) ->
     req(PoolName, Opts#{url => Url, method => delete}).
 
+-doc #{equiv => async_get/3}.
+-spec async_get(katipo_pool:name(), url()) -> async_response().
+async_get(PoolName, Url) ->
+    async_req(PoolName, #{url => Url, method => get}).
+
+-doc "Performs an async HTTP GET request. Returns `{ok, Ref}` immediately. The response is delivered as a `{katipo_response, Ref, Response}` message.".
+-spec async_get(katipo_pool:name(), url(), opts()) -> async_response().
+async_get(PoolName, Url, Opts) ->
+    async_req(PoolName, Opts#{url => Url, method => get}).
+
+-doc #{equiv => async_post/3}.
+-spec async_post(katipo_pool:name(), url()) -> async_response().
+async_post(PoolName, Url) ->
+    async_req(PoolName, #{url => Url, method => post}).
+
+-doc "Performs an async HTTP POST request. Returns `{ok, Ref}` immediately.".
+-spec async_post(katipo_pool:name(), url(), opts()) -> async_response().
+async_post(PoolName, Url, Opts) ->
+    async_req(PoolName, Opts#{url => Url, method => post}).
+
+-doc #{equiv => async_put/3}.
+-spec async_put(katipo_pool:name(), url()) -> async_response().
+async_put(PoolName, Url) ->
+    async_req(PoolName, #{url => Url, method => put}).
+
+-doc "Performs an async HTTP PUT request. Returns `{ok, Ref}` immediately.".
+-spec async_put(katipo_pool:name(), url(), opts()) -> async_response().
+async_put(PoolName, Url, Opts) ->
+    async_req(PoolName, Opts#{url => Url, method => put}).
+
+-doc #{equiv => async_head/3}.
+-spec async_head(katipo_pool:name(), url()) -> async_response().
+async_head(PoolName, Url) ->
+    async_req(PoolName, #{url => Url, method => head}).
+
+-doc "Performs an async HTTP HEAD request. Returns `{ok, Ref}` immediately.".
+-spec async_head(katipo_pool:name(), url(), opts()) -> async_response().
+async_head(PoolName, Url, Opts) ->
+    async_req(PoolName, Opts#{url => Url, method => head}).
+
+-doc #{equiv => async_options/3}.
+-spec async_options(katipo_pool:name(), url()) -> async_response().
+async_options(PoolName, Url) ->
+    async_req(PoolName, #{url => Url, method => options}).
+
+-doc "Performs an async HTTP OPTIONS request. Returns `{ok, Ref}` immediately.".
+-spec async_options(katipo_pool:name(), url(), opts()) -> async_response().
+async_options(PoolName, Url, Opts) ->
+    async_req(PoolName, Opts#{url => Url, method => options}).
+
+-doc #{equiv => async_patch/3}.
+-spec async_patch(katipo_pool:name(), url()) -> async_response().
+async_patch(PoolName, Url) ->
+    async_req(PoolName, #{url => Url, method => patch}).
+
+-doc "Performs an async HTTP PATCH request. Returns `{ok, Ref}` immediately.".
+-spec async_patch(katipo_pool:name(), url(), opts()) -> async_response().
+async_patch(PoolName, Url, Opts) ->
+    async_req(PoolName, Opts#{url => Url, method => patch}).
+
+-doc #{equiv => async_delete/3}.
+-spec async_delete(katipo_pool:name(), url()) -> async_response().
+async_delete(PoolName, Url) ->
+    async_req(PoolName, #{url => Url, method => delete}).
+
+-doc "Performs an async HTTP DELETE request. Returns `{ok, Ref}` immediately.".
+-spec async_delete(katipo_pool:name(), url(), opts()) -> async_response().
+async_delete(PoolName, Url, Opts) ->
+    async_req(PoolName, Opts#{url => Url, method => delete}).
+
 -doc "Performs an HTTP request using the full request map.".
 -spec req(katipo_pool:name(), request()) -> response().
 req(PoolName, Opts)
   when is_map(Opts) ->
+    case build_req(Opts) of
+        {ok, Req} ->
+            do_req_with_span(PoolName, Req);
+        {error, _} = Error ->
+            Error
+    end.
+
+-doc """
+Performs an async HTTP request using the full request map.
+
+Returns `{ok, Ref}` immediately. The response is delivered as a
+`{katipo_response, Ref, ResponseMap}` or `{katipo_error, Ref, ErrorMap}`
+message to the process specified by the `reply_to` option (defaults to `self()`).
+
+Use `await/1,2` to block until the response arrives.
+""".
+-spec async_req(katipo_pool:name(), request()) -> async_response().
+async_req(PoolName, Opts)
+  when is_map(Opts) ->
+    {ReplyTo, Opts2} =
+        case maps:take(reply_to, Opts) of
+            {RT, Rest} -> {RT, Rest};
+            error -> {self(), Opts}
+        end,
+    case is_pid(ReplyTo) of
+        false ->
+            {error, error_map(bad_opts, <<"[{reply_to,invalid}]">>)};
+        true ->
+            case build_req(Opts2) of
+                {ok, Req} ->
+                    UserRef = make_ref(),
+                    Obs = start_async_obs(Req),
+                    wpool:cast(PoolName, {async_req, ReplyTo, UserRef, Req, Obs},
+                               random_worker),
+                    {ok, UserRef};
+                {error, _} = Error ->
+                    Error
+            end
+    end.
+
+%% @private
+%% Start the OTel span (parented to the caller's context so the async request
+%% appears under the caller's trace) and capture what the worker needs to emit
+%% metrics and finish the span when the response arrives. Mirrors the sync
+%% observability in do_req_with_span/2, but split across processes.
+start_async_obs(#req{method = MethodInt, url = Url}) ->
+    Method = method_int_to_binary(MethodInt),
+    SpanName = <<"HTTP ", Method/binary>>,
+    SpanCtx = otel_tracer:start_span(otel_ctx:get_current(),
+                                     opentelemetry:get_application_tracer(?MODULE),
+                                     SpanName, #{kind => client}),
+    set_request_span_attrs(SpanCtx, Method, Url),
+    #{method => Method, ts => os:timestamp(), span => SpanCtx}.
+
+-doc #{equiv => await/2}.
+-spec await(reference()) -> response().
+await(Ref) ->
+    await(Ref, ?DEFAULT_REQ_TIMEOUT).
+
+-doc "Blocks until an async response for `Ref` arrives or the timeout expires.".
+-spec await(reference(), timeout()) -> response().
+await(Ref, Timeout) ->
+    receive
+        {katipo_response, Ref, Response} ->
+            {ok, Response};
+        {katipo_error, Ref, Error} ->
+            {error, Error}
+    after Timeout ->
+        %% Flush any late-arriving response for this Ref
+        receive
+            {katipo_response, Ref, _} -> ok;
+            {katipo_error, Ref, _} -> ok
+        after 0 ->
+            ok
+        end,
+        {error, #{code => await_timeout, message => <<>>}}
+    end.
+
+-doc """
+Cancels the async request identified by `Ref` (returned by `async_get/2,3`,
+`async_req/2`, etc.).
+
+Best-effort: once the cancel takes effect no `{katipo_response, Ref, _}` or
+`{katipo_error, Ref, _}` message is delivered. A message that was already
+delivered before the cancel raced in may still be in the receiver's mailbox, so
+callers should be prepared to flush a late one. Cancelling an unknown or
+already-completed `Ref` is a harmless no-op.
+
+Note: the in-flight HTTP transfer is not aborted — it completes in the
+background and its result is discarded.
+""".
+-spec cancel(katipo_pool:name(), reference()) -> ok.
+cancel(PoolName, Ref) ->
+    wpool:broadcast(PoolName, {cancel, Ref}),
+    ok.
+
+-doc false.
+%% Build a validated, timeout-stamped #req{} from an opts map. Shared by the
+%% sync req/2 and async_req/2 entry points.
+-spec build_req(request()) -> {ok, req()} | {error, map()}.
+build_req(Opts) ->
     case process_opts(Opts) of
         {ok, #req{url = undefined}} ->
             {error, error_map(bad_opts, <<"[{url,undefined}]">>)};
         {ok, Req} ->
-            do_req_with_span(PoolName, Req);
+            {ok, Req#req{timeout = ?MODULE:get_timeout(Req)}};
         {error, _} = Error ->
             Error
     end.
@@ -609,39 +830,49 @@ do_req_with_span(PoolName, Req) ->
     Method = method_int_to_binary(MethodInt),
     SpanName = <<"HTTP ", Method/binary>>,
     ?with_span(SpanName, #{kind => client}, fun(SpanCtx) ->
-        %% Only parse URL and set attributes if span is actually recording
-        %% (avoids overhead when OTel SDK is not configured)
-        case otel_span:is_recording(SpanCtx) of
-            true ->
-                ?set_attribute('http.request.method', Method),
-                set_url_span_attrs(Url);
-            false ->
-                ok
-        end,
-        Timeout = ?MODULE:get_timeout(Req),
-        Req2 = Req#req{timeout = Timeout},
+        set_request_span_attrs(SpanCtx, Method, Url),
         Ts = os:timestamp(),
         {Result, {Response, Metrics}} =
-            wpool:call(PoolName, Req2, random_worker, infinity),
-        TotalUs = timer:now_diff(os:timestamp(), Ts),
-        %% Set span attributes based on response
-        set_response_span_attrs(Result, Response),
-        _ = katipo_metrics:notify({Result, Response}, Metrics, TotalUs, Method),
+            wpool:call(PoolName, Req, random_worker, infinity),
+        record_outcome(SpanCtx, Method, Ts, Result, Response, Metrics),
         {Result, Response}
     end).
 
 -doc false.
-set_response_span_attrs(ok, #{status := Status}) ->
-    ?set_attribute('http.response.status_code', Status),
+%% Set the request span attributes (method + sanitized URL), only when the span
+%% is recording (URL parsing is skipped otherwise). Shared by the sync and async
+%% start paths.
+set_request_span_attrs(SpanCtx, Method, Url) ->
+    case otel_span:is_recording(SpanCtx) of
+        true ->
+            otel_span:set_attribute(SpanCtx, 'http.request.method', Method),
+            set_url_span_attrs(SpanCtx, Url);
+        false ->
+            ok
+    end.
+
+-doc false.
+%% Set response span attributes and emit request metrics -- the shared tail of
+%% both the sync request (do_req_with_span/2) and an async request completing in
+%% the worker (finish_async_obs/4).
+record_outcome(SpanCtx, Method, Ts, Result, Response, Metrics) ->
+    TotalUs = timer:now_diff(os:timestamp(), Ts),
+    set_response_span_attrs(SpanCtx, Result, Response),
+    _ = katipo_metrics:notify({Result, Response}, Metrics, TotalUs, Method),
+    ok.
+
+-doc false.
+set_response_span_attrs(SpanCtx, ok, #{status := Status}) ->
+    otel_span:set_attribute(SpanCtx, 'http.response.status_code', Status),
     case Status >= 400 of
-        true -> ?set_status(error, <<>>);
+        true -> otel_span:set_status(SpanCtx, error, <<>>);
         false -> ok
     end;
-set_response_span_attrs(error, #{code := Code, message := _Msg}) ->
+set_response_span_attrs(SpanCtx, error, #{code := Code, message := _Msg}) ->
     %% Don't include error message in span - it may contain sensitive URL info
-    ?set_status(error, <<>>),
-    ?set_attribute('error.type', Code);
-set_response_span_attrs(_, _) ->
+    otel_span:set_status(SpanCtx, error, <<>>),
+    otel_span:set_attribute(SpanCtx, 'error.type', Code);
+set_response_span_attrs(_SpanCtx, _, _) ->
     ok.
 
 -doc false.
@@ -654,13 +885,13 @@ method_int_to_binary(?PATCH) -> <<"PATCH">>;
 method_int_to_binary(?DELETE) -> <<"DELETE">>.
 
 -doc false.
-set_url_span_attrs(Url) ->
+set_url_span_attrs(SpanCtx, Url) ->
     case parse_url_for_span(Url) of
         {<<>>, _} ->
             ok;
         {SanitizedUrl, Host} ->
-            ?set_attribute('url.full', SanitizedUrl),
-            ?set_attribute('server.address', Host)
+            otel_span:set_attribute(SpanCtx, 'url.full', SanitizedUrl),
+            otel_span:set_attribute(SpanCtx, 'server.address', Host)
     end.
 
 -doc false.
@@ -699,42 +930,181 @@ init([CurlOpts]) ->
     end.
 
 -doc false.
-handle_call(#req{method = Method,
-                 url = Url,
-                 headers = Headers,
-                 cookiejar = CookieJar,
-                 body = Body,
-                 connecttimeout_ms = ConnTimeoutMs,
-                 followlocation = FollowLocation,
-                 ssl_verifyhost = SslVerifyHost,
-                 ssl_verifypeer = SslVerifyPeer,
-                 capath = CAPath,
-                 cacert = CACert,
-                 timeout_ms = TimeoutMs,
-                 maxredirs = MaxRedirs,
-                 timeout = Timeout,
-                 http_auth = HTTPAuth,
-                 username = Username,
-                 password = Password,
-                 proxy = Proxy,
-                 tcp_fastopen = TCPFastOpen,
-                 interface = Interface,
-                 unix_socket_path = UnixSocketPath,
-                 doh_url = DOHURL,
-                 http_version = HTTPVersion,
-                 sslversion = SSLVersion,
-                 verbose = Verbose,
-                 sslcert = SSLCert,
-                 sslkey = SSLKey,
-                 sslkey_blob = SSLKeyBlob,
-                 keypasswd = KeyPasswd,
-                 userpwd = UserPwd,
-                 dns_cache_timeout = DNSCacheTimeout,
-                 ca_cache_timeout = CACacheTimeout,
-                 pipewait = Pipewait},
-             From,
-             State = #state{port = Port, reqs = Reqs}) ->
-    {Self, Ref} = From,
+handle_call(Req = #req{timeout = Timeout}, From, State = #state{port = Port, reqs = Reqs}) ->
+    send_to_port(Port, From, Req),
+    Tref = erlang:start_timer(Timeout, self(), {req_timeout, From}),
+    Reqs2 = Reqs#{From => {Tref, sync}},
+    {noreply, State#state{reqs = Reqs2}}.
+
+-doc false.
+handle_cast({async_req, ReplyTo, UserRef, Req = #req{timeout = Timeout}, Obs},
+            State = #state{port = Port, reqs = Reqs}) ->
+    InternalFrom = {self(), make_ref()},
+    send_to_port(Port, InternalFrom, Req),
+    Tref = erlang:start_timer(Timeout, self(), {req_timeout, InternalFrom}),
+    Reqs2 = Reqs#{InternalFrom => {Tref, {async, ReplyTo, UserRef, Obs}}},
+    {noreply, State#state{reqs = Reqs2}};
+handle_cast({cancel, UserRef}, State = #state{port = Port, reqs = Reqs}) ->
+    %% Broadcast reaches every worker; only the one holding this request acts.
+    Reqs2 = cancel_async(Port, UserRef, Reqs),
+    {noreply, State#state{reqs = Reqs2}};
+handle_cast(Msg, State) ->
+    logger:error("Unexpected cast: ~p", [Msg]),
+    {noreply, State}.
+
+-doc false.
+%% Deliver a completed response to a sync caller (via gen_server:reply) or an
+%% async ReplyTo (via a flattened katipo_response/katipo_error message).
+deliver(sync, From, Result, Response) ->
+    gen_server:reply(From, {Result, Response});
+deliver({async, ReplyTo, UserRef, Obs}, _From, Result, {ResponseMap, Metrics}) ->
+    Tag = case Result of ok -> katipo_response; error -> katipo_error end,
+    ReplyTo ! {Tag, UserRef, ResponseMap},
+    finish_async_obs(Obs, Result, ResponseMap, Metrics).
+
+-doc false.
+%% Deliver a request timeout to a sync caller or an async ReplyTo.
+deliver_timeout(Kind, From) ->
+    deliver_error(Kind, From, #{code => operation_timedout, message => <<>>}).
+
+%% Deliver an error map to a sync caller (as a gen_server reply) or an async
+%% reply_to (as a katipo_error message).
+deliver_error(sync, From, Error) ->
+    gen_server:reply(From, {error, {Error, []}});
+deliver_error({async, ReplyTo, UserRef, Obs}, _From, Error) ->
+    ReplyTo ! {katipo_error, UserRef, Error},
+    finish_async_obs(Obs, error, Error, []).
+
+-doc false.
+handle_info({Port, {data, Data}}, State = #state{port = Port, reqs = Reqs}) ->
+    {Result, {From, Response}} =
+        case binary_to_term(Data) of
+            {ok, {From0, {Status, Headers, CookieJar, Body, Metrics}}} ->
+                R = #{status => Status,
+                      headers => parse_headers(Headers),
+                      cookiejar => CookieJar,
+                      body => Body},
+                {ok, {From0, {R, Metrics}}};
+            {error, {From0, {Code, Message, Metrics}}} ->
+                Error = #{code => Code, message => Message},
+                {error, {From0, {Error, Metrics}}}
+        end,
+    _ = case maps:find(From, Reqs) of
+        {ok, {Tref, Kind}} ->
+            _ = erlang:cancel_timer(Tref),
+            deliver(Kind, From, Result, Response);
+        error ->
+            ok
+    end,
+    Reqs2 = maps:remove(From, Reqs),
+    {noreply, State#state{reqs = Reqs2}};
+handle_info({timeout, Tref, {req_timeout, From}}, State = #state{reqs = Reqs}) ->
+    Reqs2 =
+        case maps:find(From, Reqs) of
+            {ok, {Tref, Kind}} ->
+                _ = deliver_timeout(Kind, From),
+                maps:remove(From, Reqs);
+            _ ->
+                Reqs
+        end,
+    {noreply, State#state{reqs = Reqs2}};
+handle_info({'EXIT', Port, Reason}, State = #state{port = Port}) ->
+    logger:error("Port ~p died with reason: ~p", [Port, Reason]),
+    {stop, port_died, State}.
+
+-doc false.
+terminate(_Reason, #state{port = Port, reqs = Reqs}) ->
+    %% The worker is going away (typically because its port died) with
+    %% requests still in flight. Sync callers are covered by wpool:call's
+    %% own monitor, but async requests were dispatched fire-and-forget, so
+    %% push a worker_died error to each async reply_to before we exit --
+    %% otherwise those callers would block until their await/request timeout.
+    maps:foreach(fun notify_worker_died/2, Reqs),
+    %% port_close/1 raises badarg if the port is already dead (the common case
+    %% when we get here via port death); ignore it -- we're terminating anyway.
+    try port_close(Port)
+    catch error:badarg -> ok
+    end,
+    ok.
+
+notify_worker_died(From, {_Tref, {async, _, _, _} = Kind}) ->
+    deliver_error(Kind, From, #{code => worker_died, message => <<>>});
+notify_worker_died(_From, {_Tref, sync}) ->
+    ok.
+
+%% Emit metrics and finish the OTel span for a completed async request. Mirrors
+%% the tail of do_req_with_span/2, but runs in the worker when the response
+%% (or timeout/worker-death) arrives rather than in the calling process.
+finish_async_obs(Obs = #{method := Method, ts := Ts, span := SpanCtx},
+                 Result, Response, Metrics) ->
+    record_outcome(SpanCtx, Method, Ts, Result, Response, Metrics),
+    end_obs(Obs).
+
+%% End the OTel span for an async request. Every terminal path (completion,
+%% timeout, worker death, cancel) calls this exactly once, alongside removing
+%% the request from the reqs map.
+end_obs(#{span := SpanCtx}) ->
+    _ = otel_span:end_span(SpanCtx),
+    ok.
+
+%% Cancel the async request with this user Ref, if this worker holds it: tell
+%% the port to abort the transfer, cancel the timer, and drop the reqs entry so
+%% no response is delivered.
+cancel_async(Port, UserRef, Reqs) ->
+    case find_async(UserRef, Reqs) of
+        {ok, {Self, Ref} = From, Tref, Obs} ->
+            _ = erlang:cancel_timer(Tref),
+            true = port_command(Port, term_to_binary({Self, Ref, cancel})),
+            end_obs(Obs),
+            maps:remove(From, Reqs);
+        error ->
+            Reqs
+    end.
+
+find_async(UserRef, Reqs) ->
+    case [{From, Tref, Obs}
+          || From := {Tref, {async, _ReplyTo, UR, Obs}} <- Reqs, UR =:= UserRef] of
+        [{From, Tref, Obs} | _] -> {ok, From, Tref, Obs};
+        [] -> error
+    end.
+
+-doc false.
+code_change(_OldVsn, State, _Extra) ->
+    {ok, State}.
+
+send_to_port(Port, {Self, Ref},
+             #req{method = Method,
+                  url = Url,
+                  headers = Headers,
+                  cookiejar = CookieJar,
+                  body = Body,
+                  connecttimeout_ms = ConnTimeoutMs,
+                  followlocation = FollowLocation,
+                  ssl_verifyhost = SslVerifyHost,
+                  ssl_verifypeer = SslVerifyPeer,
+                  capath = CAPath,
+                  cacert = CACert,
+                  timeout_ms = TimeoutMs,
+                  maxredirs = MaxRedirs,
+                  http_auth = HTTPAuth,
+                  username = Username,
+                  password = Password,
+                  proxy = Proxy,
+                  tcp_fastopen = TCPFastOpen,
+                  interface = Interface,
+                  unix_socket_path = UnixSocketPath,
+                  doh_url = DOHURL,
+                  http_version = HTTPVersion,
+                  sslversion = SSLVersion,
+                  verbose = Verbose,
+                  sslcert = SSLCert,
+                  sslkey = SSLKey,
+                  sslkey_blob = SSLKeyBlob,
+                  keypasswd = KeyPasswd,
+                  userpwd = UserPwd,
+                  dns_cache_timeout = DNSCacheTimeout,
+                  ca_cache_timeout = CACacheTimeout,
+                  pipewait = Pipewait}) ->
     Opts = [{?CONNECTTIMEOUT_MS, ConnTimeoutMs},
             {?FOLLOWLOCATION, FollowLocation},
             {?SSL_VERIFYHOST, SslVerifyHost},
@@ -763,63 +1133,7 @@ handle_call(#req{method = Method,
             {?CA_CACHE_TIMEOUT, CACacheTimeout},
             {?PIPEWAIT, Pipewait}],
     Command = {Self, Ref, Method, Url, Headers, CookieJar, Body, Opts},
-    true = port_command(Port, term_to_binary(Command)),
-    Tref = erlang:start_timer(Timeout, self(), {req_timeout, From}),
-    Reqs2 = Reqs#{From => Tref},
-    {noreply, State#state{reqs = Reqs2}}.
-
--doc false.
-handle_cast(Msg, State) ->
-    logger:error("Unexpected cast: ~p", [Msg]),
-    {noreply, State}.
-
--doc false.
-handle_info({Port, {data, Data}}, State = #state{port = Port, reqs = Reqs}) ->
-    {Result, {From, Response}} =
-        case binary_to_term(Data) of
-            {ok, {From0, {Status, Headers, CookieJar, Body, Metrics}}} ->
-                R = #{status => Status,
-                      headers => parse_headers(Headers),
-                      cookiejar => CookieJar,
-                      body => Body},
-                {ok, {From0, {R, Metrics}}};
-            {error, {From0, {Code, Message, Metrics}}} ->
-                Error = #{code => Code, message => Message},
-                {error, {From0, {Error, Metrics}}}
-        end,
-    case maps:find(From, Reqs) of
-        {ok, Tref} ->
-            _ = erlang:cancel_timer(Tref),
-            _ = gen_server:reply(From, {Result, Response});
-        error ->
-            ok
-    end,
-    Reqs2 = maps:remove(From, Reqs),
-    {noreply, State#state{reqs = Reqs2}};
-handle_info({timeout, Tref, {req_timeout, From}}, State = #state{reqs = Reqs}) ->
-    Reqs2 =
-        case maps:find(From, Reqs) of
-            {ok, Tref} ->
-                Error = #{code => operation_timedout, message => <<>>},
-                Metrics = [],
-                _ = gen_server:reply(From, {error, {Error, Metrics}}),
-                maps:remove(From, Reqs);
-            error ->
-                Reqs
-        end,
-    {noreply, State#state{reqs = Reqs2}};
-handle_info({'EXIT', Port, Reason}, State = #state{port = Port}) ->
-    logger:error("Port ~p died with reason: ~p", [Port, Reason]),
-    {stop, port_died, State}.
-
--doc false.
-terminate(_Reason, #state{port = Port}) ->
-    true = port_close(Port),
-    ok.
-
--doc false.
-code_change(_OldVsn, State, _Extra) ->
-    {ok, State}.
+    true = port_command(Port, term_to_binary(Command)).
 
 -spec headers_to_binary(headers()) -> [binary()].
 headers_to_binary(Headers) ->
@@ -1027,6 +1341,8 @@ opt(pipewait, true, {Req, Errors}) ->
     {Req#req{pipewait = ?PIPEWAIT_TRUE}, Errors};
 opt(pipewait, false, {Req, Errors}) ->
     {Req#req{pipewait = ?PIPEWAIT_FALSE}, Errors};
+opt(reply_to, Pid, {Req, Errors}) when is_pid(Pid) ->
+    {Req, Errors};
 opt(K, V, {Req, Errors}) ->
     {Req, [{K, V} | Errors]}.
 
