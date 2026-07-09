@@ -37,7 +37,8 @@ by the `reply_to` option):
 {katipo_error, Ref, #{code := error_code(), message := error_msg()}}
 ```
 
-Use `await/1,2` to block until the response arrives.
+Use `await/1,2` to block until the response arrives, or `cancel/2` to abort an
+in-flight request (no response is then delivered).
 
 If the pool worker handling an in-flight async request dies (e.g. its port
 crashes), a `{katipo_error, Ref, #{code => worker_died}}` message is delivered
@@ -91,6 +92,7 @@ Note: async requests do not currently emit OTel spans or metrics.
 -export([async_delete/3]).
 -export([await/1]).
 -export([await/2]).
+-export([cancel/2]).
 
 -export([check_opts/1]).
 
@@ -771,6 +773,24 @@ await(Ref, Timeout) ->
         {error, #{code => await_timeout, message => <<>>}}
     end.
 
+-doc """
+Cancels the async request identified by `Ref` (returned by `async_get/2,3`,
+`async_req/2`, etc.).
+
+Best-effort: once the cancel takes effect no `{katipo_response, Ref, _}` or
+`{katipo_error, Ref, _}` message is delivered. A message that was already
+delivered before the cancel raced in may still be in the receiver's mailbox, so
+callers should be prepared to flush a late one. Cancelling an unknown or
+already-completed `Ref` is a harmless no-op.
+
+Note: the in-flight HTTP transfer is not aborted — it completes in the
+background and its result is discarded.
+""".
+-spec cancel(katipo_pool:name(), reference()) -> ok.
+cancel(PoolName, Ref) ->
+    wpool:broadcast(PoolName, {cancel, Ref}),
+    ok.
+
 -doc false.
 %% Build a validated, timeout-stamped #req{} from an opts map. Shared by the
 %% sync req/2 and async_req/2 entry points.
@@ -893,6 +913,10 @@ handle_cast({async_req, ReplyTo, UserRef, Req = #req{timeout = Timeout}},
     Tref = erlang:start_timer(Timeout, self(), {req_timeout, InternalFrom}),
     Reqs2 = Reqs#{InternalFrom => {Tref, {async, ReplyTo, UserRef}}},
     {noreply, State#state{reqs = Reqs2}};
+handle_cast({cancel, UserRef}, State = #state{port = Port, reqs = Reqs}) ->
+    %% Broadcast reaches every worker; only the one holding this request acts.
+    Reqs2 = cancel_async(Port, UserRef, Reqs),
+    {noreply, State#state{reqs = Reqs2}};
 handle_cast(Msg, State) ->
     logger:error("Unexpected cast: ~p", [Msg]),
     {noreply, State}.
@@ -974,6 +998,26 @@ notify_worker_died(From, {_Tref, {async, _, _} = Kind}) ->
     deliver_error(Kind, From, #{code => worker_died, message => <<>>});
 notify_worker_died(_From, {_Tref, sync}) ->
     ok.
+
+%% Cancel the async request with this user Ref, if this worker holds it: tell
+%% the port to abort the transfer, cancel the timer, and drop the reqs entry so
+%% no response is delivered.
+cancel_async(Port, UserRef, Reqs) ->
+    case find_async(UserRef, Reqs) of
+        {ok, {Self, Ref} = From, Tref} ->
+            _ = erlang:cancel_timer(Tref),
+            true = port_command(Port, term_to_binary({Self, Ref, cancel})),
+            maps:remove(From, Reqs);
+        error ->
+            Reqs
+    end.
+
+find_async(UserRef, Reqs) ->
+    case [{From, Tref}
+          || From := {Tref, {async, _ReplyTo, UR}} <- Reqs, UR =:= UserRef] of
+        [{From, Tref} | _] -> {ok, From, Tref};
+        [] -> error
+    end.
 
 -doc false.
 code_change(_OldVsn, State, _Extra) ->

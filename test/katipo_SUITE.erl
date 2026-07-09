@@ -244,7 +244,9 @@ groups() ->
        async_invalid_reply_to,
        async_url_missing,
        async_worker_death,
-       async_worker_death_reply_to]},
+       async_worker_death_reply_to,
+       async_cancel,
+       async_cancel_after_complete]},
      {otel, [],
       [otel_span_created,
        otel_metrics_recorded,
@@ -1606,12 +1608,51 @@ async_worker_death_reply_to(Config) ->
     end,
     ok = katipo_pool:stop(PoolName).
 
+async_cancel(Config) ->
+    {req_opts, Opts} = lists:keyfind(req_opts, 1, Config),
+    PoolName = async_cancel_test,
+    {ok, _} = katipo_pool:start(PoolName, 1),
+    %% A slow request so it's genuinely in flight when we cancel it.
+    Url = httpbin_url(Config, <<"/delay/3">>),
+    {ok, Ref} = katipo:async_get(PoolName, Url, Opts),
+    ok = wait_for_inflight(PoolName),
+    ok = katipo:cancel(PoolName, Ref),
+    %% The worker drops the request (and tells the port to abort the transfer).
+    ok = wait_for_no_inflight(PoolName),
+    %% No response or error is delivered for a cancelled request, even past the
+    %% original /delay/3 completion time.
+    receive
+        {katipo_response, Ref, _} -> ct:fail(got_response_after_cancel);
+        {katipo_error, Ref, _} -> ct:fail(got_error_after_cancel)
+    after 5000 ->
+        ok
+    end,
+    %% The port/worker is still healthy after a cancel.
+    {ok, #{status := 200}} =
+        katipo:get(PoolName, httpbin_url(Config, <<"/get">>), Opts),
+    ok = katipo_pool:stop(PoolName).
+
+async_cancel_after_complete(Config) ->
+    {req_opts, Opts} = lists:keyfind(req_opts, 1, Config),
+    Url = httpbin_url(Config, <<"/get">>),
+    {ok, Ref} = katipo:async_get(?POOL, Url, Opts),
+    {ok, #{status := 200}} = katipo:await(Ref),
+    %% Cancelling an already-completed request is a harmless no-op.
+    ok = katipo:cancel(?POOL, Ref).
+
 %% Block until the (size-1) pool's worker has a request registered, so a
 %% subsequent port kill happens with the request genuinely in flight.
 wait_for_inflight(PoolName) ->
+    wait_for_reqs(PoolName, fun(N) -> N > 0 end).
+
+%% Poll until the (size-1) pool's worker has no requests registered.
+wait_for_no_inflight(PoolName) ->
+    wait_for_reqs(PoolName, fun(N) -> N =:= 0 end).
+
+wait_for_reqs(PoolName, Pred) ->
     Fun = fun() ->
                   {_Port, Reqs} = worker_state(PoolName),
-                  map_size(Reqs) > 0
+                  Pred(map_size(Reqs))
           end,
     true = repeat_until_true(Fun),
     ok.
