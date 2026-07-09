@@ -123,7 +123,6 @@ katipo:Method(Pool :: atom(), URL :: binary(), ReqOptions :: map()).
 | Option                  | Type                          | Default      | Note                                                                                           |
 |:------------------------|:------------------------------|:-------------|:-----------------------------------------------------------------------------------------------|
 | `pipelining`            | `nothing` <br> `http1` <br> `multiplex` | `nothing`    | HTTP pipelining [CURLMOPT_PIPELINING](https://curl.se/libcurl/c/CURLMOPT_PIPELINING.html) |
-| `max_pipeline_length`   | `non_neg_integer()`           | 100          |                                                                                                |
 | `max_total_connections` | `non_neg_integer()`           | 0 (no limit) | [docs](https://curl.se/libcurl/c/CURLMOPT_MAX_TOTAL_CONNECTIONS.html)                     |
 | `max_concurrent_streams`| `non_neg_integer()`           | 100          | [docs](https://curl.se/libcurl/c/CURLMOPT_MAX_CONCURRENT_STREAMS.html) curl >= 7.67.0     |
 

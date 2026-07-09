@@ -18,10 +18,13 @@ jobs:
         run: |
           cd test/http3-httpbin
           docker compose up -d
-          # Wait for Caddy to be ready
+          # Wait until httpbin actually serves through Caddy. `curl -s` exits 0
+          # on any response, including a 502 while the Python httpbin behind
+          # Caddy is still starting, so gate on a real 200 to avoid a race.
           for i in {1..30}; do
-            curl -k -s https://localhost:8443/get && break
-            echo "Waiting for Caddy..."
+            code=$(curl -k -s -o /dev/null -w '%{http_code}' https://localhost:8443/get || true)
+            [ "$code" = "200" ] && break
+            echo "Waiting for httpbin (got $code)..."
             sleep 2
           done
 
@@ -69,6 +72,71 @@ jobs:
           cd test/http3-httpbin
           docker compose down
 
+  test-asan:
+    runs-on: ubuntu-latest
+    name: AddressSanitizer
+    strategy:
+      matrix:
+        otp: ['27']
+        rebar3: ['3.24.0']
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Start httpbin server
+        run: |
+          cd test/http3-httpbin
+          docker compose up -d
+          # Wait until httpbin actually serves through Caddy. `curl -s` exits 0
+          # on any response, including a 502 while the Python httpbin behind
+          # Caddy is still starting, so gate on a real 200 to avoid a race.
+          for i in {1..30}; do
+            code=$(curl -k -s -o /dev/null -w '%{http_code}' https://localhost:8443/get || true)
+            [ "$code" = "200" ] && break
+            echo "Waiting for httpbin (got $code)..."
+            sleep 2
+          done
+
+      - uses: erlef/setup-beam@v1
+        with:
+          otp-version: ${{matrix.otp}}
+          rebar3-version: ${{matrix.rebar3}}
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y make gcc libevent-dev libcurl4-openssl-dev libssl-dev
+
+      - name: Run tests under AddressSanitizer
+        env:
+          # Build the C port with -fsanitize=address (see c_src/Makefile).
+          # rebar3's compile pre-hook runs `make -C c_src`, which picks this up.
+          SANITIZE: 1
+          # halt_on_error: abort the port on any use-after-free/overflow/double-free.
+          # detect_leaks: LeakSanitizer runs at port exit -- the port process calls
+          # exit()/errx(), so atexit handlers fire and leaks are reported.
+          # log_path: ASan/LSan errors in the BEAM-spawned port don't fail rebar3
+          # directly (the port is a child process), so route them to files we can
+          # check after the run instead of relying on the exit code.
+          ASAN_OPTIONS: halt_on_error=1:detect_leaks=1:log_path=${{ github.workspace }}/asan_log
+          LSAN_OPTIONS: suppressions=${{ github.workspace }}/test/lsan.suppressions
+        run: |
+          rebar3 ct
+          # A clean run (no unsuppressed leaks/errors) writes nothing; any
+          # asan_log.<pid> file means the sanitizer flagged something.
+          if ls "${{ github.workspace }}"/asan_log.* >/dev/null 2>&1; then
+            echo "::error::AddressSanitizer/LeakSanitizer reported errors:"
+            cat "${{ github.workspace }}"/asan_log.*
+            exit 1
+          fi
+          echo "AddressSanitizer clean."
+
+      - name: Stop httpbin server
+        if: always()
+        run: |
+          cd test/http3-httpbin
+          docker compose down
+
   test-http3:
     runs-on: ubuntu-latest
     name: HTTP/3 Tests
@@ -80,10 +148,13 @@ jobs:
         run: |
           cd test/http3-httpbin
           docker compose up -d
-          # Wait for Caddy to be ready
+          # Wait until httpbin actually serves through Caddy. `curl -s` exits 0
+          # on any response, including a 502 while the Python httpbin behind
+          # Caddy is still starting, so gate on a real 200 to avoid a race.
           for i in {1..30}; do
-            curl -k -s https://localhost:8443/get && break
-            echo "Waiting for Caddy..."
+            code=$(curl -k -s -o /dev/null -w '%{http_code}' https://localhost:8443/get || true)
+            [ "$code" = "200" ] && break
+            echo "Waiting for httpbin (got $code)..."
             sleep 2
           done
 
