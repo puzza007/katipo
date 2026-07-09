@@ -1067,11 +1067,11 @@ port_death(Config) ->
 port_late_response(Config) ->
     Url = httpbin_url(Config, <<"/delay/1">>),
     BaseOpts = ?config(httpbin_opts, Config),
-    ok = meck:new(katipo, [passthrough]),
-    meck:expect(katipo, get_timeout, fun(_) -> 100 end),
+    ok = meck:new(katipo_req, [passthrough]),
+    meck:expect(katipo_req, get_timeout, fun(_) -> 100 end),
     {error, #{code := operation_timedout, message := <<>>}} =
         katipo:get(?POOL, Url, BaseOpts),
-    meck:unload(katipo).
+    meck:unload(katipo_req).
 
 pool_opts(_) ->
     PoolName = pool_opts,
