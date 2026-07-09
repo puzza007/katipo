@@ -1409,32 +1409,32 @@ otel_noop_metrics_no_crash(_Config) ->
 
 otel_url_sanitization(_Config) ->
     %% Test that query strings are stripped (prevents leaking API keys, tokens, etc.)
-    {Url1, Host1} = katipo:parse_url_for_span(<<"https://api.example.com/users?api_key=secret123&token=abc">>),
+    {Url1, Host1} = katipo_span:parse_url_for_span(<<"https://api.example.com/users?api_key=secret123&token=abc">>),
     ?assertEqual(<<"https://api.example.com/users">>, Url1),
     ?assertEqual(<<"api.example.com">>, Host1),
 
     %% Test that fragments are stripped
-    {Url2, Host2} = katipo:parse_url_for_span(<<"https://example.com/page#section">>),
+    {Url2, Host2} = katipo_span:parse_url_for_span(<<"https://example.com/page#section">>),
     ?assertEqual(<<"https://example.com/page">>, Url2),
     ?assertEqual(<<"example.com">>, Host2),
 
     %% Test that both query and fragment are stripped
-    {Url3, Host3} = katipo:parse_url_for_span(<<"https://example.com/path?foo=bar#anchor">>),
+    {Url3, Host3} = katipo_span:parse_url_for_span(<<"https://example.com/path?foo=bar#anchor">>),
     ?assertEqual(<<"https://example.com/path">>, Url3),
     ?assertEqual(<<"example.com">>, Host3),
 
     %% Test URL without query or fragment is unchanged
-    {Url4, Host4} = katipo:parse_url_for_span(<<"https://example.com/path">>),
+    {Url4, Host4} = katipo_span:parse_url_for_span(<<"https://example.com/path">>),
     ?assertEqual(<<"https://example.com/path">>, Url4),
     ?assertEqual(<<"example.com">>, Host4),
 
     %% Test URL with port
-    {Url5, Host5} = katipo:parse_url_for_span(<<"https://example.com:8443/api?secret=value">>),
+    {Url5, Host5} = katipo_span:parse_url_for_span(<<"https://example.com:8443/api?secret=value">>),
     ?assertEqual(<<"https://example.com:8443/api">>, Url5),
     ?assertEqual(<<"example.com">>, Host5),
 
     %% Test URL with userinfo - credentials are stripped for security
-    {Url6, Host6} = katipo:parse_url_for_span(<<"https://user:pass@example.com/path?token=x">>),
+    {Url6, Host6} = katipo_span:parse_url_for_span(<<"https://user:pass@example.com/path?token=x">>),
     ?assertEqual(<<"https://example.com/path">>, Url6),
     ?assertEqual(<<"example.com">>, Host6),
 
