@@ -18,10 +18,13 @@ jobs:
         run: |
           cd test/http3-httpbin
           docker compose up -d
-          # Wait for Caddy to be ready
+          # Wait until httpbin actually serves through Caddy. `curl -s` exits 0
+          # on any response, including a 502 while the Python httpbin behind
+          # Caddy is still starting, so gate on a real 200 to avoid a race.
           for i in {1..30}; do
-            curl -k -s https://localhost:8443/get && break
-            echo "Waiting for Caddy..."
+            code=$(curl -k -s -o /dev/null -w '%{http_code}' https://localhost:8443/get || true)
+            [ "$code" = "200" ] && break
+            echo "Waiting for httpbin (got $code)..."
             sleep 2
           done
 
@@ -84,10 +87,13 @@ jobs:
         run: |
           cd test/http3-httpbin
           docker compose up -d
-          # Wait for Caddy to be ready
+          # Wait until httpbin actually serves through Caddy. `curl -s` exits 0
+          # on any response, including a 502 while the Python httpbin behind
+          # Caddy is still starting, so gate on a real 200 to avoid a race.
           for i in {1..30}; do
-            curl -k -s https://localhost:8443/get && break
-            echo "Waiting for Caddy..."
+            code=$(curl -k -s -o /dev/null -w '%{http_code}' https://localhost:8443/get || true)
+            [ "$code" = "200" ] && break
+            echo "Waiting for httpbin (got $code)..."
             sleep 2
           done
 
@@ -142,10 +148,13 @@ jobs:
         run: |
           cd test/http3-httpbin
           docker compose up -d
-          # Wait for Caddy to be ready
+          # Wait until httpbin actually serves through Caddy. `curl -s` exits 0
+          # on any response, including a 502 while the Python httpbin behind
+          # Caddy is still starting, so gate on a real 200 to avoid a race.
           for i in {1..30}; do
-            curl -k -s https://localhost:8443/get && break
-            echo "Waiting for Caddy..."
+            code=$(curl -k -s -o /dev/null -w '%{http_code}' https://localhost:8443/get || true)
+            [ "$code" = "200" ] && break
+            echo "Waiting for httpbin (got $code)..."
             sleep 2
           done
 
