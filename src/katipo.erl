@@ -194,7 +194,10 @@ delete(PoolName, Url, Opts) ->
 async_get(PoolName, Url) ->
     async_req(PoolName, #{url => Url, method => get}).
 
--doc "Performs an async HTTP GET request. Returns `{ok, Ref}` immediately. The response is delivered as a `{katipo_response, Ref, Response}` message.".
+-doc """
+Performs an async HTTP GET request. Returns `{ok, Ref}` immediately. The
+response is delivered as a `{katipo_response, Ref, Response}` message.
+""".
 -spec async_get(katipo_pool:name(), url(), opts()) -> async_response().
 async_get(PoolName, Url, Opts) ->
     async_req(PoolName, Opts#{url => Url, method => get}).
