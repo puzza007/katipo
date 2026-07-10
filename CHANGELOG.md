@@ -6,8 +6,7 @@ All notable changes to this project are documented here. This project follows
 ## [Unreleased]
 
 ### Added
-- `xref` and `lint` are now enforced in CI, and the test matrix covers OTP 27
-  and 28.
+- `xref` and `lint` are now enforced in CI.
 
 ### Fixed
 - A synchronous request whose worker port dies mid-flight now returns

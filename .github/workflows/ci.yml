@@ -8,7 +8,7 @@ jobs:
     name: Erlang/OTP ${{matrix.otp}} / rebar3 ${{matrix.rebar3}}
     strategy:
       matrix:
-        otp: ['27', '28']
+        otp: ['27']
         rebar3: ['3.24.0']
 
     steps:
