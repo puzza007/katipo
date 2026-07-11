@@ -140,7 +140,7 @@ deliver the result as a message instead of blocking:
 ```erlang
 {ok, Ref} = katipo:async_get(Pool, <<"https://example.com">>),
 receive
-    {katipo_response, Ref, {ok, #{status := Status}}} -> Status;
+    {katipo_response, Ref, #{status := Status}} -> Status;
     {katipo_error, Ref, Error} -> {error, Error}
 end.
 ```
