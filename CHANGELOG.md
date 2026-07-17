@@ -5,6 +5,11 @@ All notable changes to this project are documented here. This project follows
 
 ## [Unreleased]
 
+### Changed
+- Development and CI now build and test against the current dependency
+  versions within the published ranges: `worker_pool` 6.5.3 and
+  `opentelemetry_api` 1.5.0 (previously locked to 6.0.1 and 1.4.0).
+
 ## [2.0.0-rc.2] — 2026-07-18
 
 ### Changed
