@@ -27,6 +27,7 @@
 -export([admission_error_when_worker_restarting/1]).
 -export([no_message_after_cancel_against_dead_port/1]).
 
+-include_lib("common_test/include/ct.hrl").
 -include_lib("stdlib/include/assert.hrl").
 
 all() ->
@@ -47,14 +48,12 @@ init_per_testcase(TestCase, Config) ->
     [{pool, Pool} | Config].
 
 end_per_testcase(_TestCase, Config) ->
-    {pool, Pool} = lists:keyfind(pool, 1, Config),
-    ok = katipo_pool:stop(Pool),
-    ok.
+    ok = katipo_pool:stop(?config(pool, Config)).
 
-%% A request to an address that will never connect quickly, so an accepted
+%% A request to a TEST-NET address that will never connect, so an accepted
 %% request stays in the worker's Reqs map for the duration of the test.
 blackhole_req() ->
-    #{url => <<"http://10.255.255.1/">>,
+    #{url => <<"http://192.0.2.1/">>,
       method => get,
       connecttimeout_ms => 30000,
       timeout_ms => 30000}.
@@ -65,11 +64,9 @@ blackhole_req() ->
 %% The call monitor must convert that into {error, worker_died} -- before
 %% the fix the request was cast fire-and-forget and simply vanished.
 admission_error_when_port_closes_before_dispatch(Config) ->
-    {pool, Pool} = lists:keyfind(pool, 1, Config),
-    [WorkerName] = wpool:get_workers(Pool),
+    [WorkerName] = wpool:get_workers(?config(pool, Config)),
     WorkerPid = whereis(WorkerName),
-    Port = find_port(sys:get_state(WorkerPid)),
-    true = is_port(Port),
+    Port = worker_port(WorkerPid),
 
     %% Freeze the worker so the admission call queues unprocessed, then
     %% close its port. The 'EXIT' message lands behind the queued call.
@@ -77,7 +74,8 @@ admission_error_when_port_closes_before_dispatch(Config) ->
     Parent = self(),
     _Caller = spawn_link(
                 fun() ->
-                        Res = katipo:async_req(Pool, blackhole_req()),
+                        Res = katipo:async_req(?config(pool, Config),
+                                               blackhole_req()),
                         Parent ! {async_result, Res}
                 end),
     ok = wait_until(fun() ->
@@ -101,7 +99,7 @@ admission_error_when_port_closes_before_dispatch(Config) ->
 %% surface as {error, worker_died} -- before the fix the cast was silently
 %% dropped and async_req still returned {ok, Ref}.
 admission_error_when_worker_restarting(Config) ->
-    {pool, Pool} = lists:keyfind(pool, 1, Config),
+    Pool = ?config(pool, Config),
     [WorkerName] = wpool:get_workers(Pool),
     WorkerPid = whereis(WorkerName),
 
@@ -128,18 +126,14 @@ admission_error_when_worker_restarting(Config) ->
 %% cancel_async removes the request first and treats the port write as
 %% best-effort: the cancelled caller must hear nothing.
 no_message_after_cancel_against_dead_port(Config) ->
-    {pool, Pool} = lists:keyfind(pool, 1, Config),
+    Pool = ?config(pool, Config),
     [WorkerName] = wpool:get_workers(Pool),
     WorkerPid = whereis(WorkerName),
 
+    %% {ok, Ref} means the admission call completed, i.e. the request is
+    %% registered in the worker's Reqs map -- no polling needed.
     {ok, Ref} = katipo:async_req(Pool, blackhole_req()),
-    ok = wait_until(fun() ->
-                            {state, _Port, Reqs} =
-                                find_worker_state(sys:get_state(WorkerPid)),
-                            maps:size(Reqs) > 0
-                    end, 50),
-    Port = find_port(sys:get_state(WorkerPid)),
-    true = is_port(Port),
+    Port = worker_port(WorkerPid),
 
     %% Freeze the worker, enqueue the cancel, then close the port so the
     %% cancel is processed against a dead port.
@@ -168,23 +162,9 @@ wait_until(Fun, Retries) ->
             wait_until(Fun, Retries - 1)
     end.
 
-%% The worker's #state{port, reqs} record, nested inside wpool_process's
-%% own state record. Located structurally to avoid depending on wpool
-%% internals.
-find_worker_state(T = {state, Port, Reqs}) when is_port(Port), is_map(Reqs) ->
-    T;
-find_worker_state(T) when is_tuple(T) ->
-    find_worker_state(tuple_to_list(T));
-find_worker_state([H | T]) ->
-    case find_worker_state(H) of
-        undefined -> find_worker_state(T);
-        Found -> Found
-    end;
-find_worker_state(_) ->
-    undefined.
-
-find_port(T) ->
-    case find_worker_state(T) of
-        {state, Port, _} -> Port;
-        undefined -> undefined
-    end.
+%% The worker's C port, found via the public port_info seam: the worker
+%% process owns exactly one port.
+worker_port(WorkerPid) ->
+    [Port] = [P || P <- erlang:ports(),
+                   erlang:port_info(P, connected) =:= {connected, WorkerPid}],
+    Port.

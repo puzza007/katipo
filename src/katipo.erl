@@ -315,18 +315,13 @@ async_req(PoolName, Opts)
 %% Admission is a synchronous call, not a cast, so dispatch failures surface
 %% immediately instead of losing the request: a cast to a dead or restarting
 %% worker name is silently dropped, and a worker that crashes on port_command
-%% before registering the request can notify nobody afterwards. The call
-%% monitor turns both into an immediate {error, worker_died} return. Same
-%% exit-shape narrowing as call_worker/2, so config errors such as wpool's
-%% bare `no_workers` still propagate.
+%% before registering the request can notify nobody afterwards. pool_call/2
+%% turns both into an immediate {error, worker_died} return.
 dispatch_async(PoolName, ReplyTo, UserRef, Req, Obs) ->
-    try wpool:call(PoolName, {async_req, ReplyTo, UserRef, Req, Obs},
-                   random_worker, infinity) of
-        ok ->
-            {ok, UserRef}
-    catch
-        exit:{_Reason, {gen_server, call, _}} ->
-            Error = katipo_req:error_map(worker_died, <<>>),
+    case pool_call(PoolName, {async_req, ReplyTo, UserRef, Req, Obs}) of
+        {ok, ok} ->
+            {ok, UserRef};
+        {error, Error} ->
             katipo_span:finish_async(Obs, error, Error, []),
             {error, Error}
     end.
@@ -384,20 +379,27 @@ do_req_with_span(PoolName, Req) ->
         {Result, Response}
     end).
 
-%% Invoke the pool worker for a sync request. If the worker dies mid-request
-%% (typically its C port died) the in-flight gen_server:call exits with the
-%% shape {Reason, {gen_server, call, _}}; convert only that into the same
-%% {error, worker_died} contract the async path delivers, so req/2 honours its
-%% response() spec instead of crashing the caller. Config errors such as
-%% wpool's bare `no_workers` (unknown/unstarted pool) are left to propagate --
-%% mislabeling them worker_died would hide a naming/startup bug behind a
-%% transient-looking error.
+%% Invoke the pool worker for a sync request, unpacking the worker's reply so
+%% req/2 honours its response() spec instead of crashing the caller.
 call_worker(PoolName, Req) ->
-    try wpool:call(PoolName, Req, random_worker, infinity) of
-        {Result, {Response, Metrics}} -> {Result, Response, Metrics}
+    case pool_call(PoolName, Req) of
+        {ok, {Result, {Response, Metrics}}} -> {Result, Response, Metrics};
+        {error, Error} -> {error, Error, []}
+    end.
+
+%% The one place that calls into the pool. If the worker dies with the call
+%% in flight (typically its C port died) gen_server:call exits with the shape
+%% {Reason, {gen_server, call, _}}; convert only that into the shared
+%% {error, worker_died} contract. Config errors such as wpool's bare
+%% `no_workers` (unknown/unstarted pool) are left to propagate -- mislabeling
+%% them worker_died would hide a naming/startup bug behind a
+%% transient-looking error.
+pool_call(PoolName, Msg) ->
+    try
+        {ok, wpool:call(PoolName, Msg, random_worker, infinity)}
     catch
         exit:{_Reason, {gen_server, call, _}} ->
-            {error, #{code => worker_died, message => <<>>}, []}
+            {error, katipo_req:error_map(worker_died, <<>>)}
     end.
 
 -doc "Validates request options without performing the request.".
