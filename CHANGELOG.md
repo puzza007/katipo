@@ -10,6 +10,12 @@ All notable changes to this project are documented here. This project follows
   versions within the published ranges: `worker_pool` 6.5.3 and
   `opentelemetry_api` 1.5.0 (previously locked to 6.0.1 and 1.4.0).
 
+### Fixed
+- When the Erlang-side request timer fires (the backstop behind curl's own
+  timeouts), the worker now aborts the still-running transfer in the C port
+  instead of letting it hold a connection and a curl-multi slot until curl
+  notices on its own.
+
 ## [2.0.0-rc.2] — 2026-07-18
 
 ### Changed

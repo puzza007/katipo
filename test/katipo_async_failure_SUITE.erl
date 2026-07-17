@@ -26,6 +26,7 @@
 -export([admission_error_when_port_closes_before_dispatch/1]).
 -export([admission_error_when_worker_restarting/1]).
 -export([no_message_after_cancel_against_dead_port/1]).
+-export([timeout_aborts_transfer_in_port/1]).
 
 -include_lib("common_test/include/ct.hrl").
 -include_lib("stdlib/include/assert.hrl").
@@ -33,7 +34,8 @@
 all() ->
     [admission_error_when_port_closes_before_dispatch,
      admission_error_when_worker_restarting,
-     no_message_after_cancel_against_dead_port].
+     no_message_after_cancel_against_dead_port,
+     timeout_aborts_transfer_in_port].
 
 init_per_suite(Config) ->
     {ok, _} = application:ensure_all_started(katipo),
@@ -151,6 +153,49 @@ no_message_after_cancel_against_dead_port(Config) ->
             ok
     end.
 
+%% When the Erlang-side request timer (the backstop behind curl's own
+%% timeouts) fires, the worker must deliver operation_timedout AND abort the
+%% transfer in the C port -- otherwise the transfer keeps holding a
+%% connection and a multi slot until curl notices. Verified at the protocol
+%% level: swap the worker's port for a loopback (cat) owned by this process,
+%% fire the request timer, and observe the {Pid, Ref, cancel} tuple the
+%% worker writes.
+timeout_aborts_transfer_in_port(Config) ->
+    Pool = ?config(pool, Config),
+    [WorkerName] = wpool:get_workers(Pool),
+    WorkerPid = whereis(WorkerName),
+
+    %% Long curl-side timeouts: the C port stays silent for the whole test,
+    %% so the only timeout that can fire is the one we send by hand.
+    {ok, Ref} = katipo:async_req(Pool, blackhole_req()),
+    RealPort = worker_port(WorkerPid),
+    [{From, {Tref, _Kind}}] = maps:to_list(worker_reqs(WorkerPid)),
+
+    FakePort = open_port({spawn, "/bin/cat"}, [{packet, 4}, binary]),
+    ok = swap_port(WorkerPid, FakePort),
+
+    %% Fire the request timer: this is exactly the message
+    %% erlang:start_timer/3 would deliver.
+    WorkerPid ! {timeout, Tref, {req_timeout, From}},
+
+    receive
+        {katipo_error, Ref, Error} ->
+            ?assertMatch(#{code := operation_timedout}, Error)
+    after 2000 ->
+            ct:fail(timeout_not_delivered)
+    end,
+    {Pid, InternalRef} = From,
+    receive
+        {FakePort, {data, Bin}} ->
+            ?assertEqual({Pid, InternalRef, cancel}, binary_to_term(Bin))
+    after 1000 ->
+            ct:fail(no_abort_written_to_port)
+    end,
+
+    %% Put the real port back so pool teardown closes it normally.
+    ok = swap_port(WorkerPid, RealPort),
+    true = port_close(FakePort).
+
 wait_until(_Fun, 0) ->
     {error, condition_never_true};
 wait_until(Fun, Retries) ->
@@ -168,3 +213,20 @@ worker_port(WorkerPid) ->
     [Port] = [P || P <- erlang:ports(),
                    erlang:port_info(P, connected) =:= {connected, WorkerPid}],
     Port.
+
+%% White-box helpers for the protocol test: a request's internal {Pid, Ref}
+%% identity and timer, and the port slot itself, have no public seam, so
+%% match katipo_worker's #state{port, reqs} at its known position inside
+%% wpool_process's wrapper (same idiom as katipo_SUITE's worker_state/1;
+%% fails loudly if the wrapper shape changes).
+worker_reqs(WorkerPid) ->
+    {state, _, _, {state, _Port, Reqs}, _} = sys:get_state(WorkerPid),
+    Reqs.
+
+swap_port(WorkerPid, NewPort) ->
+    _ = sys:replace_state(
+          WorkerPid,
+          fun(S = {state, _, _, {state, _, Reqs}, _}) ->
+                  setelement(4, S, {state, NewPort, Reqs})
+          end, 1000),
+    ok.
