@@ -7,11 +7,24 @@ All notable changes to this project are documented here. This project follows
 
 ### Added
 - `xref` and `lint` are now enforced in CI.
+- A TLA+ model of the worker/port protocol under `formal/`, with configs
+  covering delivery safety, the cancel contract, and request-outcome liveness.
 
 ### Fixed
 - A synchronous request whose worker port dies mid-flight now returns
   `{error, #{code => worker_died}}` instead of crashing the caller, matching the
   async contract.
+- Async requests can no longer be silently lost. Dispatch is now a synchronous
+  admission call rather than a fire-and-forget cast, so a request sent while
+  the worker is dead or restarting -- or one that reaches a worker whose port
+  just died -- returns `{error, #{code => worker_died}}` immediately instead of
+  returning `{ok, Ref}` and never delivering anything. An accepted async
+  request now always produces exactly one terminal message. (Found by
+  model-checking; see `formal/Katipo.tla`.)
+- Cancelling an async request whose worker port has just died no longer
+  crashes the worker via `port_command`, which previously also delivered a
+  spurious `{katipo_error, Ref, worker_died}` message to the caller who
+  cancelled.
 - Metric emission no longer risks crashing application startup when no
   OpenTelemetry metrics SDK is configured, and the per-request "no SDK" overhead
   dropped from up to nine caught exceptions to one.

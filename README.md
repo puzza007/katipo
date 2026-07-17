@@ -149,7 +149,9 @@ end.
 in-flight request (best-effort). The message goes to the calling process by
 default; set the `reply_to` option to redirect it to another process. If the
 worker's port dies while a request is in flight, both sync and async callers
-receive `{error, #{code => worker_died}}`.
+receive `{error, #{code => worker_died}}`; if an async request cannot be
+handed to a worker at all (it died and is being restarted), `async_req` itself
+returns `{error, #{code => worker_died}}` and no message is delivered.
 
 #### Pool Options
 

@@ -42,7 +42,11 @@ in-flight request (no response is then delivered).
 
 If the pool worker handling an in-flight async request dies (e.g. its port
 crashes), a `{katipo_error, Ref, #{code => worker_died}}` message is delivered
-so the caller fails fast instead of blocking until the request timeout.
+so the caller fails fast instead of blocking until the request timeout. If the
+request cannot be handed to a worker at all (the worker is dead or being
+restarted), the async function returns `{error, #{code => worker_died}}`
+instead of `{ok, Ref}` -- an accepted request always produces exactly one
+terminal message.
 
 Async requests emit the same OTel span (`HTTP <METHOD>`, parented to the
 caller's context) and metrics as their synchronous counterparts; the span
@@ -276,9 +280,12 @@ req(PoolName, Opts)
 -doc """
 Performs an async HTTP request using the full request map.
 
-Returns `{ok, Ref}` immediately. The response is delivered as a
-`{katipo_response, Ref, ResponseMap}` or `{katipo_error, Ref, ErrorMap}`
-message to the process specified by the `reply_to` option (defaults to `self()`).
+Returns `{ok, Ref}` once a pool worker has accepted the request. The response
+is delivered as a `{katipo_response, Ref, ResponseMap}` or
+`{katipo_error, Ref, ErrorMap}` message to the process specified by the
+`reply_to` option (defaults to `self()`). If no worker could accept the
+request (e.g. it died and is being restarted), returns
+`{error, #{code => worker_died}}` and no message is delivered.
 
 Use `await/1,2` to block until the response arrives.
 """.
@@ -299,12 +306,29 @@ async_req(PoolName, Opts)
                     UserRef = make_ref(),
                     Obs = katipo_span:start_async(katipo_req:method_int_to_binary(Req#req.method),
                                                   Req#req.url),
-                    wpool:cast(PoolName, {async_req, ReplyTo, UserRef, Req, Obs},
-                               random_worker),
-                    {ok, UserRef};
+                    dispatch_async(PoolName, ReplyTo, UserRef, Req, Obs);
                 {error, _} = Error ->
                     Error
             end
+    end.
+
+%% Admission is a synchronous call, not a cast, so dispatch failures surface
+%% immediately instead of losing the request: a cast to a dead or restarting
+%% worker name is silently dropped, and a worker that crashes on port_command
+%% before registering the request can notify nobody afterwards. The call
+%% monitor turns both into an immediate {error, worker_died} return. Same
+%% exit-shape narrowing as call_worker/2, so config errors such as wpool's
+%% bare `no_workers` still propagate.
+dispatch_async(PoolName, ReplyTo, UserRef, Req, Obs) ->
+    try wpool:call(PoolName, {async_req, ReplyTo, UserRef, Req, Obs},
+                   random_worker, infinity) of
+        ok ->
+            {ok, UserRef}
+    catch
+        exit:{_Reason, {gen_server, call, _}} ->
+            Error = katipo_req:error_map(worker_died, <<>>),
+            katipo_span:finish_async(Obs, error, Error, []),
+            {error, Error}
     end.
 
 -doc #{equiv => await/2}.
