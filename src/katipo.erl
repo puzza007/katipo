@@ -275,11 +275,7 @@ async_delete(PoolName, Url, Opts) ->
 -spec req(katipo_pool:name(), request()) -> response().
 req(PoolName, Opts)
   when is_map(Opts) ->
-    case katipo_req:build_req(Opts) of
-        {ok, #req{stream = ?STREAM_TRUE}} ->
-            %% A streamed response has no single reply to return; it only
-            %% makes sense as a message flow, i.e. via async_req/2.
-            {error, katipo_req:error_map(bad_opts, <<"[{stream,true}]">>)};
+    case katipo_req:build_req(Opts, sync) of
         {ok, Req} ->
             do_req_with_span(PoolName, Req);
         {error, _} = Error ->
@@ -339,7 +335,7 @@ async_req(PoolName, Opts)
         false ->
             {error, katipo_req:error_map(bad_opts, <<"[{reply_to,invalid}]">>)};
         true ->
-            case katipo_req:build_req(Opts2) of
+            case katipo_req:build_req(Opts2, async) of
                 {ok, Req} ->
                     UserRef = make_ref(),
                     Obs = katipo_span:start_async(katipo_req:method_int_to_binary(Req#req.method),
@@ -368,7 +364,8 @@ dispatch_async(PoolName, ReplyTo, UserRef, Req, Obs) ->
 Grants `N` more chunk-message credits to the streaming request `Ref`, which
 must have been started with a bounded `stream_window`. Best-effort like
 `cancel/2`: granting credits to an unknown, completed, or unbounded-window
-request is a harmless no-op.
+request is a harmless no-op. Each grant is a pool-wide broadcast, so grant
+in batches (e.g. half the window at a time) rather than per-chunk.
 """.
 -spec update_flow(katipo_pool:name(), reference(), pos_integer()) -> ok.
 update_flow(PoolName, Ref, N) when is_integer(N) andalso N > 0 ->
@@ -451,7 +448,12 @@ pool_call(PoolName, Msg) ->
             {error, katipo_req:error_map(worker_died, <<>>)}
     end.
 
--doc "Validates request options without performing the request.".
+-doc """
+Validates request options without performing the request. Cross-field rules
+are checked under the async API's rules (the superset): `stream => true`
+passes here but is additionally rejected by `req/2` and the synchronous
+wrappers.
+""".
 -spec check_opts(request()) -> ok | {error, map()}.
 check_opts(Opts) when is_map(Opts) ->
     katipo_req:check_opts(Opts).

@@ -8,6 +8,10 @@
 -include_lib("opentelemetry/include/otel_span.hrl").
 
 -define(POOL, katipo_test_pool).
+%% MD5 of /range/1024: 1024 bytes of repeating a-z (deterministic content,
+%% unlike /bytes whose seeded RNG is shared server-global state).
+-define(RANGE_1024_MD5,
+        <<147,0,83,230,212,92,147,255,38,102,201,139,205,150,16,161>>).
 -define(POOL_SIZE, 2).
 
 %% Wire-protocol constants for the malformed_requests group, mirroring the
@@ -541,13 +545,13 @@ bytes(Config) ->
     {req_opts, Opts} = lists:keyfind(req_opts, 1, Config),
     {ok, #{status := 200, body := Body}} = katipo:get(?POOL, httpbin_url(Config, <<"/range/1024">>), Opts),
     1024 = byte_size(Body),
-    <<147,0,83,230,212,92,147,255,38,102,201,139,205,150,16,161>> = crypto:hash(md5, Body).
+    ?RANGE_1024_MD5 = crypto:hash(md5, Body).
 
 stream_bytes(Config) ->
     {req_opts, Opts} = lists:keyfind(req_opts, 1, Config),
     {ok, #{status := 200, body := Body}} = katipo:get(?POOL, httpbin_url(Config, <<"/range/1024?chunk_size=8">>), Opts),
     1024 = byte_size(Body),
-    <<147,0,83,230,212,92,147,255,38,102,201,139,205,150,16,161>> = crypto:hash(md5, Body).
+    ?RANGE_1024_MD5 = crypto:hash(md5, Body).
 
 utf8(Config) ->
     {req_opts, Opts} = lists:keyfind(req_opts, 1, Config),
@@ -1314,8 +1318,7 @@ streaming_response(Config) ->
     {200, Headers, Body} = collect_stream(Ref),
     true = length(Headers) > 0,
     1024 = byte_size(Body),
-    <<147,0,83,230,212,92,147,255,38,102,201,139,205,150,16,161>> =
-        crypto:hash(md5, Body).
+    ?RANGE_1024_MD5 = crypto:hash(md5, Body).
 
 %% stream_window => 1 delivers exactly one chunk then pauses the transfer
 %% (client-side, so independent of server pacing) until update_flow/3
@@ -1345,31 +1348,29 @@ streaming_flow_control(Config) ->
     after 500 ->
             ok
     end,
-    Body = collect_with_credits(Ref, [Chunk1]),
+    Grant = fun() -> katipo:update_flow(?POOL, Ref, 1) end,
+    {200, [], Body} = collect_chunks(Ref, 200, [], Grant, [Chunk1]),
     65536 = byte_size(Body),
     <<186,131,222,164,69,192,190,233,191,135,112,45,73,76,148,71>> =
         crypto:hash(md5, Body),
     %% Granting credits to an unknown Ref is a harmless no-op.
     ok = katipo:update_flow(?POOL, make_ref(), 1).
 
-collect_with_credits(Ref, Acc) ->
-    ok = katipo:update_flow(?POOL, Ref, 1),
-    receive
-        {katipo_chunk, Ref, Bin} ->
-            collect_with_credits(Ref, [Bin | Acc]);
-        {katipo_done, Ref, #{status := 200}} ->
-            iolist_to_binary(lists:reverse(Acc));
-        {katipo_error, Ref, Error} ->
-            ct:fail({stream_error, Error})
-    after 10000 ->
-            ct:fail(stream_stalled_with_credits)
-    end.
-
-%% stream_window must be a positive integer or infinity.
+%% stream_window must be a positive integer or infinity, and only means
+%% something on a streaming request.
 streaming_window_invalid(_Config) ->
     {error, #{code := bad_opts}} =
         katipo:async_get(?POOL, <<"http://192.0.2.1">>,
-                         #{stream => true, stream_window => 0}).
+                         #{stream => true, stream_window => 0}),
+    {error, #{code := bad_opts}} =
+        katipo:async_get(?POOL, <<"http://192.0.2.1">>,
+                         #{stream_window => 4}),
+    %% check_opts agrees with the request entry points on cross-field rules.
+    {error, #{code := bad_opts}} = katipo:check_opts(#{url => <<"http://x">>,
+                                                       stream_window => 4}),
+    ok = katipo:check_opts(#{url => <<"http://x">>,
+                             stream => true,
+                             stream_window => 4}).
 
 %% A bodyless response still delivers headers, then done, with no chunks.
 streaming_empty_body(Config) ->
@@ -1469,15 +1470,18 @@ streaming_worker_death(Config) ->
 collect_stream(Ref) ->
     receive
         {katipo_headers, Ref, #{status := Status, headers := Headers}} ->
-            collect_chunks(Ref, Status, Headers, [])
+            collect_chunks(Ref, Status, Headers, fun() -> ok end, [])
     after 10000 ->
             ct:fail(no_stream_headers)
     end.
 
-collect_chunks(Ref, Status, Headers, Acc) ->
+%% Grant runs before every receive: fun() -> ok end for unbounded streams,
+%% or an update_flow call when driving a bounded stream_window.
+collect_chunks(Ref, Status, Headers, Grant, Acc) ->
+    ok = Grant(),
     receive
         {katipo_chunk, Ref, Bin} ->
-            collect_chunks(Ref, Status, Headers, [Bin | Acc]);
+            collect_chunks(Ref, Status, Headers, Grant, [Bin | Acc]);
         {katipo_done, Ref, #{status := Status}} ->
             {Status, Headers, iolist_to_binary(lists:reverse(Acc))};
         {katipo_error, Ref, Error} ->
