@@ -5,6 +5,8 @@ All notable changes to this project are documented here. This project follows
 
 ## [Unreleased]
 
+## [2.0.0-rc.2] — 2026-07-18
+
 ### Added
 - `xref` and `lint` are now enforced in CI.
 - A TLA+ model of the worker/port protocol under `formal/`, with configs
@@ -34,7 +36,7 @@ All notable changes to this project are documented here. This project follows
   `-1` for `maxredirs`; `response()` no longer advertises a `metrics` field that
   responses do not carry.
 
-## [2.0.0-rc] — unreleased
+## [2.0.0-rc.1] — 2026-02-15
 
 ### Added
 - Asynchronous request API: `async_req/2` and `async_Method` wrappers return
