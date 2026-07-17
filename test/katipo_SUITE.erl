@@ -517,17 +517,21 @@ deflate(Config) ->
     Json = jsx:decode(Body),
     ?assert(maps:get(<<"deflated">>, Json)).
 
+%% Use /range rather than /bytes: httpbin's /bytes seeds Python's global
+%% RNG, so concurrent requests from parallel test groups can interleave
+%% random.randint calls and produce different bytes for the same seed.
+%% /range content (repeating a-z) is deterministic regardless of concurrency.
 bytes(Config) ->
     {req_opts, Opts} = lists:keyfind(req_opts, 1, Config),
-    {ok, #{status := 200, body := Body}} = katipo:get(?POOL, httpbin_url(Config, <<"/bytes/1024?seed=9999">>), Opts),
+    {ok, #{status := 200, body := Body}} = katipo:get(?POOL, httpbin_url(Config, <<"/range/1024">>), Opts),
     1024 = byte_size(Body),
-    <<168,123,193,120,18,120,65,73,67,119,198,61,39,1,24,169>> = crypto:hash(md5, Body).
+    <<147,0,83,230,212,92,147,255,38,102,201,139,205,150,16,161>> = crypto:hash(md5, Body).
 
 stream_bytes(Config) ->
     {req_opts, Opts} = lists:keyfind(req_opts, 1, Config),
-    {ok, #{status := 200, body := Body}} = katipo:get(?POOL, httpbin_url(Config, <<"/bytes/1024?seed=9999&chunk_size=8">>), Opts),
+    {ok, #{status := 200, body := Body}} = katipo:get(?POOL, httpbin_url(Config, <<"/range/1024?chunk_size=8">>), Opts),
     1024 = byte_size(Body),
-    <<168,123,193,120,18,120,65,73,67,119,198,61,39,1,24,169>> = crypto:hash(md5, Body).
+    <<147,0,83,230,212,92,147,255,38,102,201,139,205,150,16,161>> = crypto:hash(md5, Body).
 
 utf8(Config) ->
     {req_opts, Opts} = lists:keyfind(req_opts, 1, Config),
