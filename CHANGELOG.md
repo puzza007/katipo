@@ -9,6 +9,12 @@ All notable changes to this project are documented here. This project follows
 - Development and CI now build and test against the current dependency
   versions within the published ranges: `worker_pool` 6.5.3 and
   `opentelemetry_api` 1.5.0 (previously locked to 6.0.1 and 1.4.0).
+- `cancel/2` and `update_flow/3` now route directly to the worker holding
+  the request: the returned `Ref` is a process alias, so commands are a
+  single O(1) send instead of a broadcast to every pool worker (each of
+  which scanned its request table). The pool argument is retained for API
+  compatibility and no longer used; late or unknown-Ref commands are
+  dropped by the runtime, preserving the best-effort no-op contract.
 
 ### Added
 - Streaming responses: pass `stream => true` to any async function to

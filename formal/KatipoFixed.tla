@@ -6,9 +6,10 @@
 (*     caller's monitor converts every dispatch failure -- dead/restarting *)
 (*     worker name, call lost in a crashing worker's mailbox, badarg crash *)
 (*     in send_to_port -- into an immediate {error, worker_died} return.   *)
-(*  2. cancel_async removes the request from Reqs BEFORE port_command and  *)
-(*     swallows badarg, so a cancel against a dead port neither crashes    *)
-(*     the worker nor lets terminate/2 message a cancelled caller.         *)
+(*  2. the cancel handler removes the request from Reqs and only then      *)
+(*     writes the best-effort port abort (badarg swallowed), so a cancel   *)
+(*     against a dead port neither crashes the worker nor lets             *)
+(*     terminate/2 message a cancelled caller.                             *)
 (*                                                                         *)
 (* delivered[r] counts terminal outcomes for r: an async message from the  *)
 (* worker OR an {error, worker_died} return from async_req itself.         *)
@@ -104,8 +105,10 @@ SendAsync(r) ==
   /\ UNCHANGED <<wAlive, pAlive, pQ, reqs, timerFired, conns, cancelled,
                  effCancel, effCancelSnap, deaths, cancelPollution, chunksEmitted, progressStop>>
 
-\* katipo:cancel/2 -> wpool:broadcast: still a cast, dropped if dead. Only
-\* refs whose admission call returned {ok, Ref} can be cancelled.
+\* katipo:cancel/2: a direct send to the request's alias Ref, delivered
+\* iff the owning worker is alive (the alias dies with it -- same drop
+\* semantics the old broadcast-cast had). Only refs whose admission call
+\* returned {ok, Ref} can be cancelled.
 SendCancel(r) ==
   /\ r \in sent /\ r \notin cancelled
   /\ r \notin QueuedCalls(wQ)  \* async_req has returned
@@ -141,9 +144,10 @@ WorkerRecvReq(r) ==
 \* cancel and timeout paths, mirroring the code's shared helper.
 AbortPQ(r) == IF pAlive THEN Append(pQ, CancelMsg(r)) ELSE pQ
 
-\* handle_cast({cancel, Ref}) -> cancel_async (FIXED): cancel_timer, then
-\* maps:remove, then abort_transfer. The worker survives a cancel against a
-\* dead port and the request is out of Reqs either way.
+\* handle_info({cancel, Ref}) (sent to the request's alias): cancel_timer,
+\* remove from Reqs, deactivate the alias, then abort_transfer. The worker
+\* survives a cancel against a dead port and the request is out of Reqs
+\* either way.
 WorkerRecvCancel(r) ==
   /\ wAlive /\ wQ # <<>> /\ Head(wQ) = CancelMsg(r)
   /\ wQ' = Tail(wQ)
