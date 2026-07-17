@@ -7,6 +7,12 @@ All notable changes to this project are documented here. This project follows
 
 ## [2.0.0-rc.2] — 2026-07-18
 
+### Changed
+- Dependency requirements are published as semver ranges (`~> 6.0` for
+  `worker_pool`, `~> 1.4` for `opentelemetry_api`, `~> 0.5.1` for
+  `opentelemetry_api_experimental`) instead of exact pins, so consumers can
+  unify versions with the rest of their dependency tree.
+
 ### Added
 - `xref` and `lint` are now enforced in CI.
 - A TLA+ model of the worker/port protocol under `formal/`, with configs
