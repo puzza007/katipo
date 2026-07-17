@@ -16,6 +16,14 @@
 (* See Katipo.tla for the pre-fix model, whose counterexamples motivated   *)
 (* these changes; all properties that failed there are expected to hold    *)
 (* here.                                                                   *)
+(*                                                                         *)
+(* Streaming flow control (stream_window/update_flow) is not modeled       *)
+(* explicitly: credits only gate when the port may emit a progress message *)
+(* (a strict restriction of PortEmitChunk below) and flow commands only    *)
+(* increment a port-side counter, so it removes behaviors from this spec   *)
+(* without adding caller-facing message kinds. Safety properties are       *)
+(* preserved under behavior restriction, and EventualOutcome does not      *)
+(* depend on chunk emission (a stalled transfer resolves via TimerFire).   *)
 (***************************************************************************)
 EXTENDS Naturals, Sequences, FiniteSets
 

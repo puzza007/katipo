@@ -76,6 +76,7 @@
 -define(CA_CACHE_TIMEOUT, 32).
 -define(PIPEWAIT, 33).
 -define(STREAM, 34).
+-define(STREAM_WINDOW, 35).
 
 -define(DEFAULT_REQ_TIMEOUT, 30000).
 -define(FOLLOWLOCATION_TRUE, 1).
@@ -97,6 +98,7 @@
 -define(PIPEWAIT_FALSE, 0).
 -define(STREAM_TRUE, 1).
 -define(STREAM_FALSE, 0).
+-define(STREAM_WINDOW_UNLIMITED, -1).
 
 %% CURLOPT_HTTP_VERSION values
 -define(CURL_HTTP_VERSION_NONE, 0).
@@ -162,7 +164,8 @@
           dns_cache_timeout = 60 :: integer(),
           ca_cache_timeout = 86400 :: integer(),
           pipewait = ?PIPEWAIT_TRUE :: ?PIPEWAIT_FALSE | ?PIPEWAIT_TRUE,
-          stream = ?STREAM_FALSE :: ?STREAM_FALSE | ?STREAM_TRUE
+          stream = ?STREAM_FALSE :: ?STREAM_FALSE | ?STREAM_TRUE,
+          stream_window = ?STREAM_WINDOW_UNLIMITED :: integer()
          }).
 
 -endif.

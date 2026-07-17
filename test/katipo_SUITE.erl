@@ -170,7 +170,8 @@ groups() ->
        digest_authorised,
        proxy_couldnt_connect,
        streaming_response,
-       streaming_empty_body]},
+       streaming_empty_body,
+       streaming_flow_control]},
      {curl, [parallel],
       [url_missing,
        bad_method,
@@ -262,7 +263,9 @@ groups() ->
        streaming_timeout,
        streaming_connect_error,
        streaming_sync_rejected,
-       streaming_worker_death]},
+       streaming_window_invalid,
+       streaming_worker_death,
+       streaming_flow_starvation]},
      {otel, [],
       [otel_span_created,
        otel_metrics_recorded,
@@ -1314,6 +1317,60 @@ streaming_response(Config) ->
     <<147,0,83,230,212,92,147,255,38,102,201,139,205,150,16,161>> =
         crypto:hash(md5, Body).
 
+%% stream_window => 1 delivers exactly one chunk then pauses the transfer
+%% (client-side, so independent of server pacing) until update_flow/3
+%% grants another credit; the reassembled body must still be complete.
+streaming_flow_control(Config) ->
+    {req_opts, Opts} = lists:keyfind(req_opts, 1, Config),
+    Url = httpbin_url(Config, <<"/range/65536">>),
+    {ok, Ref} = katipo:async_req(?POOL, Opts#{url => Url,
+                                              method => get,
+                                              stream => true,
+                                              stream_window => 1}),
+    receive
+        {katipo_headers, Ref, #{status := 200}} -> ok
+    after 10000 ->
+            ct:fail(no_headers)
+    end,
+    %% The 64k body spans several curl write buffers, so with one credit
+    %% exactly one chunk arrives and the transfer pauses.
+    Chunk1 = receive
+                 {katipo_chunk, Ref, C} -> C
+             after 10000 ->
+                     ct:fail(no_first_chunk)
+             end,
+    receive
+        {katipo_chunk, Ref, _} -> ct:fail(chunk_beyond_window);
+        {katipo_done, Ref, Done} -> ct:fail({done_beyond_window, Done})
+    after 500 ->
+            ok
+    end,
+    Body = collect_with_credits(Ref, [Chunk1]),
+    65536 = byte_size(Body),
+    <<186,131,222,164,69,192,190,233,191,135,112,45,73,76,148,71>> =
+        crypto:hash(md5, Body),
+    %% Granting credits to an unknown Ref is a harmless no-op.
+    ok = katipo:update_flow(?POOL, make_ref(), 1).
+
+collect_with_credits(Ref, Acc) ->
+    ok = katipo:update_flow(?POOL, Ref, 1),
+    receive
+        {katipo_chunk, Ref, Bin} ->
+            collect_with_credits(Ref, [Bin | Acc]);
+        {katipo_done, Ref, #{status := 200}} ->
+            iolist_to_binary(lists:reverse(Acc));
+        {katipo_error, Ref, Error} ->
+            ct:fail({stream_error, Error})
+    after 10000 ->
+            ct:fail(stream_stalled_with_credits)
+    end.
+
+%% stream_window must be a positive integer or infinity.
+streaming_window_invalid(_Config) ->
+    {error, #{code := bad_opts}} =
+        katipo:async_get(?POOL, <<"http://192.0.2.1">>,
+                         #{stream => true, stream_window => 0}).
+
 %% A bodyless response still delivers headers, then done, with no chunks.
 streaming_empty_body(Config) ->
     {req_opts, Opts} = lists:keyfind(req_opts, 1, Config),
@@ -1372,6 +1429,21 @@ streaming_connect_error(_Config) ->
 streaming_sync_rejected(_Config) ->
     {error, #{code := bad_opts}} =
         katipo:get(?POOL, <<"http://192.0.2.1">>, #{stream => true}).
+
+%% The request timer keeps running while a transfer is paused awaiting
+%% credits: a consumer that stops granting eventually gets the same
+%% terminal operation_timedout as any stalled request. Both curl-side and
+%% Erlang-side timers are capped so whichever fires first ends the test.
+streaming_flow_starvation(Config) ->
+    {req_opts, Opts} = lists:keyfind(req_opts, 1, Config),
+    Url = httpbin_url(Config, <<"/range/65536">>),
+    {ok, Ref} = katipo:async_req(?POOL, Opts#{url => Url,
+                                              method => get,
+                                              stream => true,
+                                              stream_window => 1,
+                                              connecttimeout_ms => 1500,
+                                              timeout_ms => 1500}),
+    ok = expect_stream_error(Ref, operation_timedout, 10000).
 
 %% Worker death mid-stream delivers the same prompt terminal worker_died
 %% as it does for buffered async requests.

@@ -72,6 +72,16 @@ handle_cast({cancel, UserRef}, State = #state{port = Port, reqs = Reqs}) ->
     %% Broadcast reaches every worker; only the one holding this request acts.
     Reqs2 = cancel_async(Port, UserRef, Reqs),
     {noreply, State#state{reqs = Reqs2}};
+handle_cast({flow, UserRef, N}, State = #state{port = Port, reqs = Reqs}) ->
+    %% Broadcast, like cancel: grant N more chunk credits to the streaming
+    %% request with this user Ref, if this worker holds it.
+    _ = case find_async(UserRef, Reqs) of
+            {ok, {Self, Ref}, _Tref, _Obs} ->
+                port_cmd(Port, {Self, Ref, flow, N});
+            error ->
+                ok
+        end,
+    {noreply, State};
 handle_cast(Msg, State) ->
     logger:error("Unexpected cast: ~p", [Msg]),
     {noreply, State}.
@@ -211,12 +221,16 @@ cancel_async(Port, UserRef, Reqs) ->
     end.
 
 %% Ask the C port to abort the in-flight transfer identified by {Pid, Ref}
-%% (a no-op there if it already completed). Best-effort: port_command raises
-%% badarg if the port died and its 'EXIT' message is still queued behind us;
-%% the transfer is gone either way, and crashing here would let terminate/2
-%% message callers that have already been dealt with.
+%% (a no-op there if it already completed).
 abort_transfer(Port, {Pid, Ref}) ->
-    try port_command(Port, term_to_binary({Pid, Ref, cancel}))
+    port_cmd(Port, {Pid, Ref, cancel}).
+
+%% Best-effort port write: port_command raises badarg if the port died and
+%% its 'EXIT' message is still queued behind us; whatever we were telling the
+%% port is moot then, and crashing here would let terminate/2 message callers
+%% that have already been dealt with.
+port_cmd(Port, Tuple) ->
+    try port_command(Port, term_to_binary(Tuple))
     catch error:badarg -> ok
     end,
     ok.
@@ -264,7 +278,8 @@ send_to_port(Port, {Self, Ref},
                   dns_cache_timeout = DNSCacheTimeout,
                   ca_cache_timeout = CACacheTimeout,
                   pipewait = Pipewait,
-                  stream = Stream}) ->
+                  stream = Stream,
+                  stream_window = StreamWindow}) ->
     Opts = [{?CONNECTTIMEOUT_MS, ConnTimeoutMs},
             {?FOLLOWLOCATION, FollowLocation},
             {?SSL_VERIFYHOST, SslVerifyHost},
@@ -292,7 +307,8 @@ send_to_port(Port, {Self, Ref},
             {?DNS_CACHE_TIMEOUT, DNSCacheTimeout},
             {?CA_CACHE_TIMEOUT, CACacheTimeout},
             {?PIPEWAIT, Pipewait},
-            {?STREAM, Stream}],
+            {?STREAM, Stream},
+            {?STREAM_WINDOW, StreamWindow}],
     Command = {Self, Ref, Method, Url, Headers, CookieJar, Body, Opts},
     true = port_command(Port, term_to_binary(Command)).
 

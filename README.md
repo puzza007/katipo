@@ -79,6 +79,7 @@ katipo:async_Method(Pool :: atom(), URL :: binary(), ReqOptions :: map()).
 katipo:await(Ref :: reference()).
 katipo:await(Ref :: reference(), Timeout :: timeout()).
 katipo:cancel(Pool :: atom(), Ref :: reference()).
+katipo:update_flow(Pool :: atom(), Ref :: reference(), Credits :: pos_integer()).
 
 ```
 
@@ -112,6 +113,8 @@ katipo:cancel(Pool :: atom(), Ref :: reference()).
 | `sslkey_blob`           | `binary()` (DER format)             | `undefined` | [docs](https://curl.se/libcurl/c/CURLOPT_SSLKEY_BLOB.html) curl >= 7.71.0      |
 | `keypasswd`             | `binary()`                          | `undefined` | [docs](https://curl.se/libcurl/c/CURLOPT_KEYPASSWD.html)                       |
 | `http_auth`             | `basic` <br> `digest` <br> `ntlm` <br> `negotiate` | `undefined` | [docs](https://curl.se/libcurl/c/CURLOPT_HTTPAUTH.html)                        |
+| `stream`                | `boolean()`                         | `false`     | async only; deliver the body incrementally (see Streaming responses)                |
+| `stream_window`         | `pos_integer()` \| `infinity`       | `infinity`  | chunk credits before the transfer pauses awaiting `update_flow/3`                   |
 | `username`              | `binary()`                          | `undefined` | [docs](https://curl.se/libcurl/c/CURLOPT_USERNAME.html)                        |
 | `password`              | `binary()`                          | `undefined` | [docs](https://curl.se/libcurl/c/CURLOPT_PASSWORD.html)                        |
 | `userpwd`               | `binary()`                          | `undefined` | [docs](https://curl.se/libcurl/c/CURLOPT_USERPWD.html)                         |
@@ -171,8 +174,19 @@ A `{katipo_error, Ref, ErrorMap}` message is terminal and can arrive at any
 point, including mid-body (e.g. a timeout). `cancel/2` works as usual; after
 it takes effect no further messages arrive. Streaming is async-only — the
 synchronous functions reject `stream => true` — and `await/1,2` does not
-apply. Chunks are delivered as fast as the transfer produces them; there is
-no flow control back to the server.
+apply.
+
+By default chunks arrive as fast as the transfer produces them. To bound the
+consumer's exposure, pass `stream_window => N`: after `N` outstanding chunk
+messages the transfer pauses client-side (curl stops reading the socket, so
+backpressure reaches the server through TCP or the HTTP/2/3 stream window)
+until `katipo:update_flow(Pool, Ref, Credits)` grants more. A window of `N`
+bounds buffered data to roughly `N` × 16KB (curl's write-buffer size) plus
+one pipe's worth. The request timer keeps running while a transfer is
+paused, so a consumer that stops granting credits eventually receives
+`operation_timedout`. Use a reasonably current libcurl when combining
+`stream_window` with HTTP/2/3 multiplexing — older releases could stall
+other streams sharing the connection while one stream is paused.
 
 #### Pool Options
 

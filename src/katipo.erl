@@ -94,6 +94,7 @@ worker failure arrives.
 -export([await/1]).
 -export([await/2]).
 -export([cancel/2]).
+-export([update_flow/3]).
 
 -export([check_opts/1]).
 
@@ -313,6 +314,13 @@ to streamed requests; receive the messages directly. Streaming is only
 available through the async API -- `req/2` and the synchronous wrappers
 reject `stream => true`.
 
+By default chunks are delivered as fast as the transfer produces them. Pass
+`stream_window => N` to bound that: the transfer pauses (propagating
+backpressure to the server via TCP or the HTTP/2/3 stream window) once `N`
+chunk messages are outstanding, and `update_flow/3` grants more. The request
+timer keeps running while a transfer is paused, so a consumer that stops
+granting credits eventually receives `operation_timedout`.
+
 Caveat shared with buffered mode: when following redirects
 (`followlocation => true`), a redirect response that itself carries a body
 surfaces that body through the write path -- in streaming form the
@@ -355,6 +363,17 @@ dispatch_async(PoolName, ReplyTo, UserRef, Req, Obs) ->
             katipo_span:finish_async(Obs, error, Error, []),
             {error, Error}
     end.
+
+-doc """
+Grants `N` more chunk-message credits to the streaming request `Ref`, which
+must have been started with a bounded `stream_window`. Best-effort like
+`cancel/2`: granting credits to an unknown, completed, or unbounded-window
+request is a harmless no-op.
+""".
+-spec update_flow(katipo_pool:name(), reference(), pos_integer()) -> ok.
+update_flow(PoolName, Ref, N) when is_integer(N) andalso N > 0 ->
+    wpool:broadcast(PoolName, {flow, Ref, N}),
+    ok.
 
 -doc #{equiv => await/2}.
 -spec await(reference()) -> response().

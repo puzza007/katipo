@@ -52,6 +52,7 @@
 #define K_CURLOPT_CA_CACHE_TIMEOUT 32
 #define K_CURLOPT_PIPEWAIT 33
 #define K_CURLOPT_STREAM 34
+#define K_CURLOPT_STREAM_WINDOW 35
 
 #define K_CURLAUTH_BASIC 100
 #define K_CURLAUTH_DIGEST 101
@@ -94,9 +95,13 @@ typedef struct _ConnInfo {
   /* Streaming (stream => true): body bytes are forwarded as they arrive
    * instead of being buffered in `memory`. headers_sent tracks the one-time
    * headers message that precedes the first chunk (or the done message for
-   * bodyless responses). */
+   * bodyless responses). window is the remaining chunk-message credits
+   * (-1 = unbounded); at zero the transfer is paused until the consumer
+   * grants more via a flow command. */
   int stream;
   int headers_sent;
+  long window;
+  int paused;
   // metrics
   double total_time;
   double namelookup_time;
@@ -148,6 +153,7 @@ typedef struct _EasyOpts {
   long curlopt_ca_cache_timeout;
   long curlopt_pipewait;
   long curlopt_stream;
+  long curlopt_stream_window;
 } EasyOpts;
 
 static const char *curl_error_code(CURLcode error) {
@@ -399,6 +405,8 @@ static const char *curl_error_code(CURLcode error) {
       return "unknown_error";
   }
 }
+
+static void check_multi_info(GlobalInfo *global);
 
 /* Die if we get a bad CURLMcode somewhere */
 static void mcode_or_die(const char *where, CURLMcode code) {
@@ -701,6 +709,35 @@ static void cancel_conn(GlobalInfo *global, erlang_pid *pid, erlang_ref *ref) {
   }
 }
 
+/* Grant n more chunk credits to the streaming transfer matching {pid, ref}
+ * and resume it if it was paused waiting for credits. A no-op if the
+ * transfer is gone (completed/cancelled) or was started unbounded. */
+static void flow_conn(GlobalInfo *global, erlang_pid *pid, erlang_ref *ref,
+                      long n) {
+  CURLMcode rc;
+
+  for (ConnInfo *conn = global->active_conns; conn; conn = conn->next) {
+    if (ei_cmp_refs(conn->ref, ref) == 0 && ei_cmp_pids(conn->pid, pid) == 0) {
+      if (conn->window < 0 || n <= 0) {
+        return;
+      }
+      /* Credits first: curl may invoke write_cb synchronously inside
+       * curl_easy_pause to flush the buffer it held while paused. */
+      conn->window += n;
+      if (conn->paused) {
+        conn->paused = 0;
+        curl_easy_pause(conn->easy, CURLPAUSE_CONT);
+        /* Kick the multi so socket reading resumes promptly. */
+        rc = curl_multi_socket_action(global->multi, CURL_SOCKET_TIMEOUT, 0,
+                                      &global->still_running);
+        mcode_or_die("flow_conn: curl_multi_socket_action", rc);
+        check_multi_info(global);
+      }
+      return;
+    }
+  }
+}
+
 static void check_multi_info(GlobalInfo *global) {
   CURLMsg *msg;
   int msgs_left;
@@ -841,10 +878,21 @@ static size_t write_cb(void *ptr, size_t size, size_t nmemb, void *data) {
    * chunk (by which point header_cb has seen the final response's header
    * block, including after redirects). */
   if (conn->stream) {
+    if (conn->window == 0) {
+      /* Out of credits: pause the transfer. curl keeps this buffer and
+       * re-delivers it after CURLPAUSE_CONT, so nothing is sent or counted
+       * now. Pausing stops socket reads, so backpressure reaches the
+       * server via TCP or the HTTP/2/3 stream window. */
+      conn->paused = 1;
+      return CURL_WRITEFUNC_PAUSE;
+    }
     if (!conn->headers_sent) {
       send_headers_to_erlang(conn);
     }
     send_chunk_to_erlang(conn, ptr, realsize);
+    if (conn->window > 0) {
+      conn->window--;
+    }
     return realsize;
   }
 
@@ -962,6 +1010,7 @@ static void new_conn(long method, char *url, struct curl_slist *req_headers,
   conn->post_data = post_data;
   conn->post_data_size = post_data_size;
   conn->stream = eopts.curlopt_stream != 0;
+  conn->window = eopts.curlopt_stream_window;
 
   #if LIBCURL_VERSION_NUM >= 0x075500 /* 7.85.0 */
     curl_easy_setopt(conn->easy, CURLOPT_PROTOCOLS_STR, "http,https");
@@ -1265,6 +1314,9 @@ static int parse_eopts(char *buf, int *index, EasyOpts *eopts) {
       case K_CURLOPT_STREAM:
         eopts->curlopt_stream = eopt_long;
         break;
+      case K_CURLOPT_STREAM_WINDOW:
+        eopts->curlopt_stream_window = eopt_long;
+        break;
       default:
         break;
       }
@@ -1434,9 +1486,29 @@ static void erl_input(struct bufferevent *ev, void *arg) {
 
     /* Cancel command: {Pid, Ref, cancel} (arity 3). Abort the matching
      * in-flight transfer if we still have it; no response is sent. Requests
-     * are 8-tuples, so arity discriminates the two. */
+     * are 8-tuples, so arity discriminates the command kinds. */
     if (arity == 3) {
       cancel_conn(global, pid, ref);
+      free(pid);
+      free(ref);
+      free(buf);
+      continue;
+    }
+
+    /* Flow command: {Pid, Ref, flow, N} (arity 4). Grant N more chunk
+     * credits to the matching streaming transfer. Malformed flow commands
+     * are dropped silently -- replying with a parse error would be
+     * delivered as a terminal message and kill a healthy stream. */
+    if (arity == 4) {
+      char flow_atom[MAXATOMLEN];
+      long flow_n;
+      if (ei_decode_atom(buf, &index, flow_atom) ||
+          strcmp(flow_atom, "flow") != 0 ||
+          ei_decode_long(buf, &index, &flow_n)) {
+        fprintf(stderr, "ERROR: Couldn't decode flow command\n");
+      } else {
+        flow_conn(global, pid, ref, flow_n);
+      }
       free(pid);
       free(ref);
       free(buf);
@@ -1483,6 +1555,7 @@ static void erl_input(struct bufferevent *ev, void *arg) {
         .curlopt_dns_cache_timeout = 60,
         .curlopt_ca_cache_timeout = 86400,
         .curlopt_pipewait = 1,
+        .curlopt_stream_window = -1,
     };
 
     if (parse_eopts(buf, &index, &eopts) != 0) {

@@ -241,6 +241,10 @@ opt(stream, true, {Req, Errors}) ->
     {Req#req{stream = ?STREAM_TRUE}, Errors};
 opt(stream, false, {Req, Errors}) ->
     {Req#req{stream = ?STREAM_FALSE}, Errors};
+opt(stream_window, infinity, {Req, Errors}) ->
+    {Req#req{stream_window = ?STREAM_WINDOW_UNLIMITED}, Errors};
+opt(stream_window, N, {Req, Errors}) when is_integer(N) andalso N > 0 ->
+    {Req#req{stream_window = N}, Errors};
 opt(reply_to, Pid, {Req, Errors}) when is_pid(Pid) ->
     {Req, Errors};
 opt(K, V, {Req, Errors}) ->

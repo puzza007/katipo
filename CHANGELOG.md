@@ -17,6 +17,10 @@ All notable changes to this project are documented here. This project follows
   `{katipo_done, Ref, _}` instead of one buffered body.
   `cancel/2`, timeouts, and worker-death handling behave as for buffered
   async requests; synchronous functions reject the option.
+- Credit-based flow control for streamed responses: `stream_window => N`
+  pauses the transfer after `N` outstanding chunk messages (propagating
+  backpressure to the server) until `katipo:update_flow/3` grants more
+  credits. Defaults to `infinity`, the previous behavior.
 
 ### Fixed
 - When the Erlang-side request timer fires (the backstop behind curl's own
