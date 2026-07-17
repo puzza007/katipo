@@ -51,6 +51,7 @@
 #define K_CURLOPT_DNS_CACHE_TIMEOUT 31
 #define K_CURLOPT_CA_CACHE_TIMEOUT 32
 #define K_CURLOPT_PIPEWAIT 33
+#define K_CURLOPT_STREAM 34
 
 #define K_CURLAUTH_BASIC 100
 #define K_CURLAUTH_DIGEST 101
@@ -90,6 +91,12 @@ typedef struct _ConnInfo {
   long response_code;
   char *post_data;
   long post_data_size;
+  /* Streaming (stream => true): body bytes are forwarded as they arrive
+   * instead of being buffered in `memory`. headers_sent tracks the one-time
+   * headers message that precedes the first chunk (or the done message for
+   * bodyless responses). */
+  int stream;
+  int headers_sent;
   // metrics
   double total_time;
   double namelookup_time;
@@ -140,6 +147,7 @@ typedef struct _EasyOpts {
   long curlopt_dns_cache_timeout;
   long curlopt_ca_cache_timeout;
   long curlopt_pipewait;
+  long curlopt_stream;
 } EasyOpts;
 
 static const char *curl_error_code(CURLcode error) {
@@ -537,6 +545,82 @@ static void send_ok_to_erlang(ConnInfo *conn) {
   ei_x_free(&result);
 }
 
+/* Streaming: {headers, {Pid, Ref}, {Status, Headers}} -- sent once, before
+ * the first chunk (or before done, for a bodyless response). */
+static void send_headers_to_erlang(ConnInfo *conn) {
+  ei_x_buff result;
+
+  curl_easy_getinfo(conn->easy, CURLINFO_RESPONSE_CODE, &conn->response_code);
+
+  if (ei_x_new_with_version(&result) ||
+      ei_x_encode_tuple_header(&result, 2) ||
+      ei_x_encode_atom(&result, "headers") ||
+      ei_x_encode_tuple_header(&result, 2) ||
+
+      ei_x_encode_tuple_header(&result, 2) ||
+      ei_x_encode_pid(&result, conn->pid) ||
+      ei_x_encode_ref(&result, conn->ref) ||
+
+      ei_x_encode_tuple_header(&result, 2) ||
+      ei_x_encode_long(&result, conn->response_code) ||
+      ei_x_encode_list_header(&result, conn->num_headers)) {
+    errx(2, "Failed to encode headers message");
+  }
+
+  encode_headers(&result, conn);
+
+  send_to_erlang(conn->global, result.buff, result.index);
+  ei_x_free(&result);
+  conn->headers_sent = 1;
+}
+
+/* Streaming: {chunk, {Pid, Ref}, Body} -- one per write callback. */
+static void send_chunk_to_erlang(ConnInfo *conn, void *data, size_t len) {
+  ei_x_buff result;
+
+  if (ei_x_new_with_version(&result) ||
+      ei_x_encode_tuple_header(&result, 2) ||
+      ei_x_encode_atom(&result, "chunk") ||
+      ei_x_encode_tuple_header(&result, 2) ||
+
+      ei_x_encode_tuple_header(&result, 2) ||
+      ei_x_encode_pid(&result, conn->pid) ||
+      ei_x_encode_ref(&result, conn->ref) ||
+
+      ei_x_encode_binary(&result, data, len)) {
+    errx(2, "Failed to encode chunk message");
+  }
+
+  send_to_erlang(conn->global, result.buff, result.index);
+  ei_x_free(&result);
+}
+
+/* Streaming: {done, {Pid, Ref}, {Status, CookieJar, Metrics}} -- terminal. */
+static void send_done_to_erlang(ConnInfo *conn) {
+  ei_x_buff result;
+
+  if (ei_x_new_with_version(&result) ||
+      ei_x_encode_tuple_header(&result, 2) ||
+      ei_x_encode_atom(&result, "done") ||
+      ei_x_encode_tuple_header(&result, 2) ||
+
+      ei_x_encode_tuple_header(&result, 2) ||
+      ei_x_encode_pid(&result, conn->pid) ||
+      ei_x_encode_ref(&result, conn->ref) ||
+
+      ei_x_encode_tuple_header(&result, 3) ||
+      ei_x_encode_long(&result, conn->response_code)) {
+    errx(2, "Failed to encode done message");
+  }
+
+  encode_cookies(&result, conn);
+
+  encode_metrics(&result, conn);
+
+  send_to_erlang(conn->global, result.buff, result.index);
+  ei_x_free(&result);
+}
+
 static void send_error_to_erlang(CURLcode curl_code, ConnInfo *conn) {
   ei_x_buff result;
   size_t error_msg_len;
@@ -639,7 +723,16 @@ static void check_multi_info(GlobalInfo *global) {
       curl_easy_getinfo(easy, CURLINFO_STARTTRANSFER_TIME, &conn->starttransfer_time);
 
       if (res == CURLE_OK) {
-        send_ok_to_erlang(conn);
+        if (conn->stream) {
+          /* A bodyless response never entered write_cb, so the headers
+           * message may still be owed before the terminal done. */
+          if (!conn->headers_sent) {
+            send_headers_to_erlang(conn);
+          }
+          send_done_to_erlang(conn);
+        } else {
+          send_ok_to_erlang(conn);
+        }
       } else {
         send_error_to_erlang(res, conn);
       }
@@ -742,6 +835,18 @@ static int multi_timer_cb(CURLM *multi, long timeout_ms, void *userp) {
 static size_t write_cb(void *ptr, size_t size, size_t nmemb, void *data) {
   size_t realsize = size * nmemb;
   ConnInfo *conn = (ConnInfo *)data;
+
+  /* Streaming transfers forward body bytes as they arrive instead of
+   * buffering them; the headers message goes out once, before the first
+   * chunk (by which point header_cb has seen the final response's header
+   * block, including after redirects). */
+  if (conn->stream) {
+    if (!conn->headers_sent) {
+      send_headers_to_erlang(conn);
+    }
+    send_chunk_to_erlang(conn, ptr, realsize);
+    return realsize;
+  }
 
   size_t needed = conn->size + realsize;
   if (needed > conn->capacity) {
@@ -856,6 +961,7 @@ static void new_conn(long method, char *url, struct curl_slist *req_headers,
   conn->req_cookies = req_cookies;
   conn->post_data = post_data;
   conn->post_data_size = post_data_size;
+  conn->stream = eopts.curlopt_stream != 0;
 
   #if LIBCURL_VERSION_NUM >= 0x075500 /* 7.85.0 */
     curl_easy_setopt(conn->easy, CURLOPT_PROTOCOLS_STR, "http,https");
@@ -1155,6 +1261,9 @@ static int parse_eopts(char *buf, int *index, EasyOpts *eopts) {
         break;
       case K_CURLOPT_PIPEWAIT:
         eopts->curlopt_pipewait = eopt_long;
+        break;
+      case K_CURLOPT_STREAM:
+        eopts->curlopt_stream = eopt_long;
         break;
       default:
         break;

@@ -237,6 +237,10 @@ opt(pipewait, true, {Req, Errors}) ->
     {Req#req{pipewait = ?PIPEWAIT_TRUE}, Errors};
 opt(pipewait, false, {Req, Errors}) ->
     {Req#req{pipewait = ?PIPEWAIT_FALSE}, Errors};
+opt(stream, true, {Req, Errors}) ->
+    {Req#req{stream = ?STREAM_TRUE}, Errors};
+opt(stream, false, {Req, Errors}) ->
+    {Req#req{stream = ?STREAM_FALSE}, Errors};
 opt(reply_to, Pid, {Req, Errors}) when is_pid(Pid) ->
     {Req, Errors};
 opt(K, V, {Req, Errors}) ->

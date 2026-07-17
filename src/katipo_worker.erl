@@ -76,6 +76,62 @@ handle_cast(Msg, State) ->
     logger:error("Unexpected cast: ~p", [Msg]),
     {noreply, State}.
 
+%% One decoded message from the C port. Terminal messages ({ok, ...},
+%% {error, ...}, {done, ...}) resolve the request: cancel its timer, deliver,
+%% and drop it from Reqs. Streaming progress messages ({headers, ...},
+%% {chunk, ...}) are forwarded to the async reply_to and leave the request in
+%% flight. Any message whose From is no longer in Reqs is dropped silently --
+%% the request timed out, was cancelled, or already completed.
+handle_port_msg({ok, {From, {Status, Headers, CookieJar, Body, Metrics}}}, Reqs) ->
+    R = #{status => Status,
+          headers => parse_headers(Headers),
+          cookiejar => CookieJar,
+          body => Body},
+    finish_req(From, ok, {R, Metrics}, Reqs);
+handle_port_msg({error, {From, {Code, Message, Metrics}}}, Reqs) ->
+    Error = #{code => Code, message => Message},
+    finish_req(From, error, {Error, Metrics}, Reqs);
+handle_port_msg({headers, {From, {Status, Headers}}}, Reqs) ->
+    _ = case maps:find(From, Reqs) of
+            {ok, {_Tref, {async, ReplyTo, UserRef, _Obs}}} ->
+                ReplyTo ! {katipo_headers, UserRef,
+                           #{status => Status,
+                             headers => parse_headers(Headers)}};
+            _ ->
+                ok
+        end,
+    Reqs;
+handle_port_msg({chunk, {From, Body}}, Reqs) ->
+    _ = case maps:find(From, Reqs) of
+            {ok, {_Tref, {async, ReplyTo, UserRef, _Obs}}} ->
+                ReplyTo ! {katipo_chunk, UserRef, Body};
+            _ ->
+                ok
+        end,
+    Reqs;
+handle_port_msg({done, {From, {Status, CookieJar, Metrics}}}, Reqs) ->
+    case maps:find(From, Reqs) of
+        {ok, {Tref, {async, ReplyTo, UserRef, Obs}}} ->
+            _ = erlang:cancel_timer(Tref),
+            ReplyTo ! {katipo_done, UserRef,
+                       #{status => Status, cookiejar => CookieJar}},
+            katipo_span:finish_async(Obs, ok, #{status => Status}, Metrics),
+            maps:remove(From, Reqs);
+        _ ->
+            Reqs
+    end.
+
+%% Resolve a request with its terminal result, if it is still in flight.
+finish_req(From, Result, Response, Reqs) ->
+    _ = case maps:find(From, Reqs) of
+            {ok, {Tref, Kind}} ->
+                _ = erlang:cancel_timer(Tref),
+                deliver(Kind, From, Result, Response);
+            error ->
+                ok
+        end,
+    maps:remove(From, Reqs).
+
 %% Deliver a completed response to a sync caller (via gen_server:reply) or an
 %% async ReplyTo (via a flattened katipo_response/katipo_error message).
 deliver(sync, From, Result, Response) ->
@@ -98,26 +154,7 @@ deliver_error({async, ReplyTo, UserRef, Obs}, _From, Error) ->
     katipo_span:finish_async(Obs, error, Error, []).
 
 handle_info({Port, {data, Data}}, State = #state{port = Port, reqs = Reqs}) ->
-    {Result, {From, Response}} =
-        case binary_to_term(Data) of
-            {ok, {From0, {Status, Headers, CookieJar, Body, Metrics}}} ->
-                R = #{status => Status,
-                      headers => parse_headers(Headers),
-                      cookiejar => CookieJar,
-                      body => Body},
-                {ok, {From0, {R, Metrics}}};
-            {error, {From0, {Code, Message, Metrics}}} ->
-                Error = #{code => Code, message => Message},
-                {error, {From0, {Error, Metrics}}}
-        end,
-    _ = case maps:find(From, Reqs) of
-        {ok, {Tref, Kind}} ->
-            _ = erlang:cancel_timer(Tref),
-            deliver(Kind, From, Result, Response);
-        error ->
-            ok
-    end,
-    Reqs2 = maps:remove(From, Reqs),
+    Reqs2 = handle_port_msg(binary_to_term(Data), Reqs),
     {noreply, State#state{reqs = Reqs2}};
 handle_info({timeout, Tref, {req_timeout, From}},
             State = #state{port = Port, reqs = Reqs}) ->
@@ -226,7 +263,8 @@ send_to_port(Port, {Self, Ref},
                   userpwd = UserPwd,
                   dns_cache_timeout = DNSCacheTimeout,
                   ca_cache_timeout = CACacheTimeout,
-                  pipewait = Pipewait}) ->
+                  pipewait = Pipewait,
+                  stream = Stream}) ->
     Opts = [{?CONNECTTIMEOUT_MS, ConnTimeoutMs},
             {?FOLLOWLOCATION, FollowLocation},
             {?SSL_VERIFYHOST, SslVerifyHost},
@@ -253,7 +291,8 @@ send_to_port(Port, {Self, Ref},
             {?USERPWD, UserPwd},
             {?DNS_CACHE_TIMEOUT, DNSCacheTimeout},
             {?CA_CACHE_TIMEOUT, CACacheTimeout},
-            {?PIPEWAIT, Pipewait}],
+            {?PIPEWAIT, Pipewait},
+            {?STREAM, Stream}],
     Command = {Self, Ref, Method, Url, Headers, CookieJar, Body, Opts},
     true = port_command(Port, term_to_binary(Command)).
 

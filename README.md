@@ -153,6 +153,27 @@ receive `{error, #{code => worker_died}}`; if an async request cannot be
 handed to a worker at all (it died and is being restarted), `async_req` itself
 returns `{error, #{code => worker_died}}` and no message is delivered.
 
+#### Streaming responses
+
+Pass `stream => true` to any async function to receive the body incrementally
+instead of as one buffered binary — useful for large downloads, where
+buffering costs roughly twice the body size across the port boundary:
+
+```erlang
+{ok, Ref} = katipo:async_get(Pool, Url, #{stream => true}),
+receive {katipo_headers, Ref, #{status := Status, headers := Headers}} -> ok end,
+collect(Ref) %% ->
+%%   {katipo_chunk, Ref, Bin}      zero or more, in arrival order
+%%   {katipo_done, Ref, #{status := Status, cookiejar := Jar}}  terminal
+```
+
+A `{katipo_error, Ref, ErrorMap}` message is terminal and can arrive at any
+point, including mid-body (e.g. a timeout). `cancel/2` works as usual; after
+it takes effect no further messages arrive. Streaming is async-only — the
+synchronous functions reject `stream => true` — and `await/1,2` does not
+apply. Chunks are delivered as fast as the transfer produces them; there is
+no flow control back to the server.
+
 #### Pool Options
 
 | Option                  | Type                          | Default      | Note                                                                                           |

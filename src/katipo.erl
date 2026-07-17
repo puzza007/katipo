@@ -48,6 +48,10 @@ restarted), the async function returns `{error, #{code => worker_died}}`
 instead of `{ok, Ref}` -- an accepted request always produces exactly one
 terminal message.
 
+With `stream => true` the body is delivered incrementally as
+`{katipo_headers, Ref, _}`, `{katipo_chunk, Ref, _}`* and a terminal
+`{katipo_done, Ref, _}` instead of one buffered response; see `async_req/2`.
+
 Async requests emit the same OTel span (`HTTP <METHOD>`, parented to the
 caller's context) and metrics as their synchronous counterparts; the span
 covers the full request and is finished when the response, a timeout, or a
@@ -271,6 +275,10 @@ async_delete(PoolName, Url, Opts) ->
 req(PoolName, Opts)
   when is_map(Opts) ->
     case katipo_req:build_req(Opts) of
+        {ok, #req{stream = ?STREAM_TRUE}} ->
+            %% A streamed response has no single reply to return; it only
+            %% makes sense as a message flow, i.e. via async_req/2.
+            {error, katipo_req:error_map(bad_opts, <<"[{stream,true}]">>)};
         {ok, Req} ->
             do_req_with_span(PoolName, Req);
         {error, _} = Error ->
@@ -288,6 +296,28 @@ request (e.g. it died and is being restarted), returns
 `{error, #{code => worker_died}}` and no message is delivered.
 
 Use `await/1,2` to block until the response arrives.
+
+With `stream => true` the response body is delivered incrementally instead of
+as one buffered binary. The message flow is:
+
+```erlang
+{katipo_headers, Ref, #{status := pos_integer(), headers := headers()}}
+{katipo_chunk, Ref, binary()}     %% zero or more, in order
+{katipo_done, Ref, #{status := pos_integer(), cookiejar := cookiejar()}}
+```
+
+A `{katipo_error, Ref, ErrorMap}` message is terminal and can arrive at any
+point, including after headers and chunks (e.g. a request timeout mid-body).
+`cancel/2` works as for buffered async requests. `await/1,2` does not apply
+to streamed requests; receive the messages directly. Streaming is only
+available through the async API -- `req/2` and the synchronous wrappers
+reject `stream => true`.
+
+Caveat shared with buffered mode: when following redirects
+(`followlocation => true`), a redirect response that itself carries a body
+surfaces that body through the write path -- in streaming form the
+`katipo_headers` message may then describe the redirect response rather
+than the final one. Real-world redirect responses rarely carry bodies.
 """.
 -spec async_req(katipo_pool:name(), request()) -> async_response().
 async_req(PoolName, Opts)
