@@ -29,19 +29,19 @@ ifeq ($(UNAME_SYS), Darwin)
 			CURL_CONFIG = curl-config
 		endif
 	endif
-	CFLAGS ?= -O3 -std=c99 -Wall -Wmissing-prototypes $(shell pkg-config --cflags libevent)
+	CFLAGS ?= -O3 -std=c99 -Wall -Wextra -Wmissing-prototypes $(shell pkg-config --cflags libevent)
 	CXXFLAGS ?= -O3 -Wall
 	LDFLAGS ?= -flat_namespace -undefined dynamic_lookup $(shell pkg-config --libs libevent)
 else ifeq ($(UNAME_SYS), FreeBSD)
 	CC ?= cc
 	CURL_CONFIG ?= curl-config
-	CFLAGS ?= -O3 -std=c99 -finline-functions -Wall -Wmissing-prototypes -I /usr/local/include
+	CFLAGS ?= -O3 -std=c99 -finline-functions -Wall -Wextra -Wmissing-prototypes -I /usr/local/include
 	CXXFLAGS ?= -O3 -finline-functions -Wall
 	LDLIBS += -L /usr/local/lib
 else ifeq ($(UNAME_SYS), Linux)
 	CC ?= gcc
 	CURL_CONFIG ?= curl-config
-	CFLAGS ?= -O3 -std=c99 -finline-functions -Wall -Wmissing-prototypes
+	CFLAGS ?= -O3 -std=c99 -finline-functions -Wall -Wextra -Wmissing-prototypes
 	CXXFLAGS ?= -O3 -finline-functions -Wall
 	LDLIBS += -L /usr/local/lib
 endif

@@ -27,7 +27,7 @@
                  span := span_ctx()}.
 -export_type([obs/0]).
 
-%% @doc Run Fun inside a scoped "HTTP <METHOD>" client span with request
+%% @doc Run Fun inside a scoped `"HTTP " ++ Method' client span with request
 %% attributes set. Used by the synchronous request path.
 -spec with_client_span(binary(), katipo:url(), fun((span_ctx()) -> Result)) -> Result.
 with_client_span(Method, Url, Fun) ->
@@ -106,12 +106,12 @@ set_url_span_attrs(SpanCtx, Url) ->
             otel_span:set_attribute(SpanCtx, 'server.address', Host)
     end.
 
-%% @doc Parse a URL into {SanitizedUrl, Host}, stripping query/fragment/userinfo
-%% so no secrets leak into span attributes. Returns {<<>>, <<>>} if unparseable.
+%% @doc Parse a URL into `{SanitizedUrl, Host}', stripping query/fragment/userinfo
+%% so no secrets leak into span attributes. Returns `{<<>>, <<>>}' if unparseable.
 %% uri_string:parse/1 only accepts ASCII hosts (RFC 3986), so Host is already a
 %% binary when the URL is a binary -- no unicode conversion is needed. It can
 %% also *throw* on some malformed byte sequences, not just return an error, so
-%% the whole call is guarded to honour the "unparseable -> {<<>>, <<>>}"
+%% the whole call is guarded to honour the `"unparseable -> {<<>>, <<>>}"'
 %% contract (relevant on the async path, where this runs in the worker process).
 -spec parse_url_for_span(binary()) -> {binary(), binary()}.
 parse_url_for_span(Url) when is_binary(Url) ->

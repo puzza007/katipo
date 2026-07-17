@@ -70,6 +70,16 @@ katipo:req(Pool :: atom(), Req :: map()).
 katipo:Method(Pool :: atom(), URL :: binary()).
 katipo:Method(Pool :: atom(), URL :: binary(), ReqOptions :: map()).
 
+%% Asynchronous: return {ok, Ref} immediately. The response is delivered to the
+%% calling process (or the `reply_to` option) as a {katipo_response, Ref, Response}
+%% or {katipo_error, Ref, Error} message. Use await/1,2 to block for it.
+katipo:async_req(Pool :: atom(), Req :: map()).
+katipo:async_Method(Pool :: atom(), URL :: binary()).
+katipo:async_Method(Pool :: atom(), URL :: binary(), ReqOptions :: map()).
+katipo:await(Ref :: reference()).
+katipo:await(Ref :: reference(), Timeout :: timeout()).
+katipo:cancel(Pool :: atom(), Ref :: reference()).
+
 ```
 
 #### Request options
@@ -106,6 +116,7 @@ katipo:Method(Pool :: atom(), URL :: binary(), ReqOptions :: map()).
 | `password`              | `binary()`                          | `undefined` | [docs](https://curl.se/libcurl/c/CURLOPT_PASSWORD.html)                        |
 | `userpwd`               | `binary()`                          | `undefined` | [docs](https://curl.se/libcurl/c/CURLOPT_USERPWD.html)                         |
 | `verbose`               | `boolean()`                         | `false`     | [docs](https://curl.se/libcurl/c/CURLOPT_VERBOSE.html)                         |
+| `reply_to`              | `pid()`                             | `self()`    | Async only (`async_*`): process that receives the response message. Accepted but ignored on synchronous requests. |
 
 #### Responses
 
@@ -117,6 +128,30 @@ katipo:Method(Pool :: atom(), URL :: binary(), ReqOptions :: map()).
 
 {error, #{code := atom(), message := binary()}}
 ```
+
+The `code` atom is drawn from the exported `t:katipo:error_code/0` union (curl
+error names plus `bad_opts`, `await_timeout`, and `worker_died`).
+
+#### Asynchronous requests
+
+`async_req/2` and the `async_Method` wrappers return `{ok, Ref}` immediately and
+deliver the result as a message instead of blocking:
+
+```erlang
+{ok, Ref} = katipo:async_get(Pool, <<"https://example.com">>),
+receive
+    {katipo_response, Ref, #{status := Status}} -> Status;
+    {katipo_error, Ref, Error} -> {error, Error}
+end.
+```
+
+`await/1,2` blocks for that message (default 30s), and `cancel/2` aborts an
+in-flight request (best-effort). The message goes to the calling process by
+default; set the `reply_to` option to redirect it to another process. If the
+worker's port dies while a request is in flight, both sync and async callers
+receive `{error, #{code => worker_died}}`; if an async request cannot be
+handed to a worker at all (it died and is being restarted), `async_req` itself
+returns `{error, #{code => worker_died}}` and no message is delivered.
 
 #### Pool Options
 

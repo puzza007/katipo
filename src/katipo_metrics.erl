@@ -5,7 +5,8 @@
 
 %% Suppress dialyzer warnings from OTel macro expansion
 %% (macros use is_atom checks that always match since we use atom names)
--dialyzer({nowarn_function, [notify/4, record_timing/3]}).
+-dialyzer({nowarn_function, [create_instruments/0, emit/4,
+                             emit_timing_metrics/3, record_timing/3]}).
 
 -export([init/0]).
 -export([notify/4]).
@@ -23,6 +24,15 @@
 
 -spec init() -> ok.
 init() ->
+    %% When no OTel metrics SDK is configured, the experimental API's noop meter
+    %% raises undef (opentelemetry-erlang#876). Guard instrument creation the
+    %% same way the record path is guarded, so starting katipo can't crash the
+    %% whole application on a plain (no-SDK) deployment.
+    try create_instruments()
+    catch error:undef -> ok end,
+    ok.
+
+create_instruments() ->
     %% Create request counter
     _ = ?create_counter(?REQUESTS_COUNTER, #{
         description => <<"Number of HTTP requests made">>,
@@ -63,18 +73,27 @@ init() ->
     }),
     ok.
 
--spec notify(katipo:response(), katipo:metrics(), number(), binary()) -> katipo:metrics().
-notify({ok, Response}, Metrics, TotalUs, Method) ->
+-spec notify(katipo:response(), katipo:metrics(), number(), binary()) -> ok.
+notify(Result, Metrics, TotalUs, Method) ->
+    %% One guard around the whole emission rather than one per instrument: with
+    %% no metrics SDK the noop meter raises undef on the first call, so a single
+    %% catch skips the rest (down from up to nine exceptions per request). It is
+    %% re-attempted every request, so metrics begin flowing if an SDK is
+    %% configured after startup.
+    try emit(Result, Metrics, TotalUs, Method)
+    catch error:undef -> ok end,
+    ok.
+
+emit({ok, Response}, Metrics, TotalUs, Method) ->
     #{status := Status} = Response,
     Attrs = #{result => ok, 'http.response.status_code' => Status},
-    try ?counter_add(?REQUESTS_COUNTER, 1, Attrs) catch error:undef -> ok end,
-    notify_timing_metrics(Metrics, TotalUs, Method);
-notify({error, _Error}, Metrics, TotalUs, Method) ->
-    try ?counter_add(?REQUESTS_COUNTER, 1, #{result => error}) catch error:undef -> ok end,
-    notify_timing_metrics(Metrics, TotalUs, Method).
+    ?counter_add(?REQUESTS_COUNTER, 1, Attrs),
+    emit_timing_metrics(Metrics, TotalUs, Method);
+emit({error, _Error}, Metrics, TotalUs, Method) ->
+    ?counter_add(?REQUESTS_COUNTER, 1, #{result => error}),
+    emit_timing_metrics(Metrics, TotalUs, Method).
 
-
-notify_timing_metrics(Metrics, TotalUs, Method) ->
+emit_timing_metrics(Metrics, TotalUs, Method) ->
     %% Curl metrics are in seconds, convert to milliseconds
     Metrics1 = [{K, 1000 * V} || {K, V} <- Metrics],
     %% now_diff is in microsecs, convert to milliseconds
@@ -88,24 +107,23 @@ notify_timing_metrics(Metrics, TotalUs, Method) ->
                 [{total_time, TotalMs} | Metrics1]
         end,
     Attrs = #{'http.request.method' => Method},
-    lists:foreach(fun({K, V}) -> record_timing(K, V, Attrs) end, Metrics3),
-    Metrics3.
+    lists:foreach(fun({K, V}) -> record_timing(K, V, Attrs) end, Metrics3).
 
 record_timing(total_time, V, Attrs) ->
-    try ?histogram_record(?DURATION_HISTOGRAM, V, Attrs) catch error:undef -> ok end;
+    ?histogram_record(?DURATION_HISTOGRAM, V, Attrs);
 record_timing(curl_time, V, Attrs) ->
-    try ?histogram_record(?CURL_TIME_HISTOGRAM, V, Attrs) catch error:undef -> ok end;
+    ?histogram_record(?CURL_TIME_HISTOGRAM, V, Attrs);
 record_timing(namelookup_time, V, Attrs) ->
-    try ?histogram_record(?NAMELOOKUP_TIME_HISTOGRAM, V, Attrs) catch error:undef -> ok end;
+    ?histogram_record(?NAMELOOKUP_TIME_HISTOGRAM, V, Attrs);
 record_timing(connect_time, V, Attrs) ->
-    try ?histogram_record(?CONNECT_TIME_HISTOGRAM, V, Attrs) catch error:undef -> ok end;
+    ?histogram_record(?CONNECT_TIME_HISTOGRAM, V, Attrs);
 record_timing(appconnect_time, V, Attrs) ->
-    try ?histogram_record(?APPCONNECT_TIME_HISTOGRAM, V, Attrs) catch error:undef -> ok end;
+    ?histogram_record(?APPCONNECT_TIME_HISTOGRAM, V, Attrs);
 record_timing(pretransfer_time, V, Attrs) ->
-    try ?histogram_record(?PRETRANSFER_TIME_HISTOGRAM, V, Attrs) catch error:undef -> ok end;
+    ?histogram_record(?PRETRANSFER_TIME_HISTOGRAM, V, Attrs);
 record_timing(redirect_time, V, Attrs) ->
-    try ?histogram_record(?REDIRECT_TIME_HISTOGRAM, V, Attrs) catch error:undef -> ok end;
+    ?histogram_record(?REDIRECT_TIME_HISTOGRAM, V, Attrs);
 record_timing(starttransfer_time, V, Attrs) ->
-    try ?histogram_record(?STARTTRANSFER_TIME_HISTOGRAM, V, Attrs) catch error:undef -> ok end;
+    ?histogram_record(?STARTTRANSFER_TIME_HISTOGRAM, V, Attrs);
 record_timing(_, _, _) ->
     ok.

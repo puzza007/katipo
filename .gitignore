@@ -30,3 +30,9 @@ doc
 *.gcno
 *.gcov
 coverage.info
+
+# Tooling / profiling output and abandoned rust-NIF experiment artifacts
+build_info.json
+fprof.trace
+/native/
+/src/cargo.hrl

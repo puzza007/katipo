@@ -166,6 +166,7 @@ groups() ->
      {curl, [parallel],
       [url_missing,
        bad_method,
+       couldnt_resolve_host,
        cookies_bad_cookie_jar,
        tcp_fastopen_true,
        tcp_fastopen_false,
@@ -245,6 +246,8 @@ groups() ->
        async_url_missing,
        async_worker_death,
        async_worker_death_reply_to,
+       sync_worker_death,
+       unknown_pool_not_worker_died,
        async_cancel,
        async_cancel_after_complete]},
      {otel, [],
@@ -253,7 +256,8 @@ groups() ->
        otel_async_span_created,
        otel_async_metrics_recorded,
        otel_url_sanitization,
-       otel_noop_metrics_no_crash]},
+       otel_noop_metrics_no_crash,
+       otel_metrics_init_no_crash]},
      {http1, [parallel],
       [{group, http},
        {group, https}]},
@@ -513,17 +517,21 @@ deflate(Config) ->
     Json = jsx:decode(Body),
     ?assert(maps:get(<<"deflated">>, Json)).
 
+%% Use /range rather than /bytes: httpbin's /bytes seeds Python's global
+%% RNG, so concurrent requests from parallel test groups can interleave
+%% random.randint calls and produce different bytes for the same seed.
+%% /range content (repeating a-z) is deterministic regardless of concurrency.
 bytes(Config) ->
     {req_opts, Opts} = lists:keyfind(req_opts, 1, Config),
-    {ok, #{status := 200, body := Body}} = katipo:get(?POOL, httpbin_url(Config, <<"/bytes/1024?seed=9999">>), Opts),
+    {ok, #{status := 200, body := Body}} = katipo:get(?POOL, httpbin_url(Config, <<"/range/1024">>), Opts),
     1024 = byte_size(Body),
-    <<168,123,193,120,18,120,65,73,67,119,198,61,39,1,24,169>> = crypto:hash(md5, Body).
+    <<147,0,83,230,212,92,147,255,38,102,201,139,205,150,16,161>> = crypto:hash(md5, Body).
 
 stream_bytes(Config) ->
     {req_opts, Opts} = lists:keyfind(req_opts, 1, Config),
-    {ok, #{status := 200, body := Body}} = katipo:get(?POOL, httpbin_url(Config, <<"/bytes/1024?seed=9999&chunk_size=8">>), Opts),
+    {ok, #{status := 200, body := Body}} = katipo:get(?POOL, httpbin_url(Config, <<"/range/1024?chunk_size=8">>), Opts),
     1024 = byte_size(Body),
-    <<168,123,193,120,18,120,65,73,67,119,198,61,39,1,24,169>> = crypto:hash(md5, Body).
+    <<147,0,83,230,212,92,147,255,38,102,201,139,205,150,16,161>> = crypto:hash(md5, Body).
 
 utf8(Config) ->
     {req_opts, Opts} = lists:keyfind(req_opts, 1, Config),
@@ -970,16 +978,11 @@ timeout_ms(Config) ->
          end.
 
 couldnt_resolve_host(_) ->
-    {error, #{code := couldnt_resolve_host,
-              message := <<"Couldn't resolve host 'abadhostnamethatdoesnotexist'">>}} =
-        katipo:get(?POOL, <<"http://abadhostnamethatdoesnotexist">>).
-
-http_status_codes() ->
-    [200, 201, 202, 203, 204, 205, 206, 207, 208, 226, 300, 301,
-     302, 303, 304, 305, 306, 307, 308,
-     400, 401, 402, 403, 404, 405, 406, 407, 408, 409, 410, 411, 412, 413, 414,
-     415, 416, 417, 421, 422, 423, 424, 426, 428, 429, 431,
-     500, 501, 502, 503, 504, 505, 506, 507, 508, 510, 511].
+    %% The exact curl message wording varies by version, so assert on the code
+    %% (the stable contract) and that a message binary is present.
+    {error, #{code := couldnt_resolve_host, message := Message}} =
+        katipo:get(?POOL, <<"http://abadhostnamethatdoesnotexist">>),
+    ?assert(is_binary(Message)).
 
 pool_start_stop(_) ->
     PoolName = start_stop_pool,
@@ -1407,6 +1410,18 @@ otel_noop_metrics_no_crash(_Config) ->
     meck:unload(otel_meter),
     ok.
 
+otel_metrics_init_no_crash(_Config) ->
+    %% Instrument creation must be guarded like the record path: with no metrics
+    %% SDK the noop meter raises undef, and an unguarded init/0 would crash the
+    %% whole application at startup (katipo_app calls it).
+    ok = meck:new(otel_meter, [passthrough, no_link]),
+    meck:expect(otel_meter, create_counter, 3, meck:raise(error, undef)),
+    meck:expect(otel_meter, create_histogram, 3, meck:raise(error, undef)),
+    ok = katipo_metrics:init(),
+    meck:unload(otel_meter),
+    %% Re-create instruments against the real meter for later tests.
+    ok = katipo_metrics:init().
+
 otel_url_sanitization(_Config) ->
     %% Test that query strings are stripped (prevents leaking API keys, tokens, etc.)
     {Url1, Host1} = katipo_span:parse_url_for_span(<<"https://api.example.com/users?api_key=secret123&token=abc">>),
@@ -1625,6 +1640,39 @@ async_worker_death(Config) ->
     %% terminate/2 pushed the error rather than us hitting a timeout.
     {error, #{code := worker_died}} = katipo:await(Ref, 5000),
     ok = katipo_pool:stop(PoolName).
+
+sync_worker_death(Config) ->
+    %% A worker dying (port killed) while a *synchronous* request is in flight
+    %% must return {error, worker_died} -- honouring req/2's response() spec --
+    %% rather than propagating the worker's exit and crashing the caller.
+    {req_opts, Opts} = lists:keyfind(req_opts, 1, Config),
+    PoolName = sync_worker_death_test,
+    {ok, _} = katipo_pool:start(PoolName, 1),
+    Url = httpbin_url(Config, <<"/delay/5">>),
+    Self = self(),
+    %% Run the blocking call in a helper so we can kill the port mid-flight;
+    %% `catch` captures either the proper {error, _} return or, on regression,
+    %% an {'EXIT', _} that the assertion below will reject.
+    _ = spawn(fun() -> Self ! {result, catch katipo:get(PoolName, Url, Opts)} end),
+    ok = wait_for_inflight(PoolName),
+    _ = kill_worker_port(PoolName),
+    receive
+        {result, Result} ->
+            {error, #{code := worker_died}} = Result
+    after 10000 ->
+            ct:fail(no_sync_result)
+    end,
+    ok = katipo_pool:stop(PoolName).
+
+unknown_pool_not_worker_died(_Config) ->
+    %% A request to a pool that was never started is a config error (wpool
+    %% exits no_workers), not a transient worker death. It must propagate rather
+    %% than be relabeled {error, worker_died}, which would hide the misnamed
+    %% pool behind a transient-looking error.
+    Result = try katipo:get(nonexistent_katipo_pool, <<"http://localhost/">>)
+             catch Class:Reason -> {caught, Class, Reason} end,
+    ?assertMatch({caught, _, _}, Result),
+    ?assertNotMatch({error, #{code := worker_died}}, Result).
 
 async_worker_death_reply_to(Config) ->
     %% The death notification must reach a third-party reply_to, not just an

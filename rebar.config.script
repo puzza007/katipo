@@ -1,7 +1,16 @@
 %%% -*- mode: erlang -*-
 
 CurlVerHex = string:strip(os:cmd("curl-config --vernum 2>/dev/null"), right, $\n).
-CurlVerInt = erlang:list_to_integer(CurlVerHex, 16).
+%% Empty (curl-config not on PATH) or non-hex output would otherwise abort the
+%% whole build with an opaque badarg before any C compile diagnostic. Fall back
+%% to 0 (all feature macros off) and let the C compile surface the real error.
+CurlVerInt = try erlang:list_to_integer(CurlVerHex, 16)
+             catch error:badarg ->
+                 io:format("katipo: 'curl-config --vernum' returned ~p; "
+                           "disabling curl feature detection. Is libcurl "
+                           "development installed and on PATH?~n", [CurlVerHex]),
+                 0
+             end.
 
 %% CURLOPT_TCP_FASTOPEN since 7.49.0 (471296)
 CurlOptTcpFastopen = case CurlVerInt >= 471296 of

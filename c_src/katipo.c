@@ -420,18 +420,26 @@ static void send_to_erlang(GlobalInfo *global, char *buffer, size_t buffer_len) 
   }
 }
 
-static int is_status_line(const char *header) {
+static int is_status_line(const char *header, size_t len) {
   int httpversion_major;
   int httpversion;
   int httpcode;
   int nc;
 
-  nc = sscanf(header, "HTTP/%d.%d %d", &httpversion_major, &httpversion,
+  /* curl's header buffer is not NUL-terminated, so scanning it directly with
+   * sscanf can over-read past `len`. Copy just the prefix (a status line is
+   * short) into a bounded, NUL-terminated buffer first. */
+  char line[32];
+  size_t n = len < sizeof(line) - 1 ? len : sizeof(line) - 1;
+  memcpy(line, header, n);
+  line[n] = '\0';
+
+  nc = sscanf(line, "HTTP/%d.%d %d", &httpversion_major, &httpversion,
               &httpcode);
   if (nc == 3)
     return 1;
   // NCSA 1.5.x
-  nc = sscanf(header, "HTTP %3d", &httpcode);
+  nc = sscanf(line, "HTTP %3d", &httpcode);
   return nc;
 }
 
@@ -762,7 +770,7 @@ static size_t header_cb(void *ptr, size_t size, size_t nmemb, void *data) {
   // Headers end with \r\n (CRLF). Strip trailing whitespace to get clean header.
   // Modern curl normalizes HTTP/2 and HTTP/3 headers to HTTP/1.x style with \r\n.
   if (realsize > 2) {
-    if (conn->resp_headers && is_status_line(ptr)) {
+    if (conn->resp_headers && is_status_line(ptr, realsize)) {
       curl_slist_free_all(conn->resp_headers);
       conn->resp_headers = NULL;
       conn->num_headers = 0;
@@ -775,11 +783,13 @@ static size_t header_cb(void *ptr, size_t size, size_t nmemb, void *data) {
     }
     if (header_len > 0) {
       header = (char *)malloc(header_len + 1);
-      strncpy(header, src, header_len);
-      header[header_len] = '\0';
-      conn->resp_headers = curl_slist_append(conn->resp_headers, header);
-      free(header);
-      conn->num_headers++;
+      if (header != NULL) {
+        memcpy(header, src, header_len);
+        header[header_len] = '\0';
+        conn->resp_headers = curl_slist_append(conn->resp_headers, header);
+        free(header);
+        conn->num_headers++;
+      }
     }
   }
   return realsize;
@@ -1235,6 +1245,7 @@ static void free_eopts(EasyOpts *eopts) {
 }
 
 static void erl_input(struct bufferevent *ev, void *arg) {
+  (void)ev; /* reads global->from_erlang, not this handle */
   u_int32_t len;
   size_t data_read;
   char *buf;
@@ -1279,6 +1290,9 @@ static void erl_input(struct bufferevent *ev, void *arg) {
     }
 
     buf = (char *)malloc(len);
+    if (buf == NULL) {
+      errx(2, "Could not allocate %u bytes for incoming term", len);
+    }
     data_read = bufferevent_read(global->from_erlang, buf, len);
     if (data_read != len) {
       errx(2, "Wanted to read %u bytes data but got %zu", len, data_read);
@@ -1298,6 +1312,9 @@ static void erl_input(struct bufferevent *ev, void *arg) {
     index = 0;
     pid = malloc(sizeof(*pid));
     ref = malloc(sizeof(*ref));
+    if (pid == NULL || ref == NULL) {
+      goto cleanup;
+    }
 
     if (ei_decode_version(buf, &index, &version) ||
         ei_decode_tuple_header(buf, &index, &arity) ||
@@ -1327,6 +1344,9 @@ static void erl_input(struct bufferevent *ev, void *arg) {
     have_identity = 1;
 
     url = (char *)malloc(size + 1);
+    if (url == NULL) {
+      goto cleanup;
+    }
     if (ei_decode_binary(buf, &index, url, &sizel)) {
       goto cleanup;
     }
@@ -1384,6 +1404,9 @@ cleanup:
 }
 
 static void erl_error(struct bufferevent *ev, short event, void *ud) {
+  (void)ev;
+  (void)event;
+  (void)ud;
   exit(-1);
 }
 

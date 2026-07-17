@@ -12,7 +12,7 @@ jobs:
         rebar3: ['3.24.0']
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Start httpbin server
         run: |
@@ -65,6 +65,11 @@ jobs:
       - name: Run dialyzer
         run: rebar3 dialyzer
 
+      - name: Run xref
+        run: rebar3 xref
+
+      - name: Run lint
+        run: rebar3 lint
 
       - name: Stop httpbin server
         if: always()
@@ -81,7 +86,7 @@ jobs:
         rebar3: ['3.24.0']
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Start httpbin server
         run: |
@@ -142,7 +147,7 @@ jobs:
     name: HTTP/3 Tests
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Start HTTP/3 httpbin server
         run: |
@@ -159,7 +164,7 @@ jobs:
           done
 
       - name: Cache curl HTTP/3 build
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         id: curl-cache
         with:
           path: /tmp/curl-http3

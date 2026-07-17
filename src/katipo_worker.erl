@@ -7,6 +7,11 @@
 %% the port's spawn arguments. Thereafter it marshals a validated #req{} to the
 %% port, tracks in-flight requests, and delivers responses/timeouts/errors back
 %% to sync callers and async reply_to processes. Factored out of katipo.
+%%
+%% Both sync requests and async registrations arrive as gen_server calls, so
+%% dispatch failures (dead worker, port_command crash) surface to the caller
+%% through the call monitor instead of vanishing with a cast. The response for
+%% an async request still flows back asynchronously via the reply_to process.
 
 -behaviour(gen_server).
 
@@ -43,19 +48,26 @@ init([CurlOpts]) ->
             {stop, Error}
     end.
 
-handle_call(Req = #req{timeout = Timeout}, From, State = #state{port = Port, reqs = Reqs}) ->
+handle_call(Req = #req{}, From, State) ->
+    {noreply, admit(From, sync, Req, State)};
+handle_call({async_req, ReplyTo, UserRef, Req = #req{}, Obs}, _From, State) ->
+    State2 = admit({self(), make_ref()}, {async, ReplyTo, UserRef, Obs}, Req, State),
+    {reply, ok, State2}.
+
+%% Register a request: hand it to the port, arm its timer, record it in Reqs.
+%% send_to_port runs BEFORE the Reqs insert on purpose: if the port is
+%% already closed, port_command's badarg crashes us while this request is
+%% still unregistered, so terminate/2 sends nothing for it and the caller's
+%% call monitor reports the death instead. Registering first would make
+%% terminate AND the call monitor both report it. The insert and the reply
+%% have no crash point between them, so an admitted request is always
+%% exactly-once: either the ok/response reply or a worker_died notification.
+admit(From, Kind, Req = #req{timeout = Timeout},
+      State = #state{port = Port, reqs = Reqs}) ->
     send_to_port(Port, From, Req),
     Tref = erlang:start_timer(Timeout, self(), {req_timeout, From}),
-    Reqs2 = Reqs#{From => {Tref, sync}},
-    {noreply, State#state{reqs = Reqs2}}.
+    State#state{reqs = Reqs#{From => {Tref, Kind}}}.
 
-handle_cast({async_req, ReplyTo, UserRef, Req = #req{timeout = Timeout}, Obs},
-            State = #state{port = Port, reqs = Reqs}) ->
-    InternalFrom = {self(), make_ref()},
-    send_to_port(Port, InternalFrom, Req),
-    Tref = erlang:start_timer(Timeout, self(), {req_timeout, InternalFrom}),
-    Reqs2 = Reqs#{InternalFrom => {Tref, {async, ReplyTo, UserRef, Obs}}},
-    {noreply, State#state{reqs = Reqs2}};
 handle_cast({cancel, UserRef}, State = #state{port = Port, reqs = Reqs}) ->
     %% Broadcast reaches every worker; only the one holding this request acts.
     Reqs2 = cancel_async(Port, UserRef, Reqs),
@@ -123,10 +135,11 @@ handle_info({'EXIT', Port, Reason}, State = #state{port = Port}) ->
 
 terminate(_Reason, #state{port = Port, reqs = Reqs}) ->
     %% The worker is going away (typically because its port died) with
-    %% requests still in flight. Sync callers are covered by wpool:call's
-    %% own monitor, but async requests were dispatched fire-and-forget, so
-    %% push a worker_died error to each async reply_to before we exit --
-    %% otherwise those callers would block until their await/request timeout.
+    %% requests still in flight. Sync callers are covered by their in-flight
+    %% gen_server:call monitor, but an admitted async request was already
+    %% replied `ok` and no monitor watches it, so push a worker_died error to
+    %% each async reply_to before we exit -- otherwise those callers would
+    %% block until their await/request timeout.
     maps:foreach(fun notify_worker_died/2, Reqs),
     %% port_close/1 raises badarg if the port is already dead (the common case
     %% when we get here via port death); ignore it -- we're terminating anyway.
@@ -136,7 +149,7 @@ terminate(_Reason, #state{port = Port, reqs = Reqs}) ->
     ok.
 
 notify_worker_died(From, {_Tref, {async, _, _, _} = Kind}) ->
-    deliver_error(Kind, From, #{code => worker_died, message => <<>>});
+    deliver_error(Kind, From, katipo_req:error_map(worker_died, <<>>));
 notify_worker_died(_From, {_Tref, sync}) ->
     ok.
 
@@ -147,9 +160,17 @@ cancel_async(Port, UserRef, Reqs) ->
     case find_async(UserRef, Reqs) of
         {ok, {Self, Ref} = From, Tref, Obs} ->
             _ = erlang:cancel_timer(Tref),
-            true = port_command(Port, term_to_binary({Self, Ref, cancel})),
+            Reqs2 = maps:remove(From, Reqs),
+            %% port_command raises badarg if the port died and its 'EXIT'
+            %% message is still queued behind this cancel. The transfer is
+            %% gone either way, so the abort is best-effort -- crashing here
+            %% would leave the request in Reqs and make terminate/2 send
+            %% worker_died to a caller who cancelled.
+            try port_command(Port, term_to_binary({Self, Ref, cancel}))
+            catch error:badarg -> ok
+            end,
             katipo_span:end_async(Obs),
-            maps:remove(From, Reqs);
+            Reqs2;
         error ->
             Reqs
     end.
