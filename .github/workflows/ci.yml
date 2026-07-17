@@ -7,9 +7,10 @@ jobs:
     runs-on: ubuntu-latest
     name: Erlang/OTP ${{matrix.otp}} / rebar3 ${{matrix.rebar3}}
     strategy:
+      fail-fast: false
       matrix:
-        otp: ['27']
-        rebar3: ['3.24.0']
+        otp: ['27', '28', '29']
+        rebar3: ['3.27.0']
 
     steps:
       - uses: actions/checkout@v7
@@ -83,7 +84,7 @@ jobs:
     strategy:
       matrix:
         otp: ['27']
-        rebar3: ['3.24.0']
+        rebar3: ['3.27.0']
 
     steps:
       - uses: actions/checkout@v7

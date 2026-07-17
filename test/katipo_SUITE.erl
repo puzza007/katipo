@@ -46,13 +46,21 @@ init_per_group(otel, Config) ->
     %% runs in its own process
     Config;
 init_per_group(curl, Config) ->
-    application:ensure_all_started(cowboy),
-    Filename = tempfile:name("katipo_test_"),
-    Name = make_ref(),
-    Dispatch = cowboy_router:compile([{'_', [{"/unix", get_handler, []}]}]),
-    {ok, _} = cowboy:start_clear(Name, [{ip, {local, Filename}},
-                                        {port, 0}], #{env => #{dispatch => Dispatch}}),
-    [{unix_socket_file, Filename}, {unix_server_name, Name}] ++ Config;
+    %% Serve a canned 200 on a unix socket for the unix_socket_path test with a
+    %% tiny gen_tcp listener, rather than pulling in cowboy/cowlib/ranch (and
+    %% their OTP-version churn) for one response. The server process owns the
+    %% listen socket (accept must run in the owner) and signals readiness so the
+    %% test can't race socket creation.
+    Filename = "/tmp/katipo_unix_" ++ integer_to_list(erlang:unique_integer([positive])),
+    Self = self(),
+    Server = spawn(fun() -> unix_http_server(Self, Filename) end),
+    receive
+        {unix_ready, Server} -> ok
+    after 5000 ->
+        error(unix_http_server_timeout)
+    end,
+    [{unix_socket_file, Filename},
+     {unix_socket_server, Server}] ++ Config;
 init_per_group(pool, Config) ->
     application:ensure_all_started(meck),
     Config;
@@ -102,10 +110,8 @@ init_per_group(_, Config) ->
 end_per_group(otel, Config) ->
     Config;
 end_per_group(curl, Config) ->
-    Filename = ?config(unix_socket_file, Config),
-    Name = ?config(unix_server_name, Config),
-    _ = file:delete(Filename),
-    ok = cowboy:stop_listener(Name),
+    exit(?config(unix_socket_server, Config), kill),
+    _ = file:delete(?config(unix_socket_file, Config)),
     Config;
 end_per_group(pool, Config) ->
     application:stop(meck),
@@ -662,7 +668,7 @@ unix_socket_path(Config) ->
     case katipo:get(?POOL, <<"http://localhost/unix">>, #{unix_socket_path => Filename}) of
         {ok, #{status := 200, headers := Headers}} ->
             HeadersMap = maps:from_list(Headers),
-            ?assertEqual(<<"Cowboy">>, maps:get(<<"server">>, HeadersMap));
+            ?assertEqual(<<"katipo-test">>, maps:get(<<"server">>, HeadersMap));
         {error, #{code := bad_opts}} ->
             ct:pal("unix_socket_path not supported by installed version of curl"),
             ok
@@ -1763,3 +1769,26 @@ worker_state(PoolName) ->
     WorkerPid = whereis(wpool_pool:best_worker(PoolName)),
     {state, _, _, {state, Port, Reqs}, _} = sys:get_state(WorkerPid),
     {Port, Reqs}.
+
+%% Minimal unix-socket HTTP/1.1 server for the unix_socket_path test: accept a
+%% connection, discard the request, reply 200 with a recognisable Server header.
+unix_http_server(Parent, Filename) ->
+    {ok, LSock} = gen_tcp:listen(0, [{ifaddr, {local, Filename}},
+                                     binary, {active, false}]),
+    Parent ! {unix_ready, self()},
+    unix_http_loop(LSock).
+
+unix_http_loop(LSock) ->
+    case gen_tcp:accept(LSock) of
+        {ok, Sock} ->
+            _ = gen_tcp:recv(Sock, 0, 5000),
+            _ = gen_tcp:send(Sock,
+                             [<<"HTTP/1.1 200 OK\r\n">>,
+                              <<"server: katipo-test\r\n">>,
+                              <<"content-length: 0\r\n">>,
+                              <<"connection: close\r\n\r\n">>]),
+            _ = gen_tcp:close(Sock),
+            unix_http_loop(LSock);
+        {error, _} ->
+            ok
+    end.
