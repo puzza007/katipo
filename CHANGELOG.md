@@ -5,6 +5,8 @@ All notable changes to this project are documented here. This project follows
 
 ## [Unreleased]
 
+## [2.0.0-rc.2] — 2026-07-18
+
 ### Changed
 - Development and CI now build and test against the current dependency
   versions within the published ranges: `worker_pool` 6.5.3 and
@@ -15,6 +17,10 @@ All notable changes to this project are documented here. This project follows
   which scanned its request table). The pool argument is retained for API
   compatibility and no longer used; late or unknown-Ref commands are
   dropped by the runtime, preserving the best-effort no-op contract.
+- Dependency requirements are published as semver ranges (`~> 6.0` for
+  `worker_pool`, `~> 1.4` for `opentelemetry_api`, `~> 0.5.1` for
+  `opentelemetry_api_experimental`) instead of exact pins, so consumers can
+  unify versions with the rest of their dependency tree.
 
 ### Added
 - Request-side backpressure: the `{max_in_flight, N}` pool option caps
@@ -33,27 +39,15 @@ All notable changes to this project are documented here. This project follows
   pauses the transfer after `N` outstanding chunk messages (propagating
   backpressure to the server) until `katipo:update_flow/3` grants more
   credits. Defaults to `infinity`, the previous behavior.
+- `xref` and `lint` are now enforced in CI.
+- A TLA+ model of the worker/port protocol under `formal/`, with configs
+  covering delivery safety, the cancel contract, and request-outcome liveness.
 
 ### Fixed
 - When the Erlang-side request timer fires (the backstop behind curl's own
   timeouts), the worker now aborts the still-running transfer in the C port
   instead of letting it hold a connection and a curl-multi slot until curl
   notices on its own.
-
-## [2.0.0-rc.2] — 2026-07-18
-
-### Changed
-- Dependency requirements are published as semver ranges (`~> 6.0` for
-  `worker_pool`, `~> 1.4` for `opentelemetry_api`, `~> 0.5.1` for
-  `opentelemetry_api_experimental`) instead of exact pins, so consumers can
-  unify versions with the rest of their dependency tree.
-
-### Added
-- `xref` and `lint` are now enforced in CI.
-- A TLA+ model of the worker/port protocol under `formal/`, with configs
-  covering delivery safety, the cancel contract, and request-outcome liveness.
-
-### Fixed
 - A synchronous request whose worker port dies mid-flight now returns
   `{error, #{code => worker_died}}` instead of crashing the caller, matching the
   async contract.

@@ -386,7 +386,12 @@ update_flow(_PoolName, Ref, N) when is_reference(Ref) andalso
 await(Ref) ->
     await(Ref, ?DEFAULT_REQ_TIMEOUT).
 
--doc "Blocks until an async response for `Ref` arrives or the timeout expires.".
+-doc """
+Blocks until an async response for `Ref` arrives or the timeout expires.
+Only for buffered async requests: a streamed response (`stream => true`)
+arrives as a message sequence, which `await` does not understand -- receive
+those messages directly.
+""".
 -spec await(reference(), timeout()) -> response().
 await(Ref, Timeout) ->
     receive
