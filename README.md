@@ -149,8 +149,11 @@ end.
 ```
 
 `await/1,2` blocks for that message (default 30s), and `cancel/2` aborts an
-in-flight request (best-effort). The message goes to the calling process by
-default; set the `reply_to` option to redirect it to another process. If the
+in-flight request (best-effort). The pool argument to `cancel/2` and
+`update_flow/3` is retained for compatibility and ignored — the `Ref` itself
+routes to the worker holding the request. The message goes to the calling
+process by default; set the `reply_to` option to redirect it to another
+process. If the
 worker's port dies while a request is in flight, both sync and async callers
 receive `{error, #{code => worker_died}}`; if an async request cannot be
 handed to a worker at all (it died and is being restarted), `async_req` itself

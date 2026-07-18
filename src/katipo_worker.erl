@@ -50,9 +50,16 @@ init([CurlOpts]) ->
 
 handle_call(Req = #req{}, From, State) ->
     {noreply, admit(From, sync, Req, State)};
-handle_call({async_req, ReplyTo, UserRef, Req = #req{}, Obs}, _From, State) ->
-    State2 = admit({self(), make_ref()}, {async, ReplyTo, UserRef, Obs}, Req, State),
-    {reply, ok, State2}.
+handle_call({async_req, ReplyTo, Req = #req{}, Obs}, _From, State) ->
+    %% The user-facing Ref is a process alias, so cancel/flow commands are
+    %% plain sends to the Ref itself: they route straight to this worker,
+    %% and once the alias dies (with us) or is deactivated (on resolution)
+    %% the runtime drops them -- the documented best-effort no-op. Doubling
+    %% it as the ref in the port identity makes command handling a direct
+    %% map lookup on {self(), Ref}.
+    Alias = alias(),
+    State2 = admit({self(), Alias}, {async, ReplyTo, Obs}, Req, State),
+    {reply, Alias, State2}.
 
 %% Register a request: hand it to the port, arm its timer, record it in Reqs.
 %% send_to_port runs BEFORE the Reqs insert on purpose: if the port is
@@ -68,20 +75,6 @@ admit(From, Kind, Req = #req{timeout = Timeout},
     Tref = erlang:start_timer(Timeout, self(), {req_timeout, From}),
     State#state{reqs = Reqs#{From => {Tref, Kind}}}.
 
-handle_cast({cancel, UserRef}, State = #state{port = Port, reqs = Reqs}) ->
-    %% Broadcast reaches every worker; only the one holding this request acts.
-    Reqs2 = cancel_async(Port, UserRef, Reqs),
-    {noreply, State#state{reqs = Reqs2}};
-handle_cast({flow, UserRef, N}, State = #state{port = Port, reqs = Reqs}) ->
-    %% Broadcast, like cancel: grant N more chunk credits to the streaming
-    %% request with this user Ref, if this worker holds it.
-    _ = case find_async(UserRef, Reqs) of
-            {ok, {Self, Ref}, _Tref, _Obs} ->
-                port_cmd(Port, {Self, Ref, flow, N});
-            error ->
-                ok
-        end,
-    {noreply, State};
 handle_cast(Msg, State) ->
     logger:error("Unexpected cast: ~p", [Msg]),
     {noreply, State}.
@@ -119,9 +112,9 @@ handle_port_msg({done, {From, {Status, CookieJar, Metrics}}}, Reqs) ->
 %% in flight; otherwise they are dropped silently (the request timed out,
 %% was cancelled, or already completed). The message is only built when it
 %% will be sent.
-forward_progress(From, Reqs, BuildMsg) ->
+forward_progress(From = {_Self, UserRef}, Reqs, BuildMsg) ->
     _ = case maps:find(From, Reqs) of
-            {ok, {_Tref, {async, ReplyTo, UserRef, _Obs}}} ->
+            {ok, {_Tref, {async, ReplyTo, _Obs}}} ->
                 ReplyTo ! BuildMsg(UserRef);
             _ ->
                 ok
@@ -130,25 +123,35 @@ forward_progress(From, Reqs, BuildMsg) ->
 
 %% Resolve a request with its terminal result, if it is still in flight.
 finish_req(From, Result, Response, Reqs) ->
-    _ = case maps:find(From, Reqs) of
-            {ok, {Tref, Kind}} ->
-                _ = erlang:cancel_timer(Tref),
-                deliver(Kind, From, Result, Response);
-            error ->
-                ok
-        end,
-    maps:remove(From, Reqs).
+    case maps:take(From, Reqs) of
+        {{Tref, Kind}, Rest} ->
+            _ = erlang:cancel_timer(Tref),
+            deliver(Kind, From, Result, Response),
+            deactivate(From, Kind),
+            Rest;
+        error ->
+            Reqs
+    end.
+
+%% Deactivate a resolved async request's alias (the ref in its From key) so
+%% late cancel/flow sends are dropped by the runtime instead of landing in
+%% our mailbox.
+deactivate({_Self, Alias}, {async, _ReplyTo, _Obs}) ->
+    _ = unalias(Alias),
+    ok;
+deactivate(_From, sync) ->
+    ok.
 
 %% Deliver a terminal outcome to a sync caller (via gen_server:reply) or an
 %% async ReplyTo (via a flattened katipo_response/katipo_error/katipo_done
 %% message). `done` only occurs for streaming requests, which are async by
 %% construction.
-deliver({async, ReplyTo, UserRef, Obs}, _From, done, {DoneMap, Metrics}) ->
+deliver({async, ReplyTo, Obs}, {_Self, UserRef}, done, {DoneMap, Metrics}) ->
     ReplyTo ! {katipo_done, UserRef, DoneMap},
     katipo_span:finish_async(Obs, ok, DoneMap, Metrics);
 deliver(sync, From, Result, Response) ->
     gen_server:reply(From, {Result, Response});
-deliver({async, ReplyTo, UserRef, Obs}, _From, Result, {ResponseMap, Metrics}) ->
+deliver({async, ReplyTo, Obs}, {_Self, UserRef}, Result, {ResponseMap, Metrics}) ->
     Tag = case Result of ok -> katipo_response; error -> katipo_error end,
     ReplyTo ! {Tag, UserRef, ResponseMap},
     katipo_span:finish_async(Obs, Result, ResponseMap, Metrics).
@@ -161,7 +164,7 @@ deliver_timeout(Kind, From) ->
 %% reply_to (as a katipo_error message).
 deliver_error(sync, From, Error) ->
     gen_server:reply(From, {error, {Error, []}});
-deliver_error({async, ReplyTo, UserRef, Obs}, _From, Error) ->
+deliver_error({async, ReplyTo, Obs}, {_Self, UserRef}, Error) ->
     ReplyTo ! {katipo_error, UserRef, Error},
     katipo_span:finish_async(Obs, error, Error, []).
 
@@ -171,18 +174,44 @@ handle_info({Port, {data, Data}}, State = #state{port = Port, reqs = Reqs}) ->
 handle_info({timeout, Tref, {req_timeout, From}},
             State = #state{port = Port, reqs = Reqs}) ->
     Reqs2 =
-        case maps:find(From, Reqs) of
-            {ok, {Tref, Kind}} ->
+        case maps:take(From, Reqs) of
+            {{Tref, Kind}, Rest} ->
                 _ = deliver_timeout(Kind, From),
+                deactivate(From, Kind),
                 %% Abort the transfer still running in the C port: its
                 %% eventual output would be dropped anyway now that the
                 %% request is out of Reqs.
                 abort_transfer(Port, From),
-                maps:remove(From, Reqs);
-            _ ->
+                Rest;
+            error ->
                 Reqs
         end,
     {noreply, State#state{reqs = Reqs2}};
+handle_info({cancel, Ref}, State = #state{port = Port, reqs = Reqs}) ->
+    %% Sent directly to the request's alias by katipo:cancel/2; a stale or
+    %% foreign Ref cannot match a live entry. Async entries are keyed by
+    %% {self(), Alias}, so this is a straight lookup.
+    From = {self(), Ref},
+    Reqs2 =
+        case maps:take(From, Reqs) of
+            {{Tref, Kind = {async, _ReplyTo, Obs}}, Rest} ->
+                _ = erlang:cancel_timer(Tref),
+                deactivate(From, Kind),
+                abort_transfer(Port, From),
+                katipo_span:end_async(Obs),
+                Rest;
+            error ->
+                Reqs
+        end,
+    {noreply, State#state{reqs = Reqs2}};
+handle_info({flow, Ref, N}, State = #state{port = Port, reqs = Reqs}) ->
+    %% Sent directly to the request's alias by katipo:update_flow/3.
+    From = {Self = self(), Ref},
+    _ = case is_map_key(From, Reqs) of
+            true -> port_cmd(Port, {Self, Ref, flow, N});
+            false -> ok
+        end,
+    {noreply, State};
 handle_info({'EXIT', Port, Reason}, State = #state{port = Port}) ->
     logger:error("Port ~p died with reason: ~p", [Port, Reason]),
     {stop, port_died, State}.
@@ -202,25 +231,10 @@ terminate(_Reason, #state{port = Port, reqs = Reqs}) ->
     end,
     ok.
 
-notify_worker_died(From, {_Tref, {async, _, _, _} = Kind}) ->
+notify_worker_died(From, {_Tref, {async, _, _} = Kind}) ->
     deliver_error(Kind, From, katipo_req:error_map(worker_died, <<>>));
 notify_worker_died(_From, {_Tref, sync}) ->
     ok.
-
-%% Cancel the async request with this user Ref, if this worker holds it: tell
-%% the port to abort the transfer, cancel the timer, and drop the reqs entry so
-%% no response is delivered.
-cancel_async(Port, UserRef, Reqs) ->
-    case find_async(UserRef, Reqs) of
-        {ok, From, Tref, Obs} ->
-            _ = erlang:cancel_timer(Tref),
-            Reqs2 = maps:remove(From, Reqs),
-            abort_transfer(Port, From),
-            katipo_span:end_async(Obs),
-            Reqs2;
-        error ->
-            Reqs
-    end.
 
 %% Ask the C port to abort the in-flight transfer identified by {Pid, Ref}
 %% (a no-op there if it already completed).
@@ -236,19 +250,6 @@ port_cmd(Port, Tuple) ->
     catch error:badarg -> ok
     end,
     ok.
-
-find_async(UserRef, Reqs) ->
-    find_async_iter(UserRef, maps:iterator(Reqs)).
-
-find_async_iter(UserRef, Iter) ->
-    case maps:next(Iter) of
-        {From, {Tref, {async, _ReplyTo, UserRef, Obs}}, _Rest} ->
-            {ok, From, Tref, Obs};
-        {_From, _Value, Rest} ->
-            find_async_iter(UserRef, Rest);
-        none ->
-            error
-    end.
 
 code_change(_OldVsn, State, _Extra) ->
     {ok, State}.

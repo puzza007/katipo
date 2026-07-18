@@ -337,10 +337,9 @@ async_req(PoolName, Opts)
         true ->
             case katipo_req:build_req(Opts2, async) of
                 {ok, Req} ->
-                    UserRef = make_ref(),
                     Obs = katipo_span:start_async(katipo_req:method_int_to_binary(Req#req.method),
                                                   Req#req.url),
-                    dispatch_async(PoolName, ReplyTo, UserRef, Req, Obs);
+                    dispatch_async(PoolName, ReplyTo, Req, Obs);
                 {error, _} = Error ->
                     Error
             end
@@ -350,10 +349,12 @@ async_req(PoolName, Opts)
 %% immediately instead of losing the request: a cast to a dead or restarting
 %% worker name is silently dropped, and a worker that crashes on port_command
 %% before registering the request can notify nobody afterwards. pool_call/2
-%% turns both into an immediate {error, worker_died} return.
-dispatch_async(PoolName, ReplyTo, UserRef, Req, Obs) ->
-    case pool_call(PoolName, {async_req, ReplyTo, UserRef, Req, Obs}) of
-        {ok, ok} ->
+%% turns both into an immediate {error, worker_died} return. The returned
+%% Ref is worker-minted (a process alias; see the worker's admission clause
+%% for the full lifecycle).
+dispatch_async(PoolName, ReplyTo, Req, Obs) ->
+    case pool_call(PoolName, {async_req, ReplyTo, Req, Obs}) of
+        {ok, UserRef} when is_reference(UserRef) ->
             {ok, UserRef};
         {error, Error} ->
             katipo_span:finish_async(Obs, error, Error, []),
@@ -362,14 +363,16 @@ dispatch_async(PoolName, ReplyTo, UserRef, Req, Obs) ->
 
 -doc """
 Grants `N` more chunk-message credits to the streaming request `Ref`, which
-must have been started with a bounded `stream_window`. Best-effort like
-`cancel/2`: granting credits to an unknown, completed, or unbounded-window
-request is a harmless no-op. Each grant is a pool-wide broadcast, so grant
-in batches (e.g. half the window at a time) rather than per-chunk.
+must have been started with a bounded `stream_window`. Routed like
+`cancel/2` (directly to the owning worker; the pool argument is unused) and
+equally best-effort: granting credits to an unknown, completed, or
+unbounded-window request is a harmless no-op. Granting in batches (e.g.
+half the window at a time) amortizes the per-grant messaging.
 """.
 -spec update_flow(katipo_pool:name(), reference(), pos_integer()) -> ok.
-update_flow(PoolName, Ref, N) when is_integer(N) andalso N > 0 ->
-    wpool:broadcast(PoolName, {flow, Ref, N}),
+update_flow(_PoolName, Ref, N) when is_reference(Ref) andalso
+                                    is_integer(N) andalso N > 0 ->
+    Ref ! {flow, Ref, N},
     ok.
 
 -doc #{equiv => await/2}.
@@ -398,20 +401,18 @@ await(Ref, Timeout) ->
 
 -doc """
 Cancels the async request identified by `Ref` (returned by `async_get/2,3`,
-`async_req/2`, etc.).
+`async_req/2`, etc.). The `Ref` routes directly to the worker holding the
+request; the pool argument is retained for API compatibility and not used.
 
 Best-effort: once the cancel takes effect no `{katipo_response, Ref, _}` or
 `{katipo_error, Ref, _}` message is delivered. A message that was already
 delivered before the cancel raced in may still be in the receiver's mailbox, so
 callers should be prepared to flush a late one. Cancelling an unknown or
 already-completed `Ref` is a harmless no-op.
-
-Note: the in-flight HTTP transfer is not aborted — it completes in the
-background and its result is discarded.
 """.
 -spec cancel(katipo_pool:name(), reference()) -> ok.
-cancel(PoolName, Ref) ->
-    wpool:broadcast(PoolName, {cancel, Ref}),
+cancel(_PoolName, Ref) when is_reference(Ref) ->
+    Ref ! {cancel, Ref},
     ok.
 
 -doc false.
