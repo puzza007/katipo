@@ -1627,6 +1627,7 @@ int main(int argc, char **argv) {
     { "pipelining", required_argument, 0, 'p' },
     { "max-total-connections", required_argument, 0, 'c' },
     { "max-concurrent-streams", required_argument, 0, 's' },
+    { "maxconnects", required_argument, 0, 'm' },
     { 0, 0, 0, 0 }
   };
 
@@ -1681,7 +1682,7 @@ int main(int argc, char **argv) {
   curl_multi_setopt(global.multi, CURLMOPT_TIMERDATA, &global);
 
   while (1) {
-    c = getopt_long(argc, argv, "p:c:s:", long_options, &option_index);
+    c = getopt_long(argc, argv, "p:c:s:m:", long_options, &option_index);
     if (c == -1)
       break;
     switch (c) {
@@ -1702,6 +1703,10 @@ int main(int argc, char **argv) {
                           strtol(optarg, NULL, 10));
         break;
 #endif
+      case 'm':
+        curl_multi_setopt(global.multi, CURLMOPT_MAXCONNECTS,
+                          strtol(optarg, NULL, 10));
+        break;
       default:
         errx(2, "Unknown option '%c'\n", c);
     }

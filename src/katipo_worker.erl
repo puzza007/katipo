@@ -32,6 +32,7 @@
 -type curlmopt() ::
         max_total_connections |
         max_concurrent_streams |
+        maxconnects |
         pipelining.
 
 start_link([MaxInFlight, CurlOpts]) when is_list(CurlOpts) ->
@@ -371,5 +372,8 @@ mopt_supported({max_total_connections, Val})
 mopt_supported({max_concurrent_streams, Val})
   when is_integer(Val) andalso Val >= 0 ->
     {true, "--max-concurrent-streams " ++ integer_to_list(Val)};
+mopt_supported({maxconnects, Val})
+  when is_integer(Val) andalso Val >= 0 ->
+    {true, "--maxconnects " ++ integer_to_list(Val)};
 mopt_supported({_, _}) ->
     false.

@@ -5,6 +5,12 @@ All notable changes to this project are documented here. This project follows
 
 ## [Unreleased]
 
+### Added
+- The `{maxconnects, N}` pool option exposes curl's idle-connection cache
+  size (`CURLMOPT_MAXCONNECTS`), bounding the fd footprint of cached dead
+  keepalive connections under sustained load. See the README for sizing
+  guidance.
+
 ## [2.0.0-rc.2] — 2026-07-18
 
 ### Changed

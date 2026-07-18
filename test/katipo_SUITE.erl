@@ -222,7 +222,8 @@ groups() ->
        port_death,
        port_late_response,
        pool_opts,
-       max_concurrent_streams]},
+       max_concurrent_streams,
+       maxconnects_option]},
      {https, [parallel],
       [verify_host_verify_peer_ok,
        verify_host_verify_peer_error,
@@ -1111,6 +1112,14 @@ max_concurrent_streams(_) ->
     PoolOpts = [{pipelining, multiplex},
                 {max_concurrent_streams, 50}],
     {ok, _} = katipo_pool:start(PoolName, PoolSize, PoolOpts),
+    ok = katipo_pool:stop(PoolName).
+
+maxconnects_option(Config) ->
+    PoolName = maxconnects_option,
+    {ok, _} = katipo_pool:start(PoolName, 1, [{maxconnects, 2}]),
+    Url = httpbin_url(Config, <<"/get">>),
+    Opts = ?config(httpbin_opts, Config),
+    {ok, #{status := 200}} = katipo:get(PoolName, Url, Opts),
     ok = katipo_pool:stop(PoolName).
 
 verify_host_verify_peer_ok(_) ->
