@@ -79,6 +79,11 @@
 -define(STREAM_WINDOW, 35).
 
 -define(DEFAULT_REQ_TIMEOUT, 30000).
+%% Bound on the admission gen_server:call into a pool worker. Admission is a
+%% port write plus a map insert, so a healthy worker answers in microseconds;
+%% this only trips when a worker is wedged (e.g. its C port stopped draining
+%% the pipe and port_command blocked it) or its mailbox is deeply backed up.
+-define(ADMISSION_TIMEOUT, 5000).
 -define(FOLLOWLOCATION_TRUE, 1).
 -define(FOLLOWLOCATION_FALSE, 0).
 -define(SSL_VERIFYHOST_TRUE, 2).

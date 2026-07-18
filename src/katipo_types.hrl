@@ -120,7 +120,8 @@
         bad_opts |
         await_timeout |
         worker_died |
-        overload.
+        overload |
+        admission_timeout.
 
 -type error_msg() :: binary().
 -type status() :: pos_integer().

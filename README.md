@@ -133,8 +133,8 @@ katipo:update_flow(Pool :: atom(), Ref :: reference(), Credits :: pos_integer())
 ```
 
 The `code` atom is drawn from the exported `t:katipo:error_code/0` union (curl
-error names plus `bad_opts`, `await_timeout`, `worker_died`, and
-`overload`).
+error names plus `bad_opts`, `await_timeout`, `worker_died`, `overload`,
+and `admission_timeout`).
 
 #### Asynchronous requests
 

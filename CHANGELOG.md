@@ -20,6 +20,9 @@ All notable changes to this project are documented here. This project follows
 - Request-side backpressure: the `{max_in_flight, N}` pool option caps
   in-flight requests per worker, with spillover to other workers before a
   fast `{error, #{code => overload}}` when the whole pool is full.
+- Handing an async request to a worker is now bounded (5s): a wedged or
+  deeply backed-up worker yields `{error, #{code => admission_timeout}}`
+  instead of blocking the caller indefinitely.
 - Streaming responses: pass `stream => true` to any async function to
   receive `{katipo_headers, Ref, _}`, then zero or more
   `{katipo_chunk, Ref, Bin}` messages, then a terminal
