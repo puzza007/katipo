@@ -48,6 +48,10 @@ restarted), the async function returns `{error, #{code => worker_died}}`
 instead of `{ok, Ref}` -- an accepted request always produces exactly one
 terminal message.
 
+With `stream => true` the body is delivered incrementally as
+`{katipo_headers, Ref, _}`, `{katipo_chunk, Ref, _}`* and a terminal
+`{katipo_done, Ref, _}` instead of one buffered response; see `async_req/2`.
+
 Async requests emit the same OTel span (`HTTP <METHOD>`, parented to the
 caller's context) and metrics as their synchronous counterparts; the span
 covers the full request and is finished when the response, a timeout, or a
@@ -90,6 +94,7 @@ worker failure arrives.
 -export([await/1]).
 -export([await/2]).
 -export([cancel/2]).
+-export([update_flow/3]).
 
 -export([check_opts/1]).
 
@@ -270,7 +275,7 @@ async_delete(PoolName, Url, Opts) ->
 -spec req(katipo_pool:name(), request()) -> response().
 req(PoolName, Opts)
   when is_map(Opts) ->
-    case katipo_req:build_req(Opts) of
+    case katipo_req:build_req(Opts, sync) of
         {ok, Req} ->
             do_req_with_span(PoolName, Req);
         {error, _} = Error ->
@@ -288,6 +293,35 @@ request (e.g. it died and is being restarted), returns
 `{error, #{code => worker_died}}` and no message is delivered.
 
 Use `await/1,2` to block until the response arrives.
+
+With `stream => true` the response body is delivered incrementally instead of
+as one buffered binary. The message flow is:
+
+```erlang
+{katipo_headers, Ref, #{status := pos_integer(), headers := headers()}}
+{katipo_chunk, Ref, binary()}     %% zero or more, in order
+{katipo_done, Ref, #{status := pos_integer(), cookiejar := cookiejar()}}
+```
+
+A `{katipo_error, Ref, ErrorMap}` message is terminal and can arrive at any
+point, including after headers and chunks (e.g. a request timeout mid-body).
+`cancel/2` works as for buffered async requests. `await/1,2` does not apply
+to streamed requests; receive the messages directly. Streaming is only
+available through the async API -- `req/2` and the synchronous wrappers
+reject `stream => true`.
+
+By default chunks are delivered as fast as the transfer produces them. Pass
+`stream_window => N` to bound that: the transfer pauses (propagating
+backpressure to the server via TCP or the HTTP/2/3 stream window) once `N`
+chunk messages are outstanding, and `update_flow/3` grants more. The request
+timer keeps running while a transfer is paused, so a consumer that stops
+granting credits eventually receives `operation_timedout`.
+
+Caveat shared with buffered mode: when following redirects
+(`followlocation => true`), a redirect response that itself carries a body
+surfaces that body through the write path -- in streaming form the
+`katipo_headers` message may then describe the redirect response rather
+than the final one. Real-world redirect responses rarely carry bodies.
 """.
 -spec async_req(katipo_pool:name(), request()) -> async_response().
 async_req(PoolName, Opts)
@@ -301,7 +335,7 @@ async_req(PoolName, Opts)
         false ->
             {error, katipo_req:error_map(bad_opts, <<"[{reply_to,invalid}]">>)};
         true ->
-            case katipo_req:build_req(Opts2) of
+            case katipo_req:build_req(Opts2, async) of
                 {ok, Req} ->
                     UserRef = make_ref(),
                     Obs = katipo_span:start_async(katipo_req:method_int_to_binary(Req#req.method),
@@ -325,6 +359,18 @@ dispatch_async(PoolName, ReplyTo, UserRef, Req, Obs) ->
             katipo_span:finish_async(Obs, error, Error, []),
             {error, Error}
     end.
+
+-doc """
+Grants `N` more chunk-message credits to the streaming request `Ref`, which
+must have been started with a bounded `stream_window`. Best-effort like
+`cancel/2`: granting credits to an unknown, completed, or unbounded-window
+request is a harmless no-op. Each grant is a pool-wide broadcast, so grant
+in batches (e.g. half the window at a time) rather than per-chunk.
+""".
+-spec update_flow(katipo_pool:name(), reference(), pos_integer()) -> ok.
+update_flow(PoolName, Ref, N) when is_integer(N) andalso N > 0 ->
+    wpool:broadcast(PoolName, {flow, Ref, N}),
+    ok.
 
 -doc #{equiv => await/2}.
 -spec await(reference()) -> response().
@@ -402,7 +448,12 @@ pool_call(PoolName, Msg) ->
             {error, katipo_req:error_map(worker_died, <<>>)}
     end.
 
--doc "Validates request options without performing the request.".
+-doc """
+Validates request options without performing the request. Cross-field rules
+are checked under the async API's rules (the superset): `stream => true`
+passes here but is additionally rejected by `req/2` and the synchronous
+wrappers.
+""".
 -spec check_opts(request()) -> ok | {error, map()}.
 check_opts(Opts) when is_map(Opts) ->
     katipo_req:check_opts(Opts).

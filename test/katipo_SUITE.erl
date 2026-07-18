@@ -8,6 +8,10 @@
 -include_lib("opentelemetry/include/otel_span.hrl").
 
 -define(POOL, katipo_test_pool).
+%% MD5 of /range/1024: 1024 bytes of repeating a-z (deterministic content,
+%% unlike /bytes whose seeded RNG is shared server-global state).
+-define(RANGE_1024_MD5,
+        <<147,0,83,230,212,92,147,255,38,102,201,139,205,150,16,161>>).
 -define(POOL_SIZE, 2).
 
 %% Wire-protocol constants for the malformed_requests group, mirroring the
@@ -168,7 +172,10 @@ groups() ->
        basic_authorised,
        digest_unauthorised,
        digest_authorised,
-       proxy_couldnt_connect]},
+       proxy_couldnt_connect,
+       streaming_response,
+       streaming_empty_body,
+       streaming_flow_control]},
      {curl, [parallel],
       [url_missing,
        bad_method,
@@ -255,7 +262,14 @@ groups() ->
        sync_worker_death,
        unknown_pool_not_worker_died,
        async_cancel,
-       async_cancel_after_complete]},
+       async_cancel_after_complete,
+       streaming_cancel,
+       streaming_timeout,
+       streaming_connect_error,
+       streaming_sync_rejected,
+       streaming_window_invalid,
+       streaming_worker_death,
+       streaming_flow_starvation]},
      {otel, [],
       [otel_span_created,
        otel_metrics_recorded,
@@ -531,13 +545,13 @@ bytes(Config) ->
     {req_opts, Opts} = lists:keyfind(req_opts, 1, Config),
     {ok, #{status := 200, body := Body}} = katipo:get(?POOL, httpbin_url(Config, <<"/range/1024">>), Opts),
     1024 = byte_size(Body),
-    <<147,0,83,230,212,92,147,255,38,102,201,139,205,150,16,161>> = crypto:hash(md5, Body).
+    ?RANGE_1024_MD5 = crypto:hash(md5, Body).
 
 stream_bytes(Config) ->
     {req_opts, Opts} = lists:keyfind(req_opts, 1, Config),
     {ok, #{status := 200, body := Body}} = katipo:get(?POOL, httpbin_url(Config, <<"/range/1024?chunk_size=8">>), Opts),
     1024 = byte_size(Body),
-    <<147,0,83,230,212,92,147,255,38,102,201,139,205,150,16,161>> = crypto:hash(md5, Body).
+    ?RANGE_1024_MD5 = crypto:hash(md5, Body).
 
 utf8(Config) ->
     {req_opts, Opts} = lists:keyfind(req_opts, 1, Config),
@@ -1290,6 +1304,222 @@ repeat_until_true(Fun) ->
 httpbin_url(Config, Path) ->
     Base = ?config(httpbin_base, Config),
     <<Base/binary, Path/binary>>.
+
+%% -- streaming responses (stream => true) ---------------------------------
+
+%% Same deterministic /range content as bytes/stream_bytes, delivered as
+%% headers -> chunks -> done instead of one buffered body.
+streaming_response(Config) ->
+    {req_opts, Opts} = lists:keyfind(req_opts, 1, Config),
+    Url = httpbin_url(Config, <<"/range/1024?chunk_size=8">>),
+    {ok, Ref} = katipo:async_req(?POOL, Opts#{url => Url,
+                                              method => get,
+                                              stream => true}),
+    {200, Headers, Body} = collect_stream(Ref),
+    true = length(Headers) > 0,
+    1024 = byte_size(Body),
+    ?RANGE_1024_MD5 = crypto:hash(md5, Body).
+
+%% stream_window => 1 delivers exactly one chunk then pauses the transfer
+%% (client-side, so independent of server pacing) until update_flow/3
+%% grants another credit; the reassembled body must still be complete.
+streaming_flow_control(Config) ->
+    {req_opts, Opts} = lists:keyfind(req_opts, 1, Config),
+    Url = httpbin_url(Config, <<"/range/65536">>),
+    {ok, Ref} = katipo:async_req(?POOL, Opts#{url => Url,
+                                              method => get,
+                                              stream => true,
+                                              stream_window => 1}),
+    receive
+        {katipo_headers, Ref, #{status := 200}} -> ok
+    after 10000 ->
+            ct:fail(no_headers)
+    end,
+    %% The 64k body spans several curl write buffers, so with one credit
+    %% exactly one chunk arrives and the transfer pauses.
+    Chunk1 = receive
+                 {katipo_chunk, Ref, C} -> C
+             after 10000 ->
+                     ct:fail(no_first_chunk)
+             end,
+    receive
+        {katipo_chunk, Ref, _} -> ct:fail(chunk_beyond_window);
+        {katipo_done, Ref, Done} -> ct:fail({done_beyond_window, Done})
+    after 500 ->
+            ok
+    end,
+    Grant = fun() -> katipo:update_flow(?POOL, Ref, 1) end,
+    {200, [], Body} = collect_chunks(Ref, 200, [], Grant, [Chunk1]),
+    65536 = byte_size(Body),
+    <<186,131,222,164,69,192,190,233,191,135,112,45,73,76,148,71>> =
+        crypto:hash(md5, Body),
+    %% Granting credits to an unknown Ref is a harmless no-op.
+    ok = katipo:update_flow(?POOL, make_ref(), 1).
+
+%% stream_window must be a positive integer or infinity, and only means
+%% something on a streaming request.
+streaming_window_invalid(_Config) ->
+    {error, #{code := bad_opts}} =
+        katipo:async_get(?POOL, <<"http://192.0.2.1">>,
+                         #{stream => true, stream_window => 0}),
+    {error, #{code := bad_opts}} =
+        katipo:async_get(?POOL, <<"http://192.0.2.1">>,
+                         #{stream_window => 4}),
+    %% check_opts agrees with the request entry points on cross-field rules.
+    {error, #{code := bad_opts}} = katipo:check_opts(#{url => <<"http://x">>,
+                                                       stream_window => 4}),
+    ok = katipo:check_opts(#{url => <<"http://x">>,
+                             stream => true,
+                             stream_window => 4}).
+
+%% A bodyless response still delivers headers, then done, with no chunks.
+streaming_empty_body(Config) ->
+    {req_opts, Opts} = lists:keyfind(req_opts, 1, Config),
+    Url = httpbin_url(Config, <<"/status/204">>),
+    {ok, Ref} = katipo:async_req(?POOL, Opts#{url => Url,
+                                              method => get,
+                                              stream => true}),
+    {204, _Headers, <<>>} = collect_stream(Ref).
+
+%% Cancelling an in-flight streaming request stops delivery entirely: no
+%% headers, chunks, or terminal message ever arrive. (The local httpbin
+%% buffers responses, so a cancel between headers and done is not
+%% deterministically reachable here; cancel-before-response is.)
+streaming_cancel(Config) ->
+    {req_opts, Opts} = lists:keyfind(req_opts, 1, Config),
+    PoolName = streaming_cancel_test,
+    {ok, _} = katipo_pool:start(PoolName, 1),
+    Url = httpbin_url(Config, <<"/delay/3">>),
+    {ok, Ref} = katipo:async_req(PoolName, Opts#{url => Url,
+                                                 method => get,
+                                                 stream => true}),
+    ok = wait_for_inflight(PoolName),
+    ok = katipo:cancel(PoolName, Ref),
+    ok = wait_for_no_inflight(PoolName),
+    %% Require silence well past the /delay/3 completion time.
+    ok = assert_stream_stopped(Ref, 4000),
+    katipo_pool:stop(PoolName).
+
+%% A timeout on a streaming request is delivered as the same terminal
+%% katipo_error as for buffered requests.
+streaming_timeout(Config) ->
+    {req_opts, Opts} = lists:keyfind(req_opts, 1, Config),
+    Url = httpbin_url(Config, <<"/delay/10">>),
+    {ok, Ref} = katipo:async_req(?POOL, Opts#{url => Url,
+                                              method => get,
+                                              stream => true,
+                                              timeout_ms => 1000}),
+    ok = expect_stream_error(Ref, operation_timedout, 10000).
+
+%% A connect failure before any response arrives delivers a single
+%% katipo_error and no headers.
+streaming_connect_error(_Config) ->
+    {ok, Ref} = katipo:async_req(?POOL, #{url => <<"http://192.0.2.1">>,
+                                          method => get,
+                                          stream => true,
+                                          connecttimeout_ms => 1,
+                                          timeout_ms => 2000}),
+    receive
+        {katipo_error, Ref, #{code := operation_timedout}} -> ok;
+        {katipo_headers, Ref, Headers} -> ct:fail({unexpected_headers, Headers})
+    after 10000 ->
+            ct:fail(no_error)
+    end.
+
+%% Streaming has no meaning for the synchronous API.
+streaming_sync_rejected(_Config) ->
+    {error, #{code := bad_opts}} =
+        katipo:get(?POOL, <<"http://192.0.2.1">>, #{stream => true}).
+
+%% The request timer keeps running while a transfer is paused awaiting
+%% credits: a consumer that stops granting eventually gets the same
+%% terminal operation_timedout as any stalled request. Both curl-side and
+%% Erlang-side timers are capped so whichever fires first ends the test.
+streaming_flow_starvation(Config) ->
+    {req_opts, Opts} = lists:keyfind(req_opts, 1, Config),
+    Url = httpbin_url(Config, <<"/range/65536">>),
+    {ok, Ref} = katipo:async_req(?POOL, Opts#{url => Url,
+                                              method => get,
+                                              stream => true,
+                                              stream_window => 1,
+                                              connecttimeout_ms => 1500,
+                                              timeout_ms => 1500}),
+    ok = expect_stream_error(Ref, operation_timedout, 10000).
+
+%% Worker death mid-stream delivers the same prompt terminal worker_died
+%% as it does for buffered async requests.
+streaming_worker_death(Config) ->
+    {req_opts, Opts} = lists:keyfind(req_opts, 1, Config),
+    PoolName = streaming_worker_death_test,
+    {ok, _} = katipo_pool:start(PoolName, 1),
+    Url = httpbin_url(Config, <<"/delay/5">>),
+    {ok, Ref} = katipo:async_req(PoolName, Opts#{url => Url,
+                                                 method => get,
+                                                 stream => true}),
+    ok = wait_for_inflight(PoolName),
+    _ = kill_worker_port(PoolName),
+    receive
+        {katipo_error, Ref, #{code := worker_died}} -> ok
+    after 5000 ->
+            ct:fail(no_worker_died)
+    end,
+    ok = katipo_pool:stop(PoolName).
+
+%% Collect one full stream: headers, any chunks, then done. Errors and
+%% out-of-order messages fail the test.
+collect_stream(Ref) ->
+    receive
+        {katipo_headers, Ref, #{status := Status, headers := Headers}} ->
+            collect_chunks(Ref, Status, Headers, fun() -> ok end, [])
+    after 10000 ->
+            ct:fail(no_stream_headers)
+    end.
+
+%% Grant runs before every receive: fun() -> ok end for unbounded streams,
+%% or an update_flow call when driving a bounded stream_window.
+collect_chunks(Ref, Status, Headers, Grant, Acc) ->
+    ok = Grant(),
+    receive
+        {katipo_chunk, Ref, Bin} ->
+            collect_chunks(Ref, Status, Headers, Grant, [Bin | Acc]);
+        {katipo_done, Ref, #{status := Status}} ->
+            {Status, Headers, iolist_to_binary(lists:reverse(Acc))};
+        {katipo_error, Ref, Error} ->
+            ct:fail({stream_error, Error})
+    after 10000 ->
+            ct:fail(stream_stalled)
+    end.
+
+%% Require complete silence for the cancelled stream: no headers, chunks,
+%% or terminal message.
+assert_stream_stopped(Ref, Timeout) ->
+    receive
+        {katipo_headers, Ref, Headers} ->
+            ct:fail({headers_after_cancel, Headers});
+        {katipo_chunk, Ref, _} ->
+            ct:fail(chunk_after_cancel);
+        {katipo_done, Ref, Done} ->
+            ct:fail({done_after_cancel, Done});
+        {katipo_error, Ref, Error} ->
+            ct:fail({error_after_cancel, Error})
+    after Timeout ->
+            ok
+    end.
+
+%% Drain headers/chunks until the expected terminal error arrives.
+expect_stream_error(Ref, Code, Timeout) ->
+    receive
+        {katipo_headers, Ref, _} ->
+            expect_stream_error(Ref, Code, Timeout);
+        {katipo_chunk, Ref, _} ->
+            expect_stream_error(Ref, Code, Timeout);
+        {katipo_error, Ref, #{code := Code}} ->
+            ok;
+        {katipo_done, Ref, Done} ->
+            ct:fail({unexpected_done, Done})
+    after Timeout ->
+            ct:fail(no_stream_error)
+    end.
 
 %% OpenTelemetry integration tests
 

@@ -72,12 +72,80 @@ handle_cast({cancel, UserRef}, State = #state{port = Port, reqs = Reqs}) ->
     %% Broadcast reaches every worker; only the one holding this request acts.
     Reqs2 = cancel_async(Port, UserRef, Reqs),
     {noreply, State#state{reqs = Reqs2}};
+handle_cast({flow, UserRef, N}, State = #state{port = Port, reqs = Reqs}) ->
+    %% Broadcast, like cancel: grant N more chunk credits to the streaming
+    %% request with this user Ref, if this worker holds it.
+    _ = case find_async(UserRef, Reqs) of
+            {ok, {Self, Ref}, _Tref, _Obs} ->
+                port_cmd(Port, {Self, Ref, flow, N});
+            error ->
+                ok
+        end,
+    {noreply, State};
 handle_cast(Msg, State) ->
     logger:error("Unexpected cast: ~p", [Msg]),
     {noreply, State}.
 
-%% Deliver a completed response to a sync caller (via gen_server:reply) or an
-%% async ReplyTo (via a flattened katipo_response/katipo_error message).
+%% One decoded message from the C port. Terminal messages ({ok, ...},
+%% {error, ...}, {done, ...}) resolve the request: cancel its timer, deliver,
+%% and drop it from Reqs. Streaming progress messages ({headers, ...},
+%% {chunk, ...}) are forwarded to the async reply_to and leave the request in
+%% flight. Any message whose From is no longer in Reqs is dropped silently --
+%% the request timed out, was cancelled, or already completed.
+handle_port_msg({ok, {From, {Status, Headers, CookieJar, Body, Metrics}}}, Reqs) ->
+    R = #{status => Status,
+          headers => parse_headers(Headers),
+          cookiejar => CookieJar,
+          body => Body},
+    finish_req(From, ok, {R, Metrics}, Reqs);
+handle_port_msg({error, {From, {Code, Message, Metrics}}}, Reqs) ->
+    Error = #{code => Code, message => Message},
+    finish_req(From, error, {Error, Metrics}, Reqs);
+handle_port_msg({headers, {From, {Status, Headers}}}, Reqs) ->
+    forward_progress(From, Reqs,
+                     fun(UserRef) ->
+                             {katipo_headers, UserRef,
+                              #{status => Status,
+                                headers => parse_headers(Headers)}}
+                     end);
+handle_port_msg({chunk, {From, Body}}, Reqs) ->
+    forward_progress(From, Reqs,
+                     fun(UserRef) -> {katipo_chunk, UserRef, Body} end);
+handle_port_msg({done, {From, {Status, CookieJar, Metrics}}}, Reqs) ->
+    Done = #{status => Status, cookiejar => CookieJar},
+    finish_req(From, done, {Done, Metrics}, Reqs).
+
+%% Progress messages forward to the async reply_to iff the request is still
+%% in flight; otherwise they are dropped silently (the request timed out,
+%% was cancelled, or already completed). The message is only built when it
+%% will be sent.
+forward_progress(From, Reqs, BuildMsg) ->
+    _ = case maps:find(From, Reqs) of
+            {ok, {_Tref, {async, ReplyTo, UserRef, _Obs}}} ->
+                ReplyTo ! BuildMsg(UserRef);
+            _ ->
+                ok
+        end,
+    Reqs.
+
+%% Resolve a request with its terminal result, if it is still in flight.
+finish_req(From, Result, Response, Reqs) ->
+    _ = case maps:find(From, Reqs) of
+            {ok, {Tref, Kind}} ->
+                _ = erlang:cancel_timer(Tref),
+                deliver(Kind, From, Result, Response);
+            error ->
+                ok
+        end,
+    maps:remove(From, Reqs).
+
+%% Deliver a terminal outcome to a sync caller (via gen_server:reply) or an
+%% async ReplyTo (via a flattened katipo_response/katipo_error/katipo_done
+%% message). `done` only occurs for streaming requests, which are async by
+%% construction.
+deliver({async, ReplyTo, UserRef, Obs}, _From, done, {DoneMap, Metrics}) ->
+    ReplyTo ! {katipo_done, UserRef, DoneMap},
+    katipo_span:finish_async(Obs, ok, DoneMap, Metrics);
 deliver(sync, From, Result, Response) ->
     gen_server:reply(From, {Result, Response});
 deliver({async, ReplyTo, UserRef, Obs}, _From, Result, {ResponseMap, Metrics}) ->
@@ -98,26 +166,7 @@ deliver_error({async, ReplyTo, UserRef, Obs}, _From, Error) ->
     katipo_span:finish_async(Obs, error, Error, []).
 
 handle_info({Port, {data, Data}}, State = #state{port = Port, reqs = Reqs}) ->
-    {Result, {From, Response}} =
-        case binary_to_term(Data) of
-            {ok, {From0, {Status, Headers, CookieJar, Body, Metrics}}} ->
-                R = #{status => Status,
-                      headers => parse_headers(Headers),
-                      cookiejar => CookieJar,
-                      body => Body},
-                {ok, {From0, {R, Metrics}}};
-            {error, {From0, {Code, Message, Metrics}}} ->
-                Error = #{code => Code, message => Message},
-                {error, {From0, {Error, Metrics}}}
-        end,
-    _ = case maps:find(From, Reqs) of
-        {ok, {Tref, Kind}} ->
-            _ = erlang:cancel_timer(Tref),
-            deliver(Kind, From, Result, Response);
-        error ->
-            ok
-    end,
-    Reqs2 = maps:remove(From, Reqs),
+    Reqs2 = handle_port_msg(binary_to_term(Data), Reqs),
     {noreply, State#state{reqs = Reqs2}};
 handle_info({timeout, Tref, {req_timeout, From}},
             State = #state{port = Port, reqs = Reqs}) ->
@@ -174,21 +223,31 @@ cancel_async(Port, UserRef, Reqs) ->
     end.
 
 %% Ask the C port to abort the in-flight transfer identified by {Pid, Ref}
-%% (a no-op there if it already completed). Best-effort: port_command raises
-%% badarg if the port died and its 'EXIT' message is still queued behind us;
-%% the transfer is gone either way, and crashing here would let terminate/2
-%% message callers that have already been dealt with.
+%% (a no-op there if it already completed).
 abort_transfer(Port, {Pid, Ref}) ->
-    try port_command(Port, term_to_binary({Pid, Ref, cancel}))
+    port_cmd(Port, {Pid, Ref, cancel}).
+
+%% Best-effort port write: port_command raises badarg if the port died and
+%% its 'EXIT' message is still queued behind us; whatever we were telling the
+%% port is moot then, and crashing here would let terminate/2 message callers
+%% that have already been dealt with.
+port_cmd(Port, Tuple) ->
+    try port_command(Port, term_to_binary(Tuple))
     catch error:badarg -> ok
     end,
     ok.
 
 find_async(UserRef, Reqs) ->
-    case [{From, Tref, Obs}
-          || From := {Tref, {async, _ReplyTo, UR, Obs}} <- Reqs, UR =:= UserRef] of
-        [{From, Tref, Obs} | _] -> {ok, From, Tref, Obs};
-        [] -> error
+    find_async_iter(UserRef, maps:iterator(Reqs)).
+
+find_async_iter(UserRef, Iter) ->
+    case maps:next(Iter) of
+        {From, {Tref, {async, _ReplyTo, UserRef, Obs}}, _Rest} ->
+            {ok, From, Tref, Obs};
+        {_From, _Value, Rest} ->
+            find_async_iter(UserRef, Rest);
+        none ->
+            error
     end.
 
 code_change(_OldVsn, State, _Extra) ->
@@ -226,7 +285,9 @@ send_to_port(Port, {Self, Ref},
                   userpwd = UserPwd,
                   dns_cache_timeout = DNSCacheTimeout,
                   ca_cache_timeout = CACacheTimeout,
-                  pipewait = Pipewait}) ->
+                  pipewait = Pipewait,
+                  stream = Stream,
+                  stream_window = StreamWindow}) ->
     Opts = [{?CONNECTTIMEOUT_MS, ConnTimeoutMs},
             {?FOLLOWLOCATION, FollowLocation},
             {?SSL_VERIFYHOST, SslVerifyHost},
@@ -253,7 +314,9 @@ send_to_port(Port, {Self, Ref},
             {?USERPWD, UserPwd},
             {?DNS_CACHE_TIMEOUT, DNSCacheTimeout},
             {?CA_CACHE_TIMEOUT, CACacheTimeout},
-            {?PIPEWAIT, Pipewait}],
+            {?PIPEWAIT, Pipewait},
+            {?STREAM, Stream},
+            {?STREAM_WINDOW, StreamWindow}],
     Command = {Self, Ref, Method, Url, Headers, CookieJar, Body, Opts},
     true = port_command(Port, term_to_binary(Command)).
 

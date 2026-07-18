@@ -10,6 +10,18 @@ All notable changes to this project are documented here. This project follows
   versions within the published ranges: `worker_pool` 6.5.3 and
   `opentelemetry_api` 1.5.0 (previously locked to 6.0.1 and 1.4.0).
 
+### Added
+- Streaming responses: pass `stream => true` to any async function to
+  receive `{katipo_headers, Ref, _}`, then zero or more
+  `{katipo_chunk, Ref, Bin}` messages, then a terminal
+  `{katipo_done, Ref, _}` instead of one buffered body.
+  `cancel/2`, timeouts, and worker-death handling behave as for buffered
+  async requests; synchronous functions reject the option.
+- Credit-based flow control for streamed responses: `stream_window => N`
+  pauses the transfer after `N` outstanding chunk messages (propagating
+  backpressure to the server) until `katipo:update_flow/3` grants more
+  credits. Defaults to `infinity`, the previous behavior.
+
 ### Fixed
 - When the Erlang-side request timer fires (the backstop behind curl's own
   timeouts), the worker now aborts the still-running transfer in the C port

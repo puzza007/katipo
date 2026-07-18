@@ -51,6 +51,8 @@
 #define K_CURLOPT_DNS_CACHE_TIMEOUT 31
 #define K_CURLOPT_CA_CACHE_TIMEOUT 32
 #define K_CURLOPT_PIPEWAIT 33
+#define K_CURLOPT_STREAM 34
+#define K_CURLOPT_STREAM_WINDOW 35
 
 #define K_CURLAUTH_BASIC 100
 #define K_CURLAUTH_DIGEST 101
@@ -90,6 +92,16 @@ typedef struct _ConnInfo {
   long response_code;
   char *post_data;
   long post_data_size;
+  /* Streaming (stream => true): body bytes are forwarded as they arrive
+   * instead of being buffered in `memory`. headers_sent tracks the one-time
+   * headers message that precedes the first chunk (or the done message for
+   * bodyless responses). window is the remaining chunk-message credits
+   * (-1 = unbounded); at zero the transfer is paused until the consumer
+   * grants more via a flow command. */
+  int stream;
+  int headers_sent;
+  long window;
+  int paused;
   // metrics
   double total_time;
   double namelookup_time;
@@ -140,6 +152,8 @@ typedef struct _EasyOpts {
   long curlopt_dns_cache_timeout;
   long curlopt_ca_cache_timeout;
   long curlopt_pipewait;
+  long curlopt_stream;
+  long curlopt_stream_window;
 } EasyOpts;
 
 static const char *curl_error_code(CURLcode error) {
@@ -392,6 +406,8 @@ static const char *curl_error_code(CURLcode error) {
   }
 }
 
+static void check_multi_info(GlobalInfo *global);
+
 /* Die if we get a bad CURLMcode somewhere */
 static void mcode_or_die(const char *where, CURLMcode code) {
   if (CURLM_OK != code) {
@@ -505,19 +521,26 @@ static void encode_headers(ei_x_buff *result, ConnInfo *conn) {
   }
 }
 
+/* Start a {Tag, {{Pid, Ref}, Payload}} message -- the envelope every
+ * message to Erlang shares; the caller appends the payload term. */
+static void begin_msg(ei_x_buff *result, const char *tag,
+                      erlang_pid *pid, erlang_ref *ref) {
+  if (ei_x_new_with_version(result) ||
+      ei_x_encode_tuple_header(result, 2) ||
+      ei_x_encode_atom(result, tag) ||
+      ei_x_encode_tuple_header(result, 2) ||
+      ei_x_encode_tuple_header(result, 2) ||
+      ei_x_encode_pid(result, pid) ||
+      ei_x_encode_ref(result, ref)) {
+    errx(2, "Failed to encode %s message envelope", tag);
+  }
+}
+
 static void send_ok_to_erlang(ConnInfo *conn) {
   ei_x_buff result;
 
-  if (ei_x_new_with_version(&result) ||
-      ei_x_encode_tuple_header(&result, 2) ||
-      ei_x_encode_atom(&result, "ok") ||
-      ei_x_encode_tuple_header(&result, 2) ||
-
-      ei_x_encode_tuple_header(&result, 2) ||
-      ei_x_encode_pid(&result, conn->pid) ||
-      ei_x_encode_ref(&result, conn->ref) ||
-
-      ei_x_encode_tuple_header(&result, 5) ||
+  begin_msg(&result, "ok", conn->pid, conn->ref);
+  if (ei_x_encode_tuple_header(&result, 5) ||
       ei_x_encode_long(&result, conn->response_code) ||
       ei_x_encode_list_header(&result, conn->num_headers)) {
     errx(2, "Failed to encode &result");
@@ -537,6 +560,79 @@ static void send_ok_to_erlang(ConnInfo *conn) {
   ei_x_free(&result);
 }
 
+/* Streaming: {headers, {Pid, Ref}, {Status, Headers}} -- sent once, before
+ * the first chunk (or before done, for a bodyless response). */
+static void send_headers_to_erlang(ConnInfo *conn) {
+  ei_x_buff result;
+
+  /* Already fetched when we get here via check_multi_info (bodyless
+   * response); fetch for the usual first-body-byte path. */
+  if (conn->response_code == 0) {
+    curl_easy_getinfo(conn->easy, CURLINFO_RESPONSE_CODE, &conn->response_code);
+  }
+
+  begin_msg(&result, "headers", conn->pid, conn->ref);
+  if (ei_x_encode_tuple_header(&result, 2) ||
+      ei_x_encode_long(&result, conn->response_code) ||
+      ei_x_encode_list_header(&result, conn->num_headers)) {
+    errx(2, "Failed to encode headers message");
+  }
+
+  encode_headers(&result, conn);
+
+  send_to_erlang(conn->global, result.buff, result.index);
+  ei_x_free(&result);
+  conn->headers_sent = 1;
+}
+
+/* Streaming: {chunk, {Pid, Ref}, Body} -- one per write callback. This is
+ * the per-16KB hot path, so the payload is written to the pipe straight
+ * from curl's buffer instead of being copied into the ei buffer first: the
+ * BINARY_EXT header (tag 109, 4-byte big-endian length) is appended to the
+ * small ei-encoded prefix by hand. */
+static void send_chunk_to_erlang(ConnInfo *conn, void *data, size_t len) {
+  ei_x_buff prefix;
+  char bin_hdr[5];
+  uint32_t nlen;
+  u_int32_t erl_pkt_len;
+  char size_buf[4];
+
+  begin_msg(&prefix, "chunk", conn->pid, conn->ref);
+  bin_hdr[0] = 109; /* BINARY_EXT */
+  nlen = htonl((uint32_t)len);
+  memcpy(bin_hdr + 1, &nlen, 4);
+  if (ei_x_append_buf(&prefix, bin_hdr, 5)) {
+    errx(2, "Failed to encode chunk header");
+  }
+
+  erl_pkt_len = htonl((uint32_t)(prefix.index + len));
+  memcpy(size_buf, &erl_pkt_len, sizeof(size_buf));
+  if (bufferevent_write(conn->global->to_erlang, size_buf, sizeof(size_buf)) < 0 ||
+      bufferevent_write(conn->global->to_erlang, prefix.buff, prefix.index) < 0 ||
+      bufferevent_write(conn->global->to_erlang, data, len) < 0) {
+    errx(2, "bufferevent_write");
+  }
+  ei_x_free(&prefix);
+}
+
+/* Streaming: {done, {Pid, Ref}, {Status, CookieJar, Metrics}} -- terminal. */
+static void send_done_to_erlang(ConnInfo *conn) {
+  ei_x_buff result;
+
+  begin_msg(&result, "done", conn->pid, conn->ref);
+  if (ei_x_encode_tuple_header(&result, 3) ||
+      ei_x_encode_long(&result, conn->response_code)) {
+    errx(2, "Failed to encode done message");
+  }
+
+  encode_cookies(&result, conn);
+
+  encode_metrics(&result, conn);
+
+  send_to_erlang(conn->global, result.buff, result.index);
+  ei_x_free(&result);
+}
+
 static void send_error_to_erlang(CURLcode curl_code, ConnInfo *conn) {
   ei_x_buff result;
   size_t error_msg_len;
@@ -548,14 +644,8 @@ static void send_error_to_erlang(CURLcode curl_code, ConnInfo *conn) {
   error_msg = conn->error[0] ? conn->error : curl_easy_strerror(curl_code);
   error_msg_len = strlen(error_msg);
 
-  if (ei_x_new_with_version(&result) ||
-      ei_x_encode_tuple_header(&result, 2) ||
-      ei_x_encode_atom(&result, "error") ||
-      ei_x_encode_tuple_header(&result, 2) ||
-      ei_x_encode_tuple_header(&result, 2) ||
-      ei_x_encode_pid(&result, conn->pid) ||
-      ei_x_encode_ref(&result, conn->ref) ||
-      ei_x_encode_tuple_header(&result, 3) ||
+  begin_msg(&result, "error", conn->pid, conn->ref);
+  if (ei_x_encode_tuple_header(&result, 3) ||
       ei_x_encode_atom(&result, error_code) ||
       ei_x_encode_binary(&result, error_msg, error_msg_len)) {
     errx(2, "Failed to encode result");
@@ -605,15 +695,50 @@ static void free_conn(GlobalInfo *global, ConnInfo *conn) {
   free(conn);
 }
 
+/* The in-flight transfer matching the {pid, ref} identity, or NULL if it
+ * already completed or was cancelled. */
+static ConnInfo *find_conn(GlobalInfo *global, erlang_pid *pid,
+                           erlang_ref *ref) {
+  for (ConnInfo *conn = global->active_conns; conn; conn = conn->next) {
+    if (ei_cmp_refs(conn->ref, ref) == 0 && ei_cmp_pids(conn->pid, pid) == 0) {
+      return conn;
+    }
+  }
+  return NULL;
+}
+
 /* Abort the in-flight transfer matching {pid, ref}, if we still have it. No
  * response is sent to Erlang -- the request is simply dropped. A no-op if the
  * request already completed (already removed from active_conns). */
 static void cancel_conn(GlobalInfo *global, erlang_pid *pid, erlang_ref *ref) {
-  for (ConnInfo *conn = global->active_conns; conn; conn = conn->next) {
-    if (ei_cmp_refs(conn->ref, ref) == 0 && ei_cmp_pids(conn->pid, pid) == 0) {
-      free_conn(global, conn);
-      return;
-    }
+  ConnInfo *conn = find_conn(global, pid, ref);
+  if (conn) {
+    free_conn(global, conn);
+  }
+}
+
+/* Grant n more chunk credits to the streaming transfer matching {pid, ref}
+ * and resume it if it was paused waiting for credits. A no-op if the
+ * transfer is gone (completed/cancelled) or was started unbounded. */
+static void flow_conn(GlobalInfo *global, erlang_pid *pid, erlang_ref *ref,
+                      long n) {
+  CURLMcode rc;
+  ConnInfo *conn = find_conn(global, pid, ref);
+
+  if (conn == NULL || conn->window < 0 || n <= 0) {
+    return;
+  }
+  /* Credits first: curl may invoke write_cb synchronously inside
+   * curl_easy_pause to flush the buffer it held while paused. */
+  conn->window += n;
+  if (conn->paused) {
+    conn->paused = 0;
+    curl_easy_pause(conn->easy, CURLPAUSE_CONT);
+    /* Kick the multi so socket reading resumes promptly. */
+    rc = curl_multi_socket_action(global->multi, CURL_SOCKET_TIMEOUT, 0,
+                                  &global->still_running);
+    mcode_or_die("flow_conn: curl_multi_socket_action", rc);
+    check_multi_info(global);
   }
 }
 
@@ -639,7 +764,16 @@ static void check_multi_info(GlobalInfo *global) {
       curl_easy_getinfo(easy, CURLINFO_STARTTRANSFER_TIME, &conn->starttransfer_time);
 
       if (res == CURLE_OK) {
-        send_ok_to_erlang(conn);
+        if (conn->stream) {
+          /* A bodyless response never entered write_cb, so the headers
+           * message may still be owed before the terminal done. */
+          if (!conn->headers_sent) {
+            send_headers_to_erlang(conn);
+          }
+          send_done_to_erlang(conn);
+        } else {
+          send_ok_to_erlang(conn);
+        }
       } else {
         send_error_to_erlang(res, conn);
       }
@@ -742,6 +876,29 @@ static int multi_timer_cb(CURLM *multi, long timeout_ms, void *userp) {
 static size_t write_cb(void *ptr, size_t size, size_t nmemb, void *data) {
   size_t realsize = size * nmemb;
   ConnInfo *conn = (ConnInfo *)data;
+
+  /* Streaming transfers forward body bytes as they arrive instead of
+   * buffering them; the headers message goes out once, before the first
+   * chunk (by which point header_cb has seen the final response's header
+   * block, including after redirects). */
+  if (conn->stream) {
+    if (conn->window == 0) {
+      /* Out of credits: pause the transfer. curl keeps this buffer and
+       * re-delivers it after CURLPAUSE_CONT, so nothing is sent or counted
+       * now. Pausing stops socket reads, so backpressure reaches the
+       * server via TCP or the HTTP/2/3 stream window. */
+      conn->paused = 1;
+      return CURL_WRITEFUNC_PAUSE;
+    }
+    if (!conn->headers_sent) {
+      send_headers_to_erlang(conn);
+    }
+    send_chunk_to_erlang(conn, ptr, realsize);
+    if (conn->window > 0) {
+      conn->window--;
+    }
+    return realsize;
+  }
 
   size_t needed = conn->size + realsize;
   if (needed > conn->capacity) {
@@ -856,6 +1013,8 @@ static void new_conn(long method, char *url, struct curl_slist *req_headers,
   conn->req_cookies = req_cookies;
   conn->post_data = post_data;
   conn->post_data_size = post_data_size;
+  conn->stream = eopts.curlopt_stream != 0;
+  conn->window = eopts.curlopt_stream_window;
 
   #if LIBCURL_VERSION_NUM >= 0x075500 /* 7.85.0 */
     curl_easy_setopt(conn->easy, CURLOPT_PROTOCOLS_STR, "http,https");
@@ -1006,14 +1165,8 @@ static void send_parse_error_to_erlang(GlobalInfo *global,
   ei_x_buff result;
   size_t msg_len = strlen(msg);
 
-  if (ei_x_new_with_version(&result) ||
-      ei_x_encode_tuple_header(&result, 2) ||
-      ei_x_encode_atom(&result, "error") ||
-      ei_x_encode_tuple_header(&result, 2) ||
-      ei_x_encode_tuple_header(&result, 2) ||
-      ei_x_encode_pid(&result, pid) ||
-      ei_x_encode_ref(&result, ref) ||
-      ei_x_encode_tuple_header(&result, 3) ||
+  begin_msg(&result, "error", pid, ref);
+  if (ei_x_encode_tuple_header(&result, 3) ||
       ei_x_encode_atom(&result, "bad_opts") ||
       ei_x_encode_binary(&result, msg, msg_len) ||
       ei_x_encode_empty_list(&result)) {
@@ -1155,6 +1308,12 @@ static int parse_eopts(char *buf, int *index, EasyOpts *eopts) {
         break;
       case K_CURLOPT_PIPEWAIT:
         eopts->curlopt_pipewait = eopt_long;
+        break;
+      case K_CURLOPT_STREAM:
+        eopts->curlopt_stream = eopt_long;
+        break;
+      case K_CURLOPT_STREAM_WINDOW:
+        eopts->curlopt_stream_window = eopt_long;
         break;
       default:
         break;
@@ -1324,10 +1483,37 @@ static void erl_input(struct bufferevent *ev, void *arg) {
     }
 
     /* Cancel command: {Pid, Ref, cancel} (arity 3). Abort the matching
-     * in-flight transfer if we still have it; no response is sent. Requests
-     * are 8-tuples, so arity discriminates the two. */
+     * in-flight transfer if we still have it; no response is sent.
+     * Commands are discriminated by arity plus their tag atom (requests
+     * are 8-tuples); malformed commands are dropped silently -- replying
+     * would be delivered as a terminal message for a healthy request. */
     if (arity == 3) {
-      cancel_conn(global, pid, ref);
+      char cancel_atom[MAXATOMLEN];
+      if (ei_decode_atom(buf, &index, cancel_atom) ||
+          strcmp(cancel_atom, "cancel") != 0) {
+        fprintf(stderr, "ERROR: Couldn't decode cancel command\n");
+      } else {
+        cancel_conn(global, pid, ref);
+      }
+      free(pid);
+      free(ref);
+      free(buf);
+      continue;
+    }
+
+    /* Flow command: {Pid, Ref, flow, N} (arity 4). Grant N more chunk
+     * credits to the matching streaming transfer. */
+
+    if (arity == 4) {
+      char flow_atom[MAXATOMLEN];
+      long flow_n;
+      if (ei_decode_atom(buf, &index, flow_atom) ||
+          strcmp(flow_atom, "flow") != 0 ||
+          ei_decode_long(buf, &index, &flow_n)) {
+        fprintf(stderr, "ERROR: Couldn't decode flow command\n");
+      } else {
+        flow_conn(global, pid, ref, flow_n);
+      }
       free(pid);
       free(ref);
       free(buf);
@@ -1374,6 +1560,7 @@ static void erl_input(struct bufferevent *ev, void *arg) {
         .curlopt_dns_cache_timeout = 60,
         .curlopt_ca_cache_timeout = 86400,
         .curlopt_pipewait = 1,
+        .curlopt_stream_window = -1,
     };
 
     if (parse_eopts(buf, &index, &eopts) != 0) {

@@ -7,7 +7,7 @@
 %% encoding, header formatting, and the method<->code conversions. Factored out
 %% of katipo to keep the public facade small.
 
--export([build_req/1]).
+-export([build_req/2]).
 -export([check_opts/1]).
 -export([get_timeout/1]).
 -export([method_int_to_binary/1]).
@@ -23,23 +23,43 @@
 -dialyzer({nowarn_function, opt/3}).
 
 %% Build a validated, timeout-stamped #req{} from an opts map. Shared by the
-%% sync req/2 and async_req/2 entry points.
--spec build_req(katipo:request()) -> {ok, req()} | {error, map()}.
-build_req(Opts) ->
+%% sync req/2 and async_req/2 entry points; Mode carries the cross-field
+%% rules that depend on the caller: a streamed response has no single reply
+%% to return, so `stream` is only valid on the async path, and a
+%% `stream_window` only means something on a streaming request.
+-spec build_req(katipo:request(), sync | async) -> {ok, req()} | {error, map()}.
+build_req(Opts, Mode) ->
     case process_opts(Opts) of
         {ok, #req{url = undefined}} ->
             {error, error_map(bad_opts, <<"[{url,undefined}]">>)};
         {ok, Req} ->
-            {ok, Req#req{timeout = ?MODULE:get_timeout(Req)}};
+            case stream_opts_error(Req, Mode) of
+                ok ->
+                    {ok, Req#req{timeout = ?MODULE:get_timeout(Req)}};
+                {error, _} = Error ->
+                    Error
+            end;
         {error, _} = Error ->
             Error
     end.
 
+%% The cross-field stream rules, shared with check_opts/1 so pre-validation
+%% agrees with the request entry points.
+stream_opts_error(#req{stream = ?STREAM_TRUE}, sync) ->
+    {error, error_map(bad_opts, [{stream, true}])};
+stream_opts_error(#req{stream = ?STREAM_FALSE, stream_window = W}, _Mode)
+  when W =/= ?STREAM_WINDOW_UNLIMITED ->
+    {error, error_map(bad_opts, [{stream_window, W}])};
+stream_opts_error(#req{}, _Mode) ->
+    ok.
+
+%% Validates under the async rules (the superset: `stream` is accepted);
+%% cross-field checks match what req/2 and async_req/2 enforce.
 -spec check_opts(katipo:request()) -> ok | {error, map()}.
 check_opts(Opts) when is_map(Opts) ->
     case process_opts(Opts) of
-        {ok, _} ->
-            ok;
+        {ok, Req} ->
+            stream_opts_error(Req, async);
         {error, _} = Error ->
             Error
     end.
@@ -237,6 +257,14 @@ opt(pipewait, true, {Req, Errors}) ->
     {Req#req{pipewait = ?PIPEWAIT_TRUE}, Errors};
 opt(pipewait, false, {Req, Errors}) ->
     {Req#req{pipewait = ?PIPEWAIT_FALSE}, Errors};
+opt(stream, true, {Req, Errors}) ->
+    {Req#req{stream = ?STREAM_TRUE}, Errors};
+opt(stream, false, {Req, Errors}) ->
+    {Req#req{stream = ?STREAM_FALSE}, Errors};
+opt(stream_window, infinity, {Req, Errors}) ->
+    {Req#req{stream_window = ?STREAM_WINDOW_UNLIMITED}, Errors};
+opt(stream_window, N, {Req, Errors}) when is_integer(N) andalso N > 0 ->
+    {Req#req{stream_window = N}, Errors};
 opt(reply_to, Pid, {Req, Errors}) when is_pid(Pid) ->
     {Req, Errors};
 opt(K, V, {Req, Errors}) ->

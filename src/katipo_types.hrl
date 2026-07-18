@@ -185,7 +185,9 @@
                     userpwd => userpwd(),
                     dns_cache_timeout => integer(),
                     ca_cache_timeout => integer(),
-                    pipewait => boolean()}.
+                    pipewait => boolean(),
+                    stream => boolean(),
+                    stream_window => pos_integer() | infinity}.
 -type opts() :: #{reply_to => pid(),
                     headers => headers(),
                     cookiejar => cookiejar(),
@@ -216,7 +218,9 @@
                     userpwd => userpwd(),
                     dns_cache_timeout => integer(),
                     ca_cache_timeout => integer(),
-                    pipewait => boolean()}.
+                    pipewait => boolean(),
+                    stream => boolean(),
+                    stream_window => pos_integer() | infinity}.
 -export_type([opts/0]).
 -type metrics() :: proplists:proplist().
 -type response() :: {ok, #{status := status(),
