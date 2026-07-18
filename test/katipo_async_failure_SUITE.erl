@@ -27,6 +27,7 @@
 -export([admission_error_when_worker_restarting/1]).
 -export([no_message_after_cancel_against_dead_port/1]).
 -export([timeout_aborts_transfer_in_port/1]).
+-export([admission_timeout_when_worker_wedged/1]).
 
 -include_lib("common_test/include/ct.hrl").
 -include_lib("stdlib/include/assert.hrl").
@@ -35,7 +36,8 @@ all() ->
     [admission_error_when_port_closes_before_dispatch,
      admission_error_when_worker_restarting,
      no_message_after_cancel_against_dead_port,
-     timeout_aborts_transfer_in_port].
+     timeout_aborts_transfer_in_port,
+     admission_timeout_when_worker_wedged].
 
 init_per_suite(Config) ->
     {ok, _} = application:ensure_all_started(katipo),
@@ -66,8 +68,7 @@ blackhole_req() ->
 %% The call monitor must convert that into {error, worker_died} -- before
 %% the fix the request was cast fire-and-forget and simply vanished.
 admission_error_when_port_closes_before_dispatch(Config) ->
-    [WorkerName] = wpool:get_workers(?config(pool, Config)),
-    WorkerPid = whereis(WorkerName),
+    WorkerPid = worker_pid(?config(pool, Config)),
     Port = worker_port(WorkerPid),
 
     %% Freeze the worker so the admission call queues unprocessed, then
@@ -103,7 +104,7 @@ admission_error_when_port_closes_before_dispatch(Config) ->
 admission_error_when_worker_restarting(Config) ->
     Pool = ?config(pool, Config),
     [WorkerName] = wpool:get_workers(Pool),
-    WorkerPid = whereis(WorkerName),
+    WorkerPid = worker_pid(Pool),
 
     %% Suspend the worker's supervisor so the restart window stays open
     %% deterministically, then kill the worker.
@@ -129,8 +130,7 @@ admission_error_when_worker_restarting(Config) ->
 %% best-effort: the cancelled caller must hear nothing.
 no_message_after_cancel_against_dead_port(Config) ->
     Pool = ?config(pool, Config),
-    [WorkerName] = wpool:get_workers(Pool),
-    WorkerPid = whereis(WorkerName),
+    WorkerPid = worker_pid(Pool),
 
     %% {ok, Ref} means the admission call completed, i.e. the request is
     %% registered in the worker's Reqs map -- no polling needed.
@@ -162,8 +162,7 @@ no_message_after_cancel_against_dead_port(Config) ->
 %% worker writes.
 timeout_aborts_transfer_in_port(Config) ->
     Pool = ?config(pool, Config),
-    [WorkerName] = wpool:get_workers(Pool),
-    WorkerPid = whereis(WorkerName),
+    WorkerPid = worker_pid(Pool),
 
     %% Long curl-side timeouts: the C port stays silent for the whole test,
     %% so the only timeout that can fire is the one we send by hand.
@@ -196,6 +195,18 @@ timeout_aborts_transfer_in_port(Config) ->
     ok = swap_port(WorkerPid, RealPort),
     true = port_close(FakePort).
 
+%% A worker that accepts no messages at all (here: suspended; in production
+%% a C port that stopped draining its pipe and blocked the worker inside
+%% port_command) must not block callers forever: the bounded admission call
+%% gives up and reports admission_timeout. Runs for the full 5s bound.
+admission_timeout_when_worker_wedged(Config) ->
+    Pool = ?config(pool, Config),
+    WorkerPid = worker_pid(Pool),
+    ok = sys:suspend(WorkerPid),
+    Res = katipo:async_req(Pool, blackhole_req()),
+    ok = sys:resume(WorkerPid),
+    ?assertMatch({error, #{code := admission_timeout}}, Res).
+
 wait_until(_Fun, 0) ->
     {error, condition_never_true};
 wait_until(Fun, Retries) ->
@@ -206,6 +217,11 @@ wait_until(Fun, Retries) ->
             timer:sleep(20),
             wait_until(Fun, Retries - 1)
     end.
+
+%% The single pool worker's pid (every test here runs a size-1 pool).
+worker_pid(Pool) ->
+    [WorkerName] = wpool:get_workers(Pool),
+    whereis(WorkerName).
 
 %% The worker's C port, found via the public port_info seam: the worker
 %% process owns exactly one port.

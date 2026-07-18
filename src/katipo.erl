@@ -46,7 +46,11 @@ so the caller fails fast instead of blocking until the request timeout. If the
 request cannot be handed to a worker at all (the worker is dead or being
 restarted), the async function returns `{error, #{code => worker_died}}`
 instead of `{ok, Ref}` -- an accepted request always produces exactly one
-terminal message.
+terminal message. Handing an async request to a worker is itself bounded
+(5s): a wedged or deeply backed-up worker yields
+`{error, #{code => admission_timeout}}` rather than blocking the caller.
+(Sync requests are bounded by the request timeout instead -- their single
+call carries the whole response.)
 
 With `stream => true` the body is delivered incrementally as
 `{katipo_headers, Ref, _}`, `{katipo_chunk, Ref, _}`* and a terminal
@@ -289,8 +293,10 @@ Returns `{ok, Ref}` once a pool worker has accepted the request. The response
 is delivered as a `{katipo_response, Ref, ResponseMap}` or
 `{katipo_error, Ref, ErrorMap}` message to the process specified by the
 `reply_to` option (defaults to `self()`). If no worker could accept the
-request (e.g. it died and is being restarted), returns
-`{error, #{code => worker_died}}` and no message is delivered.
+request, returns `{error, #{code => worker_died | overload |
+admission_timeout}}` (dead/restarting worker, pool at `max_in_flight`
+capacity, or a wedged worker not answering the bounded admission call) and
+no message is delivered.
 
 Use `await/1,2` to block until the response arrives.
 
@@ -348,7 +354,7 @@ async_req(PoolName, Opts)
 %% Admission is a synchronous call, not a cast, so dispatch failures surface
 %% immediately instead of losing the request: a cast to a dead or restarting
 %% worker name is silently dropped, and a worker that crashes on port_command
-%% before registering the request can notify nobody afterwards. pool_call/2
+%% before registering the request can notify nobody afterwards. pool_call
 %% turns both into an immediate {error, worker_died} return. The returned
 %% Ref is worker-minted (a process alias; see the worker's admission clause
 %% for the full lifecycle).
@@ -442,27 +448,45 @@ call_worker(PoolName, Req) ->
 %% left to propagate -- mislabeling them worker_died would hide a
 %% naming/startup bug behind a transient-looking error.
 pool_call(PoolName, Msg) ->
-    case attempt(fun() -> wpool:call(PoolName, Msg, random_worker, infinity) end) of
+    Bound = admission_bound(Msg),
+    case attempt(fun() -> wpool:call(PoolName, Msg, random_worker,
+                                     Bound) end, Bound) of
         {overload, FullWorker} ->
             %% The randomly-picked worker is at max_in_flight; others may
             %% have room, so offer the request to each remaining worker.
-            spillover(spillover_candidates(PoolName, FullWorker), Msg);
-        worker_died ->
-            {error, katipo_req:error_map(worker_died, <<>>)};
+            spillover(spillover_candidates(PoolName, FullWorker), Msg, Bound);
         {ok, Reply} ->
-            {ok, Reply}
+            {ok, Reply};
+        Err when Err =:= worker_died; Err =:= admission_timeout ->
+            %% admission_timeout fails fast by design: a caller retry
+            %% re-rolls onto a (likely healthy) random worker immediately,
+            %% and a request the worker admits after we gave up is cleaned
+            %% up by its own request timer.
+            {error, katipo_req:error_map(Err, <<>>)}
     end.
 
-%% One admission attempt, however the worker is addressed. Only three things
-%% can come back: a real reply, an at-capacity rejection carrying the full
-%% worker's pid, or the exit shape of a worker dying with the call in
-%% flight.
-attempt(CallFun) ->
+%% The bound on the pool call, derived from the message kind in one place:
+%% async admission is an immediate ack, so it is bounded (see
+%% ?ADMISSION_TIMEOUT); a sync request's single call carries the whole
+%% response and is governed by the worker's request timer instead.
+admission_bound({async_req, _ReplyTo, _Req, _Obs}) -> ?ADMISSION_TIMEOUT;
+admission_bound(#req{}) -> infinity.
+
+%% One admission attempt, however the worker is addressed. Only a real
+%% reply, an at-capacity rejection carrying the full worker's pid, a
+%% bounded call timing out against an unresponsive worker, or the worker
+%% dying with the call in flight can come back. The timeout mapping guards
+%% on the bound: on an unbounded call a {timeout, _} exit can only be a
+%% worker that died with exit reason `timeout`.
+attempt(CallFun, Bound) ->
     try CallFun() of
         {overload, Pid} -> {overload, Pid};
         Reply -> {ok, Reply}
     catch
-        exit:{_Reason, {gen_server, call, _}} -> worker_died
+        exit:{timeout, {gen_server, call, _}} when Bound =/= infinity ->
+            admission_timeout;
+        exit:{_Reason, {gen_server, call, _}} ->
+            worker_died
     end.
 
 %% The rest of the pool in random-rotation order, minus the worker that just
@@ -473,14 +497,19 @@ spillover_candidates(PoolName, FullWorker) ->
     {Front, Back} = lists:split(rand:uniform(length(Workers)) - 1, Workers),
     [W || W <- Back ++ Front, whereis(W) =/= FullWorker].
 
-spillover([], _Msg) ->
+spillover([], _Msg, _Bound) ->
     {error, katipo_req:error_map(overload, <<>>)};
-spillover([Worker | Workers], Msg) ->
-    case attempt(fun() -> wpool_process:call(Worker, Msg, infinity) end) of
-        {ok, Reply} -> {ok, Reply};
-        %% Full, dead, or restarting: nothing to offer here, keep going.
-        {overload, _} -> spillover(Workers, Msg);
-        worker_died -> spillover(Workers, Msg)
+spillover([Worker | Workers], Msg, Bound) ->
+    case attempt(fun() -> wpool_process:call(Worker, Msg, Bound) end, Bound) of
+        {ok, Reply} ->
+            {ok, Reply};
+        admission_timeout ->
+            %% Same fail-fast rationale as the first attempt: at most one
+            %% bounded wait per admission, never one per candidate.
+            {error, katipo_req:error_map(admission_timeout, <<>>)};
+        _NoRoom ->
+            %% Full, dead, or restarting: nothing to offer here, keep going.
+            spillover(Workers, Msg, Bound)
     end.
 
 -doc """
