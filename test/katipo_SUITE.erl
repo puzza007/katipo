@@ -648,30 +648,25 @@ tcp_fastopen_false(Config) ->
             ok
     end.
 
-interface(_Config) ->
-    %% Interface binding test requires an external URL (not localhost)
-    %% because localhost traffic uses the loopback interface, not physical interfaces
-    Url = <<"https://httpbin.org/get">>,
-    Interface = case os:type() of
-                    {unix, darwin} ->
-                        <<"en0">>;
-                    {unix, linux} ->
-                        %% Try common interface names: ens5 (GitHub Actions/AWS),
-                        %% eth0 (traditional), ens4 (GCP)
-                        find_linux_interface([<<"ens5">>, <<"eth0">>, <<"ens4">>]);
-                    _ ->
-                        erlang:error({unknown_operating_system, fixme})
-                end,
-    {ok, #{}} = katipo:get(?POOL, Url, #{interface => Interface}).
+interface(Config) ->
+    %% Bind to the loopback interface by its discovered name and talk to
+    %% the local httpbin over it: deterministic positive coverage (binding
+    %% to a physical interface black-holes against local destinations on
+    %% Linux, and the public internet is too flaky a CI dependency). That
+    %% the option is genuinely passed through is proven by
+    %% interface_unknown's rejection of a bogus name.
+    Url = httpbin_url(Config, <<"/get">>),
+    BaseOpts = ?config(httpbin_opts, Config),
+    {ok, #{status := 200}} =
+        katipo:get(?POOL, Url, BaseOpts#{interface => loopback_interface()}).
 
-find_linux_interface([]) ->
-    <<"eth0">>; %% fallback
-find_linux_interface([Iface | Rest]) ->
-    Path = <<"/sys/class/net/", Iface/binary>>,
-    case filelib:is_dir(binary_to_list(Path)) of
-        true -> Iface;
-        false -> find_linux_interface(Rest)
-    end.
+%% The loopback interface's actual name (lo, lo0, ...), discovered rather
+%% than hardcoded per platform.
+loopback_interface() ->
+    {ok, Ifs} = inet:getifaddrs(),
+    hd([list_to_binary(Name)
+        || {Name, Props} <- Ifs,
+           lists:member(loopback, proplists:get_value(flags, Props, []))]).
 
 interface_unknown(Config) ->
     Url = httpbin_url(Config, <<"/get">>),
