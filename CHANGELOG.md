@@ -6,6 +6,10 @@ All notable changes to this project are documented here. This project follows
 ## [Unreleased]
 
 ### Added
+- The `{maxconnects, N}` pool option exposes curl's idle-connection cache
+  size (`CURLMOPT_MAXCONNECTS`), bounding the fd footprint of cached dead
+  keepalive connections under sustained load. See the README for sizing
+  guidance.
 - `low_speed_limit` and `low_speed_time` fail a transfer that runs slower
   than the limit, in bytes per second, for that many seconds, with
   `operation_timedout`, so a stalled download is caught without a short
