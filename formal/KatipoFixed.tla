@@ -120,10 +120,14 @@ WorkerRecvReq(r) ==
           /\ UNCHANGED <<timerFired, sent, cancelled, effCancel,
                          effCancelSnap, deaths, cancelPollution>>
 
+\* abort_transfer/2: best-effort port_command of the cancel tuple with
+\* badarg swallowed -- nothing to write if the port is dead. Shared by the
+\* cancel and timeout paths, mirroring the code's shared helper.
+AbortPQ(r) == IF pAlive THEN Append(pQ, CancelMsg(r)) ELSE pQ
+
 \* handle_cast({cancel, Ref}) -> cancel_async (FIXED): cancel_timer, then
-\* maps:remove, then a best-effort port_command with badarg swallowed. The
-\* worker survives a cancel against a dead port and the request is out of
-\* Reqs either way.
+\* maps:remove, then abort_transfer. The worker survives a cancel against a
+\* dead port and the request is out of Reqs either way.
 WorkerRecvCancel(r) ==
   /\ wAlive /\ wQ # <<>> /\ Head(wQ) = CancelMsg(r)
   /\ wQ' = Tail(wQ)
@@ -131,7 +135,7 @@ WorkerRecvCancel(r) ==
      THEN /\ reqs' = reqs \ {r}
           /\ effCancel' = effCancel \cup {r}
           /\ effCancelSnap' = [effCancelSnap EXCEPT ![r] = delivered[r]]
-          /\ pQ' = IF pAlive THEN Append(pQ, CancelMsg(r)) ELSE pQ
+          /\ pQ' = AbortPQ(r)
      ELSE /\ UNCHANGED <<reqs, effCancel, effCancelSnap, pQ>>
   /\ UNCHANGED <<wAlive, pAlive, timerFired, conns, sent, cancelled,
                  delivered, deaths, cancelPollution>>
@@ -147,15 +151,17 @@ WorkerRecvResp(r) ==
   /\ UNCHANGED <<wAlive, pAlive, pQ, timerFired, conns, sent, cancelled,
                  effCancel, effCancelSnap, deaths, cancelPollution>>
 
-\* handle_info({timeout, Tref, {req_timeout, From}}): deliver iff in Reqs.
+\* handle_info({timeout, Tref, {req_timeout, From}}): deliver iff in Reqs,
+\* and abort_transfer the still-running transfer in the port.
 WorkerRecvTimeout(r) ==
   /\ wAlive /\ wQ # <<>> /\ Head(wQ) = TimeoutMsg(r)
   /\ wQ' = Tail(wQ)
   /\ IF r \in reqs
      THEN /\ delivered' = [delivered EXCEPT ![r] = @ + 1]
           /\ reqs' = reqs \ {r}
-     ELSE UNCHANGED <<delivered, reqs>>
-  /\ UNCHANGED <<wAlive, pAlive, pQ, timerFired, conns, sent, cancelled,
+          /\ pQ' = AbortPQ(r)
+     ELSE UNCHANGED <<delivered, reqs, pQ>>
+  /\ UNCHANGED <<wAlive, pAlive, timerFired, conns, sent, cancelled,
                  effCancel, effCancelSnap, deaths, cancelPollution>>
 
 \* handle_info({'EXIT', Port, _}) -> {stop, port_died} -> terminate/2.

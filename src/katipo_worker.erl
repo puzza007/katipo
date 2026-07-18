@@ -119,11 +119,16 @@ handle_info({Port, {data, Data}}, State = #state{port = Port, reqs = Reqs}) ->
     end,
     Reqs2 = maps:remove(From, Reqs),
     {noreply, State#state{reqs = Reqs2}};
-handle_info({timeout, Tref, {req_timeout, From}}, State = #state{reqs = Reqs}) ->
+handle_info({timeout, Tref, {req_timeout, From}},
+            State = #state{port = Port, reqs = Reqs}) ->
     Reqs2 =
         case maps:find(From, Reqs) of
             {ok, {Tref, Kind}} ->
                 _ = deliver_timeout(Kind, From),
+                %% Abort the transfer still running in the C port: its
+                %% eventual output would be dropped anyway now that the
+                %% request is out of Reqs.
+                abort_transfer(Port, From),
                 maps:remove(From, Reqs);
             _ ->
                 Reqs
@@ -158,22 +163,26 @@ notify_worker_died(_From, {_Tref, sync}) ->
 %% no response is delivered.
 cancel_async(Port, UserRef, Reqs) ->
     case find_async(UserRef, Reqs) of
-        {ok, {Self, Ref} = From, Tref, Obs} ->
+        {ok, From, Tref, Obs} ->
             _ = erlang:cancel_timer(Tref),
             Reqs2 = maps:remove(From, Reqs),
-            %% port_command raises badarg if the port died and its 'EXIT'
-            %% message is still queued behind this cancel. The transfer is
-            %% gone either way, so the abort is best-effort -- crashing here
-            %% would leave the request in Reqs and make terminate/2 send
-            %% worker_died to a caller who cancelled.
-            try port_command(Port, term_to_binary({Self, Ref, cancel}))
-            catch error:badarg -> ok
-            end,
+            abort_transfer(Port, From),
             katipo_span:end_async(Obs),
             Reqs2;
         error ->
             Reqs
     end.
+
+%% Ask the C port to abort the in-flight transfer identified by {Pid, Ref}
+%% (a no-op there if it already completed). Best-effort: port_command raises
+%% badarg if the port died and its 'EXIT' message is still queued behind us;
+%% the transfer is gone either way, and crashing here would let terminate/2
+%% message callers that have already been dealt with.
+abort_transfer(Port, {Pid, Ref}) ->
+    try port_command(Port, term_to_binary({Pid, Ref, cancel}))
+    catch error:badarg -> ok
+    end,
+    ok.
 
 find_async(UserRef, Reqs) ->
     case [{From, Tref, Obs}
