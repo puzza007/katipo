@@ -271,7 +271,10 @@ groups() ->
        streaming_sync_rejected,
        streaming_window_invalid,
        streaming_worker_death,
-       streaming_flow_starvation]},
+       streaming_flow_starvation,
+       streaming_error_mid_body,
+       streaming_timeout_mid_body,
+       streaming_cancel_mid_stream]},
      {otel, [],
       [otel_span_created,
        otel_metrics_recorded,
@@ -1355,18 +1358,10 @@ streaming_flow_control(Config) ->
                                               method => get,
                                               stream => true,
                                               stream_window => 1}),
-    receive
-        {katipo_headers, Ref, #{status := 200}} -> ok
-    after 10000 ->
-            ct:fail(no_headers)
-    end,
+    ok = expect_stream_headers(Ref),
     %% The 64k body spans several curl write buffers, so with one credit
     %% exactly one chunk arrives and the transfer pauses.
-    Chunk1 = receive
-                 {katipo_chunk, Ref, C} -> C
-             after 10000 ->
-                     ct:fail(no_first_chunk)
-             end,
+    Chunk1 = expect_first_chunk(Ref),
     receive
         {katipo_chunk, Ref, _} -> ct:fail(chunk_beyond_window);
         {katipo_done, Ref, Done} -> ct:fail({done_beyond_window, Done})
@@ -1407,9 +1402,9 @@ streaming_empty_body(Config) ->
     {204, _Headers, <<>>} = collect_stream(Ref).
 
 %% Cancelling an in-flight streaming request stops delivery entirely: no
-%% headers, chunks, or terminal message ever arrive. (The local httpbin
-%% buffers responses, so a cancel between headers and done is not
-%% deterministically reachable here; cancel-before-response is.)
+%% headers, chunks, or terminal message ever arrive. (Cancel between
+%% headers and done is covered by streaming_cancel_mid_stream against the
+%% drip server; this covers cancel-before-response.)
 streaming_cancel(Config) ->
     {req_opts, Opts} = lists:keyfind(req_opts, 1, Config),
     PoolName = streaming_cancel_test,
@@ -1489,6 +1484,95 @@ streaming_worker_death(Config) ->
             ct:fail(no_worker_died)
     end,
     ok = katipo_pool:stop(PoolName).
+
+%% -- drip-server streaming tests -----------------------------------------
+%% The local httpbin stack buffers whole responses, so these mid-response
+%% behaviors need katipo_drip_server: a real socket that is still open,
+%% with body bytes already delivered, when the interesting event happens.
+
+%% A transfer that dies mid-body -- the server advertised more than it
+%% sent, then closed -- delivers its terminal error AFTER the headers and
+%% chunks that already arrived.
+streaming_error_mid_body(_Config) ->
+    {ok, Drip, Port} = katipo_drip_server:start(
+                         #{content_length => 100,
+                           pieces => [{0, <<"01234567890123456789">>}],
+                           finish => close}),
+    {ok, Ref} = katipo:async_req(?POOL,
+                                 #{url => katipo_drip_server:url(Port),
+                                   method => get,
+                                   stream => true}),
+    ok = expect_stream_headers(Ref),
+    _ = expect_first_chunk(Ref),
+    ok = expect_stream_error(Ref, partial_file, 5000),
+    ok = katipo_drip_server:stop(Drip).
+
+%% A request timeout mid-body is the same terminal error, after the
+%% headers and chunks that already arrived.
+streaming_timeout_mid_body(_Config) ->
+    {ok, Drip, Port} = katipo_drip_server:start(
+                         #{content_length => 100,
+                           pieces => [{0, <<"early bytes">>}],
+                           finish => stall}),
+    {ok, Ref} = katipo:async_req(?POOL,
+                                 #{url => katipo_drip_server:url(Port),
+                                   method => get,
+                                   stream => true,
+                                   connecttimeout_ms => 500,
+                                   timeout_ms => 500}),
+    ok = expect_stream_headers(Ref),
+    _ = expect_first_chunk(Ref),
+    ok = expect_stream_error(Ref, operation_timedout, 5000),
+    ok = katipo_drip_server:stop(Drip).
+
+%% Cancel between headers and done: chunks already in flight may still
+%% arrive, but no terminal message ever does -- and the server observes
+%% the connection close, proving the C port really aborted the transfer
+%% rather than silently discarding its output.
+streaming_cancel_mid_stream(_Config) ->
+    {ok, Drip, Port} = katipo_drip_server:start(
+                         #{content_length => 100,
+                           pieces => [{0, <<"aa">>}],
+                           finish => stall}),
+    {ok, Ref} = katipo:async_req(?POOL,
+                                 #{url => katipo_drip_server:url(Port),
+                                   method => get,
+                                   stream => true}),
+    ok = expect_stream_headers(Ref),
+    _ = expect_first_chunk(Ref),
+    ok = katipo:cancel(?POOL, Ref),
+    %% The stalled server's recv observes curl closing the connection.
+    receive
+        {drip_peer_closed, Drip} -> ok
+    after 3000 ->
+            ct:fail(transfer_not_aborted)
+    end,
+    ok = assert_cancelled_stream_silent(Ref),
+    ok = katipo_drip_server:stop(Drip).
+
+%% Drain progress messages already in flight at cancel time, then require
+%% the same silence as any cancelled stream.
+assert_cancelled_stream_silent(Ref) ->
+    receive
+        {katipo_chunk, Ref, _} ->
+            assert_cancelled_stream_silent(Ref)
+    after 100 ->
+            assert_stream_stopped(Ref, 300)
+    end.
+
+expect_stream_headers(Ref) ->
+    receive
+        {katipo_headers, Ref, #{status := 200}} -> ok
+    after 5000 ->
+            ct:fail(no_stream_headers)
+    end.
+
+expect_first_chunk(Ref) ->
+    receive
+        {katipo_chunk, Ref, Chunk} -> Chunk
+    after 5000 ->
+            ct:fail(no_first_chunk)
+    end.
 
 %% Collect one full stream: headers, any chunks, then done. Errors and
 %% out-of-order messages fail the test.
