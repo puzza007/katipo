@@ -434,19 +434,53 @@ call_worker(PoolName, Req) ->
         {error, Error} -> {error, Error, []}
     end.
 
-%% The one place that calls into the pool. If the worker dies with the call
-%% in flight (typically its C port died) gen_server:call exits with the shape
-%% {Reason, {gen_server, call, _}}; convert only that into the shared
-%% {error, worker_died} contract. Config errors such as wpool's bare
-%% `no_workers` (unknown/unstarted pool) are left to propagate -- mislabeling
-%% them worker_died would hide a naming/startup bug behind a
-%% transient-looking error.
+%% The admission entry point for both request kinds: one wpool attempt,
+%% then spillover across the remaining workers if the picked one is full.
+%% A worker dying with the first call in flight (typically its C port died)
+%% is converted into the shared {error, worker_died} contract. Config
+%% errors such as wpool's bare `no_workers` (unknown/unstarted pool) are
+%% left to propagate -- mislabeling them worker_died would hide a
+%% naming/startup bug behind a transient-looking error.
 pool_call(PoolName, Msg) ->
-    try
-        {ok, wpool:call(PoolName, Msg, random_worker, infinity)}
+    case attempt(fun() -> wpool:call(PoolName, Msg, random_worker, infinity) end) of
+        {overload, FullWorker} ->
+            %% The randomly-picked worker is at max_in_flight; others may
+            %% have room, so offer the request to each remaining worker.
+            spillover(spillover_candidates(PoolName, FullWorker), Msg);
+        worker_died ->
+            {error, katipo_req:error_map(worker_died, <<>>)};
+        {ok, Reply} ->
+            {ok, Reply}
+    end.
+
+%% One admission attempt, however the worker is addressed. Only three things
+%% can come back: a real reply, an at-capacity rejection carrying the full
+%% worker's pid, or the exit shape of a worker dying with the call in
+%% flight.
+attempt(CallFun) ->
+    try CallFun() of
+        {overload, Pid} -> {overload, Pid};
+        Reply -> {ok, Reply}
     catch
-        exit:{_Reason, {gen_server, call, _}} ->
-            {error, katipo_req:error_map(worker_died, <<>>)}
+        exit:{_Reason, {gen_server, call, _}} -> worker_died
+    end.
+
+%% The rest of the pool in random-rotation order, minus the worker that just
+%% rejected: rotation spreads spillover load, the exclusion avoids a
+%% guaranteed-redundant call into the busiest worker's mailbox.
+spillover_candidates(PoolName, FullWorker) ->
+    Workers = wpool:get_workers(PoolName),
+    {Front, Back} = lists:split(rand:uniform(length(Workers)) - 1, Workers),
+    [W || W <- Back ++ Front, whereis(W) =/= FullWorker].
+
+spillover([], _Msg) ->
+    {error, katipo_req:error_map(overload, <<>>)};
+spillover([Worker | Workers], Msg) ->
+    case attempt(fun() -> wpool_process:call(Worker, Msg, infinity) end) of
+        {ok, Reply} -> {ok, Reply};
+        %% Full, dead, or restarting: nothing to offer here, keep going.
+        {overload, _} -> spillover(Workers, Msg);
+        worker_died -> spillover(Workers, Msg)
     end.
 
 -doc """

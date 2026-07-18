@@ -133,7 +133,8 @@ katipo:update_flow(Pool :: atom(), Ref :: reference(), Credits :: pos_integer())
 ```
 
 The `code` atom is drawn from the exported `t:katipo:error_code/0` union (curl
-error names plus `bad_opts`, `await_timeout`, and `worker_died`).
+error names plus `bad_opts`, `await_timeout`, `worker_died`, and
+`overload`).
 
 #### Asynchronous requests
 
@@ -198,6 +199,10 @@ other streams sharing the connection while one stream is paused.
 | `pipelining`            | `nothing` <br> `http1` <br> `multiplex` | `nothing`    | HTTP pipelining [CURLMOPT_PIPELINING](https://curl.se/libcurl/c/CURLMOPT_PIPELINING.html) |
 | `max_total_connections` | `non_neg_integer()`           | 0 (no limit) | [docs](https://curl.se/libcurl/c/CURLMOPT_MAX_TOTAL_CONNECTIONS.html)                     |
 | `max_concurrent_streams`| `non_neg_integer()`           | 100          | [docs](https://curl.se/libcurl/c/CURLMOPT_MAX_CONCURRENT_STREAMS.html) curl >= 7.67.0     |
+
+Katipo adds one Erlang-side pool option of its own: `{max_in_flight, N}`
+(default `infinity`) caps concurrently in-flight requests per worker; a full
+pool rejects requests fast with `{error, #{code => overload}}`.
 
 #### Observability
 

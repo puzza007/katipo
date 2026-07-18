@@ -220,13 +220,13 @@ worker_port(WorkerPid) ->
 %% wpool_process's wrapper (same idiom as katipo_SUITE's worker_state/1;
 %% fails loudly if the wrapper shape changes).
 worker_reqs(WorkerPid) ->
-    {state, _, _, {state, _Port, Reqs}, _} = sys:get_state(WorkerPid),
+    {state, _, _, {state, _Port, Reqs, _MaxInFlight}, _} = sys:get_state(WorkerPid),
     Reqs.
 
 swap_port(WorkerPid, NewPort) ->
     _ = sys:replace_state(
           WorkerPid,
-          fun(S = {state, _, _, {state, _, Reqs}, _}) ->
-                  setelement(4, S, {state, NewPort, Reqs})
+          fun(S = {state, _, _, {state, _, Reqs, MaxInFlight}, _}) ->
+                  setelement(4, S, {state, NewPort, Reqs, MaxInFlight})
           end, 1000),
     ok.

@@ -26,31 +26,42 @@
 -include("katipo_internal.hrl").
 
 -record(state, {port :: port(),
-                reqs = #{} :: map()}).
+                reqs = #{} :: map(),
+                max_in_flight = infinity :: pos_integer() | infinity}).
 
 -type curlmopt() ::
         max_total_connections |
         max_concurrent_streams |
         pipelining.
 
-start_link(CurlOpts) when is_list(CurlOpts) ->
-    Args = [CurlOpts],
-    gen_server:start_link(?MODULE, Args, []).
+start_link([MaxInFlight, CurlOpts]) when is_list(CurlOpts) ->
+    gen_server:start_link(?MODULE, [MaxInFlight, CurlOpts], []).
 
-init([CurlOpts]) ->
+init([MaxInFlight, CurlOpts]) ->
     process_flag(trap_exit, true),
     case get_mopts(CurlOpts) of
         {ok, Args} ->
             Prog = filename:join([code:priv_dir(katipo), "katipo"]),
             Port = open_port({spawn, Prog ++ " " ++ Args}, [{packet, 4}, binary]),
-            {ok, #state{port = Port, reqs = #{}}};
+            {ok, #state{port = Port, reqs = #{}, max_in_flight = MaxInFlight}};
         {error, Error} ->
             {stop, Error}
     end.
 
-handle_call(Req = #req{}, From, State) ->
+%% Admission is gated on max_in_flight: a full worker replies
+%% {overload, self()} without registering anything, and pool_call in katipo
+%% offers the request to the remaining workers.
+handle_call(Msg, From, State) ->
+    case at_capacity(State) of
+        true ->
+            {reply, {overload, self()}, State};
+        false ->
+            admit_call(Msg, From, State)
+    end.
+
+admit_call(Req = #req{}, From, State) ->
     {noreply, admit(From, sync, Req, State)};
-handle_call({async_req, ReplyTo, Req = #req{}, Obs}, _From, State) ->
+admit_call({async_req, ReplyTo, Req = #req{}, Obs}, _From, State) ->
     %% The user-facing Ref is a process alias, so cancel/flow commands are
     %% plain sends to the Ref itself: they route straight to this worker,
     %% and once the alias dies (with us) or is deactivated (on resolution)
@@ -60,6 +71,11 @@ handle_call({async_req, ReplyTo, Req = #req{}, Obs}, _From, State) ->
     Alias = alias(),
     State2 = admit({self(), Alias}, {async, ReplyTo, Obs}, Req, State),
     {reply, Alias, State2}.
+
+at_capacity(#state{max_in_flight = infinity}) ->
+    false;
+at_capacity(#state{reqs = Reqs, max_in_flight = Max}) ->
+    maps:size(Reqs) >= Max.
 
 %% Register a request: hand it to the port, arm its timer, record it in Reqs.
 %% send_to_port runs BEFORE the Reqs insert on purpose: if the port is

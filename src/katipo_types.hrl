@@ -119,7 +119,8 @@
         %% returned by us, not curl
         bad_opts |
         await_timeout |
-        worker_died.
+        worker_died |
+        overload.
 
 -type error_msg() :: binary().
 -type status() :: pos_integer().
@@ -254,6 +255,12 @@
 -type curlmopts() :: [{pipelining, pipelining()} |
                       {max_total_connections, non_neg_integer()} |
                       {max_concurrent_streams, non_neg_integer()}].
+%% Pool options: the curl-multi options above plus katipo's own Erlang-side
+%% per-worker admission cap.
+-type pool_opts() :: [{pipelining, pipelining()} |
+                      {max_total_connections, non_neg_integer()} |
+                      {max_concurrent_streams, non_neg_integer()} |
+                      {max_in_flight, pos_integer() | infinity}].
 
 -export_type([method/0]).
 -export_type([url/0]).
@@ -270,6 +277,7 @@
 -export_type([response/0]).
 -export_type([http_auth/0]).
 -export_type([curlmopts/0]).
+-export_type([pool_opts/0]).
 -export_type([connecttimeout_ms/0]).
 -export_type([ssl_verifyhost/0]).
 -export_type([ssl_verifypeer/0]).
