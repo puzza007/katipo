@@ -236,7 +236,9 @@ groups() ->
      {https_mutual, [],
       [badssl_client_cert]},
      {port, [],
-      [max_total_connections]},
+      [max_total_connections,
+       max_in_flight_overload,
+       max_in_flight_invalid]},
      {async, [parallel],
       [async_get,
        async_get_with_opts,
@@ -646,30 +648,25 @@ tcp_fastopen_false(Config) ->
             ok
     end.
 
-interface(_Config) ->
-    %% Interface binding test requires an external URL (not localhost)
-    %% because localhost traffic uses the loopback interface, not physical interfaces
-    Url = <<"https://httpbin.org/get">>,
-    Interface = case os:type() of
-                    {unix, darwin} ->
-                        <<"en0">>;
-                    {unix, linux} ->
-                        %% Try common interface names: ens5 (GitHub Actions/AWS),
-                        %% eth0 (traditional), ens4 (GCP)
-                        find_linux_interface([<<"ens5">>, <<"eth0">>, <<"ens4">>]);
-                    _ ->
-                        erlang:error({unknown_operating_system, fixme})
-                end,
-    {ok, #{}} = katipo:get(?POOL, Url, #{interface => Interface}).
+interface(Config) ->
+    %% Bind to the loopback interface by its discovered name and talk to
+    %% the local httpbin over it: deterministic positive coverage (binding
+    %% to a physical interface black-holes against local destinations on
+    %% Linux, and the public internet is too flaky a CI dependency). That
+    %% the option is genuinely passed through is proven by
+    %% interface_unknown's rejection of a bogus name.
+    Url = httpbin_url(Config, <<"/get">>),
+    BaseOpts = ?config(httpbin_opts, Config),
+    {ok, #{status := 200}} =
+        katipo:get(?POOL, Url, BaseOpts#{interface => loopback_interface()}).
 
-find_linux_interface([]) ->
-    <<"eth0">>; %% fallback
-find_linux_interface([Iface | Rest]) ->
-    Path = <<"/sys/class/net/", Iface/binary>>,
-    case filelib:is_dir(binary_to_list(Path)) of
-        true -> Iface;
-        false -> find_linux_interface(Rest)
-    end.
+%% The loopback interface's actual name (lo, lo0, ...), discovered rather
+%% than hardcoded per platform.
+loopback_interface() ->
+    {ok, Ifs} = inet:getifaddrs(),
+    hd([list_to_binary(Name)
+        || {Name, Props} <- Ifs,
+           lists:member(loopback, proplists:get_value(flags, Props, []))]).
 
 interface_unknown(Config) ->
     Url = httpbin_url(Config, <<"/get">>),
@@ -1267,6 +1264,34 @@ badssl_client_cert(Config) ->
             ok
     end,
     ok.
+
+%% With max_in_flight => 1 and two workers, two slow requests fill the pool
+%% (the second admitted via spillover even if random routing repeats the
+%% first worker); further admissions -- sync and async -- reject with
+%% overload, and cancelling one request frees capacity again.
+max_in_flight_overload(Config) ->
+    PoolName = max_in_flight_overload,
+    {ok, _} = katipo_pool:start(PoolName, 2, [{max_in_flight, 1}]),
+    Url = httpbin_url(Config, <<"/delay/5">>),
+    Opts = ?config(httpbin_opts, Config),
+    {ok, _Ref1} = katipo:async_get(PoolName, Url, Opts),
+    {ok, Ref2} = katipo:async_get(PoolName, Url, Opts),
+    {error, #{code := overload}} = katipo:get(PoolName, Url, Opts),
+    {error, #{code := overload}} = katipo:async_get(PoolName, Url, Opts),
+    ok = katipo:cancel(PoolName, Ref2),
+    true = repeat_until_true(fun() ->
+                                     case katipo:async_get(PoolName, Url, Opts) of
+                                         {ok, _} -> true;
+                                         {error, #{code := overload}} -> false
+                                     end
+                             end),
+    ok = katipo_pool:stop(PoolName).
+
+%% An invalid max_in_flight is rejected by katipo_pool:start/3 itself,
+%% before any workers are started.
+max_in_flight_invalid(_Config) ->
+    {error, #{code := bad_opts}} =
+        katipo_pool:start(max_in_flight_invalid, 1, [{max_in_flight, 0}]).
 
 max_total_connections(Config) ->
     PoolName = max_total_connections,
@@ -1997,7 +2022,7 @@ kill_worker_port(PoolName) ->
 %% outer tuple is wpool_process's state wrapping katipo_worker's #state{port, reqs}.
 worker_state(PoolName) ->
     WorkerPid = whereis(wpool_pool:best_worker(PoolName)),
-    {state, _, _, {state, Port, Reqs}, _} = sys:get_state(WorkerPid),
+    {state, _, _, {state, Port, Reqs, _MaxInFlight}, _} = sys:get_state(WorkerPid),
     {Port, Reqs}.
 
 %% Minimal unix-socket HTTP/1.1 server for the unix_socket_path test: accept a
