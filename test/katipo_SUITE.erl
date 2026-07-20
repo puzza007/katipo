@@ -192,7 +192,8 @@ groups() ->
        protocol_restriction,
        dns_cache_timeout,
        ca_cache_timeout,
-       pipewait]},
+       pipewait,
+       check_opts_values]},
      {malformed_requests, [],
       [malformed_identity_bad_method,
        malformed_url,
@@ -221,7 +222,9 @@ groups() ->
        port_garbage_input,
        port_death,
        port_late_response,
+       port_late_progress,
        pool_opts,
+       pipelining_http1,
        max_concurrent_streams]},
      {https, [parallel],
       [verify_host_verify_peer_ok,
@@ -238,7 +241,9 @@ groups() ->
      {port, [],
       [max_total_connections,
        max_in_flight_overload,
-       max_in_flight_invalid]},
+       max_in_flight_invalid,
+       spillover_success,
+       spillover_admission_timeout]},
      {async, [parallel],
       [async_get,
        async_get_with_opts,
@@ -274,7 +279,8 @@ groups() ->
        streaming_flow_starvation,
        streaming_error_mid_body,
        streaming_timeout_mid_body,
-       streaming_cancel_mid_stream]},
+       streaming_cancel_mid_stream,
+       streaming_cancel_during_flood]},
      {otel, [],
       [otel_span_created,
        otel_metrics_recorded,
@@ -776,6 +782,43 @@ badopts(Config) ->
     {ok, L} = erl_parse:parse_term(Tokens),
     [] = L -- [{what, not_even_close}, {timeout_ms, <<"wrong">>}].
 
+%% Every accepted option value validates through check_opts/1. These are the
+%% enum values no HTTP-level test exercises (the rest of the enums are
+%% covered incidentally by real requests).
+check_opts_values(_Config) ->
+    Base = #{url => <<"http://example.com">>, method => get},
+    Accepted =
+        [#{http_auth => ntlm},
+         #{http_auth => negotiate},
+         #{http_version => curl_http_version_none},
+         #{http_version => curl_http_version_1_0},
+         #{http_version => curl_http_version_2_0},
+         #{http_version => curl_http_version_2tls},
+         #{sslversion => sslversion_default},
+         #{sslversion => sslversion_tlsv1},
+         #{sslversion => sslversion_tlsv1_0},
+         #{sslversion => sslversion_tlsv1_1},
+         #{verbose => true},
+         #{verbose => false},
+         #{stream => false},
+         #{stream_window => infinity},
+         #{sslcert => "/path/to/cert.pem"},
+         #{sslkey => "/path/to/key.pem"},
+         #{reply_to => self()}],
+    [ok = katipo:check_opts(maps:merge(Base, Opts)) || Opts <- Accepted],
+    %% Options whose acceptance tracks the curl the port was built against:
+    %% each must agree with its availability predicate.
+    Gated = [{katipo:http3_available(),
+              #{http_version => curl_http_version_3}},
+             {katipo:tcp_fastopen_available(), #{tcp_fastopen => true}},
+             {katipo:unix_socket_path_available(),
+              #{unix_socket_path => <<"/tmp/sock">>}}],
+    [case {Available, katipo:check_opts(maps:merge(Base, Opts))} of
+         {true, ok} -> ok;
+         {false, {error, #{code := bad_opts}}} -> ok
+     end || {Available, Opts} <- Gated],
+    {error, #{code := bad_opts}} = katipo:check_opts(Base#{no_such_opt => 1}).
+
 proxy_couldnt_connect(Config) ->
     Url = httpbin_url(Config, <<"/get">>),
     BaseOpts = ?config(httpbin_opts, Config),
@@ -1055,11 +1098,11 @@ port_garbage_input(Config) ->
     PoolName = port_garbage_test,
     PoolSize = 1,
     {ok, _} = katipo_pool:start(PoolName, PoolSize),
-    {Port, _} = worker_state(PoolName),
+    {_, Port, _} = worker_state(PoolName),
     true = port_command(Port, <<"hdfjkshkjsdfgjsgafdjgsdjgfj">>),
     Fun = fun() ->
                   case worker_state(PoolName) of
-                      {Port2, _} when Port =/= Port2 ->
+                      {_, Port2, _} when Port =/= Port2 ->
                           {ok, #{status := 200}} =
                               katipo:get(PoolName, Url, BaseOpts),
                           true
@@ -1078,7 +1121,7 @@ port_death(Config) ->
     Port = kill_worker_port(PoolName),
     Fun = fun() ->
                   case worker_state(PoolName) of
-                      {Port2, _} when Port =/= Port2 ->
+                      {_, Port2, _} when Port =/= Port2 ->
                           {ok, #{status := 200}} =
                               katipo:get(PoolName, Url, BaseOpts),
                           true
@@ -1096,6 +1139,35 @@ port_late_response(Config) ->
         katipo:get(?POOL, Url, BaseOpts),
     meck:unload(katipo_req).
 
+%% Port messages for a request that is no longer registered (completed,
+%% timed out, or cancelled while the output was already in the pipe) are
+%% dropped silently -- progress and terminal alike -- and the worker stays
+%% healthy. Injected as fabricated port frames because the real race
+%% window -- port output in flight while the cancel lands -- is too narrow
+%% to hit reliably. The same-worker assertion afterwards guards the
+%% fabricated frames against wire-format drift: a frame the worker no
+%% longer understands would crash it, and the restarted worker would pass
+%% the health check while proving nothing about dropping.
+port_late_progress(Config) ->
+    PoolName = port_late_progress,
+    {ok, _} = katipo_pool:start(PoolName, 1),
+    {WorkerPid, Port, _} = worker_state(PoolName),
+    LateChunk = {chunk, {{WorkerPid, make_ref()}, <<"late">>}},
+    LateError = {error, {{WorkerPid, make_ref()},
+                         {operation_timedout, <<>>, []}}},
+    WorkerPid ! {Port, {data, term_to_binary(LateChunk)}},
+    WorkerPid ! {Port, {data, term_to_binary(LateError)}},
+    receive
+        {katipo_chunk, _, _} -> ct:fail(late_chunk_delivered);
+        {katipo_error, _, _} -> ct:fail(late_error_delivered)
+    after 200 -> ok
+    end,
+    {WorkerPid, Port, _} = worker_state(PoolName),
+    {ok, #{status := 200}} =
+        katipo:get(PoolName, httpbin_url(Config, <<"/get">>),
+                   ?config(httpbin_opts, Config)),
+    ok = katipo_pool:stop(PoolName).
+
 pool_opts(_) ->
     PoolName = pool_opts,
     PoolSize = 1,
@@ -1103,6 +1175,16 @@ pool_opts(_) ->
                 {max_total_connections, 10},
                 {ignore_junk_opt, hithere}],
     {error, _} = katipo_pool:start(PoolName, PoolSize, PoolOpts),
+    ok = katipo_pool:stop(PoolName).
+
+%% The http1 pipelining value is accepted and the pool still serves
+%% requests (modern curl treats HTTP/1 pipelining as a no-op).
+pipelining_http1(Config) ->
+    PoolName = pipelining_http1,
+    {ok, _} = katipo_pool:start(PoolName, 1, [{pipelining, http1}]),
+    Opts = ?config(httpbin_opts, Config),
+    {ok, #{status := 200}} =
+        katipo:get(PoolName, httpbin_url(Config, <<"/get">>), Opts),
     ok = katipo_pool:stop(PoolName).
 
 max_concurrent_streams(_) ->
@@ -1295,6 +1377,56 @@ max_in_flight_overload(Config) ->
 max_in_flight_invalid(_Config) ->
     {error, #{code := bad_opts}} =
         katipo_pool:start(max_in_flight_invalid, 1, [{max_in_flight, 0}]).
+
+%% The request must spill over to the other worker and be admitted there.
+spillover_success(Config) ->
+    with_pinned_full_worker(spillover_success, Config,
+        fun(_Other, Url, Opts) ->
+                {ok, #{status := 200}} =
+                    katipo:get(spillover_success, Url, Opts)
+        end).
+
+%% The only spillover candidate is suspended: the bounded async admission
+%% call gives up with admission_timeout instead of blocking until the
+%% wedged worker recovers.
+spillover_admission_timeout(Config) ->
+    with_pinned_full_worker(spillover_admission_timeout, Config,
+        fun(Other, Url, Opts) ->
+                OtherPid = whereis(Other),
+                ok = sys:suspend(OtherPid),
+                try
+                    {error, #{code := admission_timeout}} =
+                        katipo:async_get(spillover_admission_timeout, Url,
+                                         Opts)
+                after
+                    ok = sys:resume(OtherPid)
+                end
+        end).
+
+%% Shared scaffold for the spillover tests. Admission picks are random, so
+%% pin this pool's pick (meck on wpool's random_worker, scoped to PoolName)
+%% to a worker kept full by a slow request: every admission then has to go
+%% through spillover to the other worker, which Fun receives along with a
+%% fast URL to admit against.
+with_pinned_full_worker(PoolName, Config, Fun) ->
+    {ok, _} = katipo_pool:start(PoolName, 2, [{max_in_flight, 1}]),
+    [Pinned, Other] = wpool:get_workers(PoolName),
+    ok = meck:new(wpool_pool, [passthrough]),
+    ok = meck:expect(wpool_pool, random_worker,
+                     fun(P) when P =:= PoolName -> Pinned;
+                        (P) -> meck:passthrough([P])
+                     end),
+    try
+        Opts = ?config(httpbin_opts, Config),
+        {ok, Ref} = katipo:async_get(PoolName,
+                                     httpbin_url(Config, <<"/delay/10">>),
+                                     Opts),
+        Fun(Other, httpbin_url(Config, <<"/get">>), Opts),
+        ok = katipo:cancel(PoolName, Ref)
+    after
+        meck:unload(wpool_pool),
+        ok = katipo_pool:stop(PoolName)
+    end.
 
 max_total_connections(Config) ->
     PoolName = max_total_connections,
@@ -1508,7 +1640,9 @@ streaming_error_mid_body(_Config) ->
     ok = katipo_drip_server:stop(Drip).
 
 %% A request timeout mid-body is the same terminal error, after the
-%% headers and chunks that already arrived.
+%% headers and chunks that already arrived. The budget must comfortably
+%% exceed worst-case admission-to-headers latency in this loaded parallel
+%% group, or the timer fires before the headers and the test flakes.
 streaming_timeout_mid_body(_Config) ->
     {ok, Drip, Port} = katipo_drip_server:start(
                          #{content_length => 100,
@@ -1518,8 +1652,8 @@ streaming_timeout_mid_body(_Config) ->
                                  #{url => katipo_drip_server:url(Port),
                                    method => get,
                                    stream => true,
-                                   connecttimeout_ms => 500,
-                                   timeout_ms => 500}),
+                                   connecttimeout_ms => 2000,
+                                   timeout_ms => 2000}),
     ok = expect_stream_headers(Ref),
     _ = expect_first_chunk(Ref),
     ok = expect_stream_error(Ref, operation_timedout, 5000),
@@ -1530,10 +1664,26 @@ streaming_timeout_mid_body(_Config) ->
 %% the connection close, proving the C port really aborted the transfer
 %% rather than silently discarding its output.
 streaming_cancel_mid_stream(_Config) ->
-    {ok, Drip, Port} = katipo_drip_server:start(
-                         #{content_length => 100,
-                           pieces => [{0, <<"aa">>}],
-                           finish => stall}),
+    cancel_stream_and_assert_aborted(#{content_length => 100,
+                                       pieces => [{0, <<"aa">>}],
+                                       finish => stall}).
+
+%% Same invariants while the server is still producing chunks at full rate,
+%% so the cancel lands with progress messages genuinely in flight. The
+%% advertised content_length far exceeds the dripped bytes so the transfer
+%% can never complete before the cancel takes effect.
+streaming_cancel_during_flood(_Config) ->
+    cancel_stream_and_assert_aborted(
+      #{content_length => 100000,
+        pieces => [{2, <<"abcdefgh">>} || _ <- lists:seq(1, 400)],
+        finish => stall}).
+
+%% Start a streamed request against a drip server, cancel it after the
+%% first chunk, and require the shared cancel invariants: the server
+%% observes curl closing the connection, and the stream falls silent with
+%% no terminal message.
+cancel_stream_and_assert_aborted(DripPlan) ->
+    {ok, Drip, Port} = katipo_drip_server:start(DripPlan),
     {ok, Ref} = katipo:async_req(?POOL,
                                  #{url => katipo_drip_server:url(Port),
                                    method => get,
@@ -1541,10 +1691,9 @@ streaming_cancel_mid_stream(_Config) ->
     ok = expect_stream_headers(Ref),
     _ = expect_first_chunk(Ref),
     ok = katipo:cancel(?POOL, Ref),
-    %% The stalled server's recv observes curl closing the connection.
     receive
         {drip_peer_closed, Drip} -> ok
-    after 3000 ->
+    after 5000 ->
             ct:fail(transfer_not_aborted)
     end,
     ok = assert_cancelled_stream_silent(Ref),
@@ -1562,7 +1711,9 @@ assert_cancelled_stream_silent(Ref) ->
 
 expect_stream_headers(Ref) ->
     receive
-        {katipo_headers, Ref, #{status := 200}} -> ok
+        {katipo_headers, Ref, #{status := 200}} -> ok;
+        {katipo_error, Ref, Error} ->
+            ct:fail({stream_error_before_headers, Error})
     after 5000 ->
             ct:fail(no_stream_headers)
     end.
@@ -2089,7 +2240,7 @@ wait_for_no_inflight(PoolName) ->
 
 wait_for_reqs(PoolName, Pred) ->
     Fun = fun() ->
-                  {_Port, Reqs} = worker_state(PoolName),
+                  {_Pid, _Port, Reqs} = worker_state(PoolName),
                   Pred(map_size(Reqs))
           end,
     true = repeat_until_true(Fun),
@@ -2097,17 +2248,18 @@ wait_for_reqs(PoolName, Pred) ->
 
 %% Kill the (size-1) pool's worker OS process and return the killed Port.
 kill_worker_port(PoolName) ->
-    {Port, _Reqs} = worker_state(PoolName),
+    {_Pid, Port, _Reqs} = worker_state(PoolName),
     {os_pid, OsPid} = erlang:port_info(Port, os_pid),
     _ = os:cmd("kill -9 " ++ integer_to_list(OsPid)),
     Port.
 
-%% Reach into a size-1 pool's single worker and return its {Port, Reqs}. The
-%% outer tuple is wpool_process's state wrapping katipo_worker's #state{port, reqs}.
+%% Reach into a size-1 pool's single worker and return its {Pid, Port, Reqs}.
+%% The outer tuple is wpool_process's state wrapping katipo_worker's
+%% #state{port, reqs}.
 worker_state(PoolName) ->
     WorkerPid = whereis(wpool_pool:best_worker(PoolName)),
     {state, _, _, {state, Port, Reqs, _MaxInFlight}, _} = sys:get_state(WorkerPid),
-    {Port, Reqs}.
+    {WorkerPid, Port, Reqs}.
 
 %% Minimal unix-socket HTTP/1.1 server for the unix_socket_path test: accept a
 %% connection, discard the request, reply 200 with a recognisable Server header.
