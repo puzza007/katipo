@@ -1640,7 +1640,9 @@ streaming_error_mid_body(_Config) ->
     ok = katipo_drip_server:stop(Drip).
 
 %% A request timeout mid-body is the same terminal error, after the
-%% headers and chunks that already arrived.
+%% headers and chunks that already arrived. The budget must comfortably
+%% exceed worst-case admission-to-headers latency in this loaded parallel
+%% group, or the timer fires before the headers and the test flakes.
 streaming_timeout_mid_body(_Config) ->
     {ok, Drip, Port} = katipo_drip_server:start(
                          #{content_length => 100,
@@ -1650,8 +1652,8 @@ streaming_timeout_mid_body(_Config) ->
                                  #{url => katipo_drip_server:url(Port),
                                    method => get,
                                    stream => true,
-                                   connecttimeout_ms => 500,
-                                   timeout_ms => 500}),
+                                   connecttimeout_ms => 2000,
+                                   timeout_ms => 2000}),
     ok = expect_stream_headers(Ref),
     _ = expect_first_chunk(Ref),
     ok = expect_stream_error(Ref, operation_timedout, 5000),
@@ -1709,7 +1711,9 @@ assert_cancelled_stream_silent(Ref) ->
 
 expect_stream_headers(Ref) ->
     receive
-        {katipo_headers, Ref, #{status := 200}} -> ok
+        {katipo_headers, Ref, #{status := 200}} -> ok;
+        {katipo_error, Ref, Error} ->
+            ct:fail({stream_error_before_headers, Error})
     after 5000 ->
             ct:fail(no_stream_headers)
     end.
