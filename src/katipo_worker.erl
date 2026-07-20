@@ -15,7 +15,6 @@
 
 -behaviour(gen_server).
 
--export([start_link/1]).
 -export([init/1]).
 -export([handle_call/3]).
 -export([handle_cast/2]).
@@ -34,10 +33,7 @@
         max_concurrent_streams |
         pipelining.
 
-start_link([MaxInFlight, CurlOpts]) when is_list(CurlOpts) ->
-    gen_server:start_link(?MODULE, [MaxInFlight, CurlOpts], []).
-
-init([MaxInFlight, CurlOpts]) ->
+init([MaxInFlight, CurlOpts]) when is_list(CurlOpts) ->
     process_flag(trap_exit, true),
     case get_mopts(CurlOpts) of
         {ok, Args} ->
