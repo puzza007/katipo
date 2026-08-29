@@ -28,6 +28,7 @@
 -export([no_message_after_cancel_against_dead_port/1]).
 -export([timeout_aborts_transfer_in_port/1]).
 -export([late_admission_refused_after_caller_timeout/1]).
+-export([admission_spills_over_restarting_worker/1]).
 
 -include_lib("common_test/include/ct.hrl").
 -include_lib("stdlib/include/assert.hrl").
@@ -37,7 +38,8 @@ all() ->
      admission_error_when_worker_restarting,
      no_message_after_cancel_against_dead_port,
      timeout_aborts_transfer_in_port,
-     late_admission_refused_after_caller_timeout].
+     late_admission_refused_after_caller_timeout,
+     admission_spills_over_restarting_worker].
 
 init_per_suite(Config) ->
     {ok, _} = application:ensure_all_started(katipo),
@@ -48,8 +50,11 @@ end_per_suite(Config) ->
 
 init_per_testcase(TestCase, Config) ->
     Pool = TestCase,
-    {ok, _} = katipo_pool:start(Pool, 1, []),
+    {ok, _} = katipo_pool:start(Pool, pool_size(TestCase), []),
     [{pool, Pool} | Config].
+
+pool_size(admission_spills_over_restarting_worker) -> 2;
+pool_size(_) -> 1.
 
 end_per_testcase(_TestCase, Config) ->
     ok = katipo_pool:stop(?config(pool, Config)).
@@ -117,6 +122,36 @@ admission_error_when_worker_restarting(Config) ->
     Res = katipo:async_req(Pool, blackhole_req()),
     ok = sys:resume(Sup),
     ?assertMatch({error, #{code := worker_died}}, Res).
+
+%% KatipoSpill.tla: NoSpuriousFailure violated with the earlier routing --
+%% a restarting worker on the first random pick returned worker_died while
+%% a free worker sat untouched, although the same noproc met during
+%% spillover was "keep going". A noproc means nothing was sent, so it is
+%% safe to offer the request to the rest of the pool. Pool of 2, one worker
+%% held mid-restart: every admission must land on the live one. Repeated
+%% so the random first pick hits the dead name with overwhelming odds.
+admission_spills_over_restarting_worker(Config) ->
+    Pool = ?config(pool, Config),
+    [W1, _W2] = wpool:get_workers(Pool),
+    WorkerPid = registered_pid(W1),
+    {dictionary, Dict} = process_info(WorkerPid, dictionary),
+    [Sup | _] = proplists:get_value('$ancestors', Dict),
+    ok = sys:suspend(Sup),
+    MRef = monitor(process, WorkerPid),
+    exit(WorkerPid, kill),
+    receive {'DOWN', MRef, process, WorkerPid, killed} -> ok
+    after 1000 -> ct:fail(worker_not_killed)
+    end,
+    undefined = whereis(W1),
+
+    Results = try
+                  [katipo:async_req(Pool, blackhole_req()) || _ <- lists:seq(1, 20)]
+              after
+                  ok = sys:resume(Sup)
+              end,
+    [?assertMatch({ok, Ref} when is_reference(Ref), R) || R <- Results],
+    [katipo:cancel(Pool, Ref) || {ok, Ref} <- Results],
+    ok.
 
 %% Katipo.tla: NoCancelPollution violated via SendAsync -> WorkerRecvReq ->
 %% PortDies -> WorkerRecvCancel-badarg. A cancel processed against a dead
@@ -262,10 +297,18 @@ queue_len(Pid) ->
         undefined -> ct:fail({worker_died_while_waiting, Pid})
     end.
 
-%% The single pool worker's pid (every test here runs a size-1 pool).
+%% The pid of a size-1 pool's only worker. Tests wanting a specific worker
+%% of a larger pool (see pool_size/1) should index wpool:get_workers/1 and
+%% use registered_pid/1 directly.
 worker_pid(Pool) ->
     [WorkerName] = wpool:get_workers(Pool),
-    whereis(WorkerName).
+    registered_pid(WorkerName).
+
+registered_pid(Name) ->
+    case whereis(Name) of
+        Pid when is_pid(Pid) -> Pid;
+        Other -> ct:fail({not_a_registered_process, Name, Other})
+    end.
 
 %% The worker's C port, found via the public port_info seam: the worker
 %% process owns exactly one port.

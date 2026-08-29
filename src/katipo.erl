@@ -458,12 +458,24 @@ call_worker(PoolName, Req) ->
     end.
 
 %% The admission entry point for both request kinds: one wpool attempt,
-%% then spillover across the remaining workers if the picked one is full.
-%% A worker dying with the first call in flight (typically its C port died)
-%% is converted into the shared {error, worker_died} contract. Config
-%% errors such as wpool's bare `no_workers` (unknown/unstarted pool) are
-%% left to propagate -- mislabeling them worker_died would hide a
-%% naming/startup bug behind a transient-looking error.
+%% then spillover across the remaining workers if the picked one is full
+%% or not currently registered (restarting).
+%%
+%% The two ways an attempt can fail without a reply are NOT the same, and
+%% the difference decides whether the request may be re-offered:
+%%   noproc      - the name resolved to nothing, so handle_call never ran
+%%                 and nothing reached the port. Safe to offer elsewhere.
+%%   worker_died - the worker died with our call in flight. It may already
+%%                 have run admit/4, which calls send_to_port BEFORE
+%%                 replying, so libcurl may hold the request and may have
+%%                 put bytes on the wire. Re-offering could issue a
+%%                 non-idempotent request twice, so this always ends the
+%%                 admission.
+%% Both the first attempt and every spillover hop apply that rule.
+%%
+%% Config errors such as wpool's bare `no_workers` (unknown/unstarted
+%% pool) are left to propagate -- mislabeling them worker_died would hide
+%% a naming/startup bug behind a transient-looking error.
 pool_call(PoolName, Msg) ->
     Deadline = admission_deadline(Msg),
     case attempt(fun(M, T) -> wpool:call(PoolName, M, random_worker,
@@ -471,8 +483,15 @@ pool_call(PoolName, Msg) ->
         {overload, FullWorker} ->
             %% The randomly-picked worker is at max_in_flight; others may
             %% have room, so offer the request to each remaining worker.
+            %% A live-but-full worker is proof the pool is up.
             spillover(spillover_candidates(PoolName, FullWorker), Msg,
-                      Deadline);
+                      Deadline, true);
+        noproc ->
+            %% The picked worker is mid-restart. spillover_candidates drops
+            %% every unregistered name, so this is the rest of the live pool.
+            %% Nothing live has been seen yet.
+            spillover(spillover_candidates(PoolName, undefined), Msg,
+                      Deadline, false);
         {ok, Reply} ->
             {ok, Reply};
         Err when Err =:= worker_died; Err =:= admission_timeout ->
@@ -524,8 +543,9 @@ stamp(Req = #req{}, _Deadline) ->
 %% already gone is the thing the deadline exists to prevent.
 %%
 %% Only a real reply, an at-capacity rejection carrying the full worker's
-%% pid, a bounded call timing out against an unresponsive worker, or the
-%% worker dying with the call in flight can come back. The
+%% pid, a bounded call timing out against an unresponsive worker, a name
+%% that is not registered (noproc: the worker is restarting, nothing was
+%% sent), or the worker dying with the call in flight can come back. The
 %% timeout mapping guards on the bound: on an unbounded call a {timeout, _}
 %% exit can only be a worker that died with exit reason `timeout`.
 attempt(CallFun, Msg, Deadline) ->
@@ -545,6 +565,8 @@ attempt(CallFun, Msg, Deadline) ->
             catch
                 exit:{timeout, {gen_server, call, _}} when Timeout =/= infinity ->
                     admission_timeout;
+                exit:{noproc, {gen_server, call, _}} ->
+                    noproc;
                 exit:{_Reason, {gen_server, call, _}} ->
                     worker_died
             end
@@ -553,15 +575,33 @@ attempt(CallFun, Msg, Deadline) ->
 %% The rest of the pool in random-rotation order, minus the worker that just
 %% rejected (or, with `undefined`, every name that is not registered):
 %% rotation spreads spillover load, the exclusion avoids a
-%% guaranteed-redundant call into the busiest worker's mailbox.
+%% guaranteed-redundant call into the busiest worker's mailbox. A pool that
+%% has been stopped underneath us has no candidates rather than an
+%% exception: katipo_pool:stop/1 racing an in-flight request is exactly the
+%% window in which the first attempt returns noproc, and async_req/2
+%% promises an error tuple there, not an exit in the caller.
 spillover_candidates(PoolName, Excluded) ->
-    Workers = wpool:get_workers(PoolName),
-    {Front, Back} = lists:split(rand:uniform(length(Workers)) - 1, Workers),
-    [W || W <- Back ++ Front, whereis(W) =/= Excluded].
+    try wpool:get_workers(PoolName) of
+        Workers ->
+            {Front, Back} = lists:split(rand:uniform(length(Workers)) - 1, Workers),
+            [W || W <- Back ++ Front, whereis(W) =/= Excluded]
+    catch
+        exit:no_workers -> []
+    end.
 
-spillover([], _Msg, _Deadline) ->
-    {error, katipo_req:error_map(overload, <<>>)};
-spillover([Worker | Workers], Msg, Deadline) ->
+%% SawLive records whether any worker answered as alive-but-full, which is
+%% what separates the two exhaustion reports: a saturated pool is
+%% `overload`, and only a pool in which nothing was reachable is
+%% `worker_died`. Deriving it from the walk rather than from whatever the
+%% first random pick happened to be is the difference between a caller
+%% backing off and a caller raising an infrastructure alarm.
+spillover([], _Msg, _Deadline, SawLive) ->
+    Code = case SawLive of
+               true -> overload;
+               false -> worker_died
+           end,
+    {error, katipo_req:error_map(Code, <<>>)};
+spillover([Worker | Workers], Msg, Deadline, SawLive) ->
     case attempt(fun(M, T) -> wpool_process:call(Worker, M, T) end, Msg,
                  Deadline) of
         {ok, Reply} ->
@@ -570,9 +610,17 @@ spillover([Worker | Workers], Msg, Deadline) ->
             %% The caller's whole admission budget is gone -- the deadline
             %% is shared, so there is nothing left to offer anyone else.
             {error, katipo_req:error_map(admission_timeout, <<>>)};
-        _NoRoom ->
-            %% Full, dead, or restarting: nothing to offer here, keep going.
-            spillover(Workers, Msg, Deadline)
+        worker_died ->
+            %% This worker may already have handed the request to its port
+            %% (see pool_call). Offering it to anyone else risks running it
+            %% twice, so the admission ends here.
+            {error, katipo_req:error_map(worker_died, <<>>)};
+        {overload, _FullWorker} ->
+            %% Alive, just at max_in_flight: the pool is up.
+            spillover(Workers, Msg, Deadline, true);
+        noproc ->
+            %% Restarting: nothing was sent, keep going.
+            spillover(Workers, Msg, Deadline, SawLive)
     end.
 
 -doc """
