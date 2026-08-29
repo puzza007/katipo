@@ -57,7 +57,7 @@ init([MaxInFlight, CurlOpts]) ->
 %% wherever it lands.
 handle_call(Msg, From, State) ->
     case expired_admission(Msg) of
-        true ->
+        {true, Obs} ->
             %% The caller's bounded admission wait has already elapsed --
             %% this call sat in our queue too long. Admitting now would
             %% orphan the request: it would run (side effects included)
@@ -67,8 +67,14 @@ handle_call(Msg, From, State) ->
             %% already gone the reply is dropped by its dead call alias;
             %% at the boundary where it still arrives, pool_call maps it
             %% to the admission_timeout the caller was about to see.
-            %% The span is finished by dispatch_async on the error return,
-            %% so no span action here.
+            %%
+            %% We end the span: dispatch_async deliberately does not finish
+            %% it on an admission_timeout, because from there the two cases
+            %% -- we refused, or we admitted and our reply was lost -- are
+            %% indistinguishable, and only the worker holding the Obs knows
+            %% which. This is the refusal case, so no outcome was ever
+            %% produced and there is none to record.
+            _ = katipo_span:end_async(Obs),
             {reply, admission_expired, State};
         false ->
             case at_capacity(State) of
@@ -86,8 +92,11 @@ handle_call(Msg, From, State) ->
 %% in this mailbox) from function_clausing the worker, which would fire
 %% worker_died at every other in-flight request it holds and close its
 %% port.
-expired_admission({async_req, _ReplyTo, _Req, _Obs, Deadline}) ->
-    expired(Deadline);
+expired_admission({async_req, _ReplyTo, _Req, Obs, Deadline}) ->
+    case expired(Deadline) of
+        true -> {true, Obs};
+        false -> false
+    end;
 expired_admission(_NoDeadline) ->
     false.
 

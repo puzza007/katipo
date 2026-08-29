@@ -373,7 +373,23 @@ dispatch_async(PoolName, ReplyTo, Req, Obs) ->
     case pool_call(PoolName, {async_req, ReplyTo, Req, Obs}) of
         {ok, UserRef} when is_reference(UserRef) ->
             {ok, UserRef};
+        {error, Error = #{code := admission_timeout}} ->
+            %% Do NOT finish the span here. We do not know whether a worker
+            %% took this Obs: our bounded wait elapsing does not mean the
+            %% message was not delivered, only that no reply came back in
+            %% time. Whichever worker holds it closes it -- with the real
+            %% outcome if it admitted the request, or by ending the span
+            %% when it refuses the expired admission (katipo_worker's
+            %% admit_call). Recording an admission_timeout outcome from
+            %% here would win the race against the worker every time (we
+            %% claim the instant the bound elapses, it can only claim at
+            %% resolution) and would leave the span and the metrics
+            %% describing a timeout for a request that actually ran and
+            %% returned a status.
+            {error, Error};
         {error, Error} ->
+            %% overload and worker_died: no worker accepted the message, so
+            %% nobody else can close this span.
             katipo_span:finish_async(Obs, error, Error, []),
             {error, Error}
     end.

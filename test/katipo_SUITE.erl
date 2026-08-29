@@ -282,7 +282,8 @@ groups() ->
        otel_async_metrics_recorded,
        otel_url_sanitization,
        otel_noop_metrics_no_crash,
-       otel_metrics_init_no_crash]},
+       otel_metrics_init_no_crash,
+       otel_async_finish_exactly_once]},
      {http1, [parallel],
       [{group, http},
        {group, https}]},
@@ -1766,6 +1767,76 @@ otel_metrics_init_no_crash(_Config) ->
     meck:unload(otel_meter),
     %% Re-create instruments against the real meter for later tests.
     ok = katipo_metrics:init().
+
+%% KatipoAdmit.tla (span ownership): the admission reply race can leave both
+%% the caller (dispatch_async error return) and the worker (terminal path)
+%% holding the same Obs, so the finish has to be exactly-once across
+%% processes -- the second and later calls, from any process, record no
+%% metrics and end no span.
+otel_async_finish_exactly_once(_Config) ->
+    ok = meck:new(katipo_metrics, [passthrough, no_link]),
+    %% no_link means meck is NOT cleaned up when this process dies, so an
+    %% assertion failure below would leave katipo_metrics replaced for the
+    %% whole rest of the run and turn one failure into a cascade of
+    %% {already_started, _} in later groups.
+    try
+        %% The race the fix exists for: several processes reach a FRESH Obs
+        %% at once, as the caller and the worker do when an admission reply
+        %% is lost. Exactly one may record.
+        Obs = katipo_span:start_async(<<"GET">>, <<"https://example.com/">>),
+        ok = race_finish_async(Obs, 8),
+        ?assertEqual(1, meck:num_calls(katipo_metrics, notify, '_')),
+
+        %% Sequential repeats are no-ops too, including from another process.
+        meck:reset(katipo_metrics),
+        ok = katipo_span:finish_async(Obs, error, #{code => timeout, message => <<>>}, []),
+        ok = katipo_span:end_async(Obs),
+        ok = race_finish_async(Obs, 2),
+        ?assertEqual(0, meck:num_calls(katipo_metrics, notify, '_')),
+
+        %% An end_async first blocks a later finish just the same.
+        meck:reset(katipo_metrics),
+        Obs2 = katipo_span:start_async(<<"GET">>, <<"https://example.com/">>),
+        ok = katipo_span:end_async(Obs2),
+        ok = katipo_span:finish_async(Obs2, ok, #{status => 200}, []),
+        ?assertEqual(0, meck:num_calls(katipo_metrics, notify, '_')),
+
+        %% An Obs from before this module was loaded has no claim slot and
+        %% must still finish rather than crash its worker. It reaches the
+        %% worker inside an admission message, so route it through one --
+        %% its shape genuinely is not statically known at that point.
+        meck:reset(katipo_metrics),
+        self() ! {legacy_obs,
+                  maps:remove(done, katipo_span:start_async(<<"GET">>,
+                                                            <<"https://example.com/">>))},
+        Legacy = receive {legacy_obs, L} -> L after 1000 -> ct:fail(no_legacy_obs) end,
+        ok = katipo_span:finish_async(Legacy, ok, #{status => 200}, []),
+        ?assertEqual(1, meck:num_calls(katipo_metrics, notify, '_'))
+    after
+        meck:unload(katipo_metrics)
+    end.
+
+%% N processes contend on the same Obs. spawn_monitor, not spawn_link: a
+%% failing assertion in a child must surface as that child's exit reason
+%% rather than killing this process before it can report.
+race_finish_async(Obs, N) ->
+    Refs = [begin
+                {_Pid, MRef} =
+                    spawn_monitor(fun() ->
+                                      ok = katipo_span:finish_async(
+                                             Obs, ok, #{status => 200}, [])
+                                  end),
+                MRef
+            end || _ <- lists:seq(1, N)],
+    [receive
+         {'DOWN', MRef, process, _, normal} ->
+             ok;
+         {'DOWN', MRef, process, _, Reason} ->
+             ct:fail({finish_async_crashed, Reason})
+     after 5000 ->
+             ct:fail(finish_async_did_not_return)
+     end || MRef <- Refs],
+    ok.
 
 otel_url_sanitization(_Config) ->
     %% Test that query strings are stripped (prevents leaking API keys, tokens, etc.)

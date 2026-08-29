@@ -19,12 +19,19 @@
 
 -include_lib("opentelemetry_api/include/otel_tracer.hrl").
 
-%% Opaque OTel span context; kept as term() so this module doesn't depend on
-%% OTel's internal record type.
--type span_ctx() :: term().
+-type span_ctx() :: opentelemetry:span_ctx().
+%% `done' is a one-slot atomic shared by every process holding this Obs. The
+%% async admission handshake has one residual race (see the async_req docs):
+%% the worker admits just inside the caller's admission bound and its
+%% {ok, Ref} reply is lost to the dead call alias, so the caller returns
+%% {error, admission_timeout} and finishes the Obs while the worker, which
+%% also holds it, finishes it again on the terminal path. Neither side can
+%% tell it has a co-owner, so the finish itself is made exactly-once:
+%% whoever flips `done' first records the outcome and ends the span.
 -type obs() :: #{method := binary(),
                  ts := erlang:timestamp(),
-                 span := span_ctx()}.
+                 span := span_ctx(),
+                 done := atomics:atomics_ref()}.
 -export_type([obs/0]).
 
 %% @doc Run Fun inside a scoped `"HTTP " ++ Method' client span with request
@@ -47,21 +54,56 @@ start_async(Method, Url) ->
                                      opentelemetry:get_application_tracer(?MODULE),
                                      SpanName, #{kind => client}),
     set_request_span_attrs(SpanCtx, Method, Url),
-    #{method => Method, ts => os:timestamp(), span => SpanCtx}.
+    #{method => Method, ts => os:timestamp(), span => SpanCtx,
+      done => atomics:new(1, [])}.
 
-%% @doc Emit metrics and finish the span for a completed async request.
+%% @doc Emit metrics and finish the span for a completed async request. A
+%% no-op if this Obs has already been finished by another holder.
 -spec finish_async(obs(), ok | error, map(), katipo:metrics()) -> ok.
 finish_async(Obs = #{method := Method, ts := Ts, span := SpanCtx},
              Result, Response, Metrics) ->
-    record_outcome(SpanCtx, Method, Ts, Result, Response, Metrics),
-    end_async(Obs).
+    case claim(Obs) of
+        true ->
+            %% Recording must not be able to take the request down with it.
+            %% This runs in the worker process, where a raising exporter
+            %% would crash the gen_server and make terminate/2 fire
+            %% worker_died at every OTHER in-flight request -- and the
+            %% claim is already spent, so terminate's own finish_async
+            %% could no longer record anything either. Ending the span is
+            %% the part that must still happen.
+            try
+                record_outcome(SpanCtx, Method, Ts, Result, Response, Metrics)
+            catch Class:Reason:Stack ->
+                logger:warning("katipo: span outcome not recorded: ~p:~p~n~p",
+                               [Class, Reason, Stack])
+            end,
+            _ = otel_span:end_span(SpanCtx),
+            ok;
+        false ->
+            ok
+    end.
 
 %% @doc End the span without recording an outcome (used when a request is
-%% cancelled). Every async terminal path ends the span exactly once.
+%% cancelled). A no-op if this Obs has already been finished.
 -spec end_async(obs()) -> ok.
-end_async(#{span := SpanCtx}) ->
-    _ = otel_span:end_span(SpanCtx),
-    ok.
+end_async(Obs = #{span := SpanCtx}) ->
+    case claim(Obs) of
+        true ->
+            _ = otel_span:end_span(SpanCtx),
+            ok;
+        false ->
+            ok
+    end.
+
+%% Exactly one caller of claim/1 per Obs sees true, across processes.
+claim(#{done := Done}) ->
+    atomics:compare_exchange(Done, 1, 0, 1) =:= ok;
+%% An Obs minted before this module was loaded has no `done' slot. It is
+%% held by a worker that may finish it seconds later (a request's timeout
+%% outlives a hot code load), and a function_clause here would crash that
+%% worker mid-request. Degrade to the older always-finish behaviour.
+claim(_LegacyObs) ->
+    true.
 
 %% @doc Set response span attributes and emit request metrics -- the shared tail
 %% of the sync request and an async request completing in the worker.
