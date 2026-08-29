@@ -36,3 +36,4 @@ build_info.json
 fprof.trace
 /native/
 /src/cargo.hrl
+*.old
