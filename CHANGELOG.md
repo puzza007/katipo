@@ -5,6 +5,64 @@ All notable changes to this project are documented here. This project follows
 
 ## [Unreleased]
 
+### Added
+- Six further TLA+ models under `formal/`, covering the parts of the
+  protocol the earlier specs abstracted over: the full request lifecycle
+  (`KatipoReq`), the admission handshake and span ownership
+  (`KatipoAdmit`), pool routing under `max_in_flight` (`KatipoSpill`),
+  `await/2`'s timeout branch (`KatipoAwait`), the C port's pause/resume
+  re-entrancy (`KatipoFlow`) and its transfer lifetime (`KatipoConn`).
+  The README maps each source file to the spec to re-check when it
+  changes, and every config states the question it asks and its expected
+  result.
+
+### Fixed
+- Async admission now refuses a request whose caller has already given up
+  waiting (`admission_timeout`): the bounded admission call carries the
+  caller's deadline, so a backed-up worker no longer runs a request nobody
+  wants. Expiry is checked ahead of the `max_in_flight` test, so a full
+  worker cannot launder an expired admission into a fresh spillover
+  attempt. One race remains and cannot be closed worker-side — if the
+  worker accepts just as the caller's bound elapses, its `{ok, Ref}` reply
+  is lost and `reply_to` still receives that request's terminal message
+  under a `Ref` the caller never saw. `async_req/2`'s docs describe it; be
+  prepared to drop a message whose `Ref` you do not recognise.
+- Admission is now bounded by one `?ADMISSION_TIMEOUT` overall. The
+  deadline is stamped once and shared by every attempt, where previously
+  each spillover candidate was given a fresh full bound — so a saturated
+  pool of N workers could block the caller for N × 5s. One consequence is
+  intended and new: if the first worker consumes the budget before
+  answering, the request is refused with `admission_timeout` rather than
+  spending more of the caller's time looking for room.
+- A pool worker that is mid-restart when picked no longer fails the request
+  with `worker_died`: nothing was sent to it, so the request is offered to
+  the rest of the pool. A worker that dies with the call *in flight* still
+  ends the admission — it may already have handed the request to its port,
+  and re-offering could issue a non-idempotent request twice.
+- The error reported when no worker takes a request now reflects the pool
+  rather than whichever worker was picked first: `overload` when workers
+  were alive but at capacity, `worker_died` only when none was reachable.
+- The OpenTelemetry span and request metrics of an async request are
+  finished exactly once, and by the party that knows the outcome. On an
+  `admission_timeout` the caller no longer records anything — it cannot
+  tell whether a worker took the request — so the span is closed by the
+  worker holding it, with the real result if it admitted or by ending the
+  span when it refuses. Previously the request could be double-counted;
+  making the finish merely idempotent would have replaced that with a
+  worse failure, the caller's timeout displacing the real outcome.
+- A raising metrics exporter can no longer take down a worker mid-request,
+  and an in-flight observation created before a hot code load is finished
+  rather than crashing the worker that holds it.
+- `katipo_worker` accepts the previous, unstamped admission message, so a
+  partial code load does not kill a worker and fail every request it holds.
+- `await/1,2` no longer discards a response that arrives while its timeout
+  is firing; it returns it.
+
+### Changed
+- `await/1,2` documents that a timeout leaves the request running and
+  holding its `max_in_flight` slot until its own `timeout_ms`; use
+  `cancel/2` if the response is no longer wanted.
+
 ## [2.0.0-rc.2] — 2026-07-18
 
 ### Changed
