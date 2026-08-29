@@ -48,20 +48,56 @@ init([MaxInFlight, CurlOpts]) ->
             {stop, Error}
     end.
 
-%% Admission is gated on max_in_flight: a full worker replies
-%% {overload, self()} without registering anything, and pool_call in katipo
-%% offers the request to the remaining workers.
+%% Expiry is tested BEFORE max_in_flight, because the two rejections are
+%% not interchangeable: {overload, self()} sends the caller off to spill
+%% the request around the pool with a fresh admission window, so a full
+%% worker that answered `overload' to an admission whose caller had
+%% already given up would discard the deadline in exactly the backed-up
+%% pool the deadline exists for. A dead deadline is a dead request
+%% wherever it lands.
 handle_call(Msg, From, State) ->
-    case at_capacity(State) of
+    case expired_admission(Msg) of
         true ->
-            {reply, {overload, self()}, State};
+            %% The caller's bounded admission wait has already elapsed --
+            %% this call sat in our queue too long. Admitting now would
+            %% orphan the request: it would run (side effects included)
+            %% and its terminal message would land at ReplyTo carrying a
+            %% ref the caller never received, contradicting async_req's
+            %% error-return contract. Refuse instead. When the caller is
+            %% already gone the reply is dropped by its dead call alias;
+            %% at the boundary where it still arrives, pool_call maps it
+            %% to the admission_timeout the caller was about to see.
+            %% The span is finished by dispatch_async on the error return,
+            %% so no span action here.
+            {reply, admission_expired, State};
         false ->
-            admit_call(Msg, From, State)
+            case at_capacity(State) of
+                true ->
+                    {reply, {overload, self()}, State};
+                false ->
+                    admit_call(Msg, From, State)
+            end
     end.
+
+%% Whether this admission's caller has already given up. Sync requests are
+%% unbounded and carry no deadline; the unstamped 4-tuple is what an older
+%% katipo:stamp/2 sends -- accepting it keeps a partial code load (an
+%% `l(katipo)' in a shell, a release upgrade, or a 4-tuple already sitting
+%% in this mailbox) from function_clausing the worker, which would fire
+%% worker_died at every other in-flight request it holds and close its
+%% port.
+expired_admission({async_req, _ReplyTo, _Req, _Obs, Deadline}) ->
+    expired(Deadline);
+expired_admission(_NoDeadline) ->
+    false.
 
 admit_call(Req = #req{}, From, State) ->
     {noreply, admit(From, sync, Req, State)};
-admit_call({async_req, ReplyTo, Req = #req{}, Obs}, _From, State) ->
+admit_call({async_req, ReplyTo, Req = #req{}, Obs}, From, State) ->
+    admit_call({async_req, ReplyTo, Req, Obs, infinity}, From, State);
+admit_call({async_req, ReplyTo, Req = #req{}, Obs, _Deadline}, _From, State) ->
+    %% Not expired: handle_call checked before we got here.
+    %%
     %% The user-facing Ref is a process alias, so cancel/flow commands are
     %% plain sends to the Ref itself: they route straight to this worker,
     %% and once the alias dies (with us) or is deactivated (on resolution)
@@ -71,6 +107,14 @@ admit_call({async_req, ReplyTo, Req = #req{}, Obs}, _From, State) ->
     Alias = alias(),
     State2 = admit({self(), Alias}, {async, ReplyTo, Obs}, Req, State),
     {reply, Alias, State2}.
+
+%% Whether an admission deadline (monotonic ms, stamped by katipo:stamp/2)
+%% has passed. >= because the caller's timeout fires the instant its bound
+%% elapses: at the boundary, refusing matches what the caller concluded.
+expired(infinity) ->
+    false;
+expired(Deadline) ->
+    erlang:monotonic_time(millisecond) >= Deadline.
 
 at_capacity(#state{max_in_flight = infinity}) ->
     false;

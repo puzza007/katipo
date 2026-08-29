@@ -294,9 +294,20 @@ is delivered as a `{katipo_response, Ref, ResponseMap}` or
 `{katipo_error, Ref, ErrorMap}` message to the process specified by the
 `reply_to` option (defaults to `self()`). If no worker could accept the
 request, returns `{error, #{code => worker_died | overload |
-admission_timeout}}` (dead/restarting worker, pool at `max_in_flight`
-capacity, or a wedged worker not answering the bounded admission call) and
-no message is delivered.
+admission_timeout}}` (no live worker, pool at `max_in_flight` capacity, or
+a wedged worker not answering the bounded admission call). For
+`worker_died` and `overload` no message is delivered. `admission_timeout`
+is the one exception, described next.
+
+Admission calls carry the caller's deadline, so a backed-up worker that
+only reaches the call after the caller gave up refuses it rather than
+starting a request nobody is waiting for. One narrow race remains, and it
+cannot be closed from the worker's side: if the worker accepts just inside
+the deadline but its `{ok, Ref}` reply loses the race to the caller's
+timeout, the request does run and `reply_to` receives its one terminal
+message carrying a `Ref` this caller never saw. So after an
+`admission_timeout`, and as with a response arriving after `cancel/2`, be
+prepared to drop a message whose `Ref` you do not recognise.
 
 Use `await/1,2` to block until the response arrives.
 
@@ -391,6 +402,7 @@ Blocks until an async response for `Ref` arrives or the timeout expires.
 Only for buffered async requests: a streamed response (`stream => true`)
 arrives as a message sequence, which `await` does not understand -- receive
 those messages directly.
+
 """.
 -spec await(reference(), timeout()) -> response().
 await(Ref, Timeout) ->
@@ -453,13 +465,14 @@ call_worker(PoolName, Req) ->
 %% left to propagate -- mislabeling them worker_died would hide a
 %% naming/startup bug behind a transient-looking error.
 pool_call(PoolName, Msg) ->
-    Bound = admission_bound(Msg),
-    case attempt(fun() -> wpool:call(PoolName, Msg, random_worker,
-                                     Bound) end, Bound) of
+    Deadline = admission_deadline(Msg),
+    case attempt(fun(M, T) -> wpool:call(PoolName, M, random_worker,
+                                         T) end, Msg, Deadline) of
         {overload, FullWorker} ->
             %% The randomly-picked worker is at max_in_flight; others may
             %% have room, so offer the request to each remaining worker.
-            spillover(spillover_candidates(PoolName, FullWorker), Msg, Bound);
+            spillover(spillover_candidates(PoolName, FullWorker), Msg,
+                      Deadline);
         {ok, Reply} ->
             {ok, Reply};
         Err when Err =:= worker_died; Err =:= admission_timeout ->
@@ -470,51 +483,96 @@ pool_call(PoolName, Msg) ->
             {error, katipo_req:error_map(Err, <<>>)}
     end.
 
-%% The bound on the pool call, derived from the message kind in one place:
-%% async admission is an immediate ack, so it is bounded (see
-%% ?ADMISSION_TIMEOUT); a sync request's single call carries the whole
-%% response and is governed by the worker's request timer instead.
-admission_bound({async_req, _ReplyTo, _Req, _Obs}) -> ?ADMISSION_TIMEOUT;
-admission_bound(#req{}) -> infinity.
+%% The caller's admission deadline: ONE absolute monotonic instant for the
+%% whole admission, computed here and shared by every attempt. It has to be
+%% absolute rather than a per-call bound, or the guarantee dissolves --
+%% giving each spillover candidate a fresh ?ADMISSION_TIMEOUT makes the
+%% worst case pool_size x ?ADMISSION_TIMEOUT (a 32-worker pool whose
+%% workers each answer just inside the bound blocks the caller for over two
+%% minutes), which is what formal/KatipoSpill_latency_tight.cfg fails on.
+%% A sync request's single call carries the whole response and is governed
+%% by the worker's request timer instead, so it has no deadline.
+admission_deadline({async_req, _ReplyTo, _Req, _Obs}) ->
+    erlang:monotonic_time(millisecond) + ?ADMISSION_TIMEOUT;
+admission_deadline(#req{}) ->
+    infinity.
 
-%% One admission attempt, however the worker is addressed. Only a real
-%% reply, an at-capacity rejection carrying the full worker's pid, a
-%% bounded call timing out against an unresponsive worker, or the worker
-%% dying with the call in flight can come back. The timeout mapping guards
-%% on the bound: on an unbounded call a {timeout, _} exit can only be a
-%% worker that died with exit reason `timeout`.
-attempt(CallFun, Bound) ->
-    try CallFun() of
-        {overload, Pid} -> {overload, Pid};
-        Reply -> {ok, Reply}
-    catch
-        exit:{timeout, {gen_server, call, _}} when Bound =/= infinity ->
+%% What is left of the admission budget, as a gen_server:call timeout.
+remaining(infinity) ->
+    infinity;
+remaining(Deadline) ->
+    max(0, Deadline - erlang:monotonic_time(millisecond)).
+
+%% Stamp the caller's deadline into an async message. A bounded call can
+%% sit in a backed-up worker's mailbox past the point where the caller gave
+%% up with {error, admission_timeout}; without the deadline the worker
+%% would admit it anyway, running a request nobody wants and later
+%% delivering a terminal message to reply_to with a ref the caller never
+%% received. The worker refuses expired admissions instead (see handle_call
+%% in katipo_worker). Sync requests carry no deadline.
+stamp({async_req, ReplyTo, Req, Obs}, Deadline) ->
+    {async_req, ReplyTo, Req, Obs, Deadline};
+stamp(Req = #req{}, _Deadline) ->
+    Req.
+
+%% One admission attempt, however the worker is addressed. Every attempt
+%% shares the caller's single deadline: it is stamped into the message and
+%% it is what remains of it that bounds this call, so the pool walk as a
+%% whole can never outlast ?ADMISSION_TIMEOUT. An exhausted budget is an
+%% admission_timeout without making the call at all -- a zero timeout would
+%% still deliver the message, and admitting a request whose caller has
+%% already gone is the thing the deadline exists to prevent.
+%%
+%% Only a real reply, an at-capacity rejection carrying the full worker's
+%% pid, a bounded call timing out against an unresponsive worker, or the
+%% worker dying with the call in flight can come back. The
+%% timeout mapping guards on the bound: on an unbounded call a {timeout, _}
+%% exit can only be a worker that died with exit reason `timeout`.
+attempt(CallFun, Msg, Deadline) ->
+    case remaining(Deadline) of
+        0 ->
             admission_timeout;
-        exit:{_Reason, {gen_server, call, _}} ->
-            worker_died
+        Timeout ->
+            try CallFun(stamp(Msg, Deadline), Timeout) of
+                {overload, Pid} -> {overload, Pid};
+                %% The worker refused because our stamped deadline had
+                %% passed when it reached the call. Receiving this reply at
+                %% all means we are at the very boundary of the bounded
+                %% wait, so surface the same error the wait itself was
+                %% about to produce.
+                admission_expired -> admission_timeout;
+                Reply -> {ok, Reply}
+            catch
+                exit:{timeout, {gen_server, call, _}} when Timeout =/= infinity ->
+                    admission_timeout;
+                exit:{_Reason, {gen_server, call, _}} ->
+                    worker_died
+            end
     end.
 
 %% The rest of the pool in random-rotation order, minus the worker that just
-%% rejected: rotation spreads spillover load, the exclusion avoids a
+%% rejected (or, with `undefined`, every name that is not registered):
+%% rotation spreads spillover load, the exclusion avoids a
 %% guaranteed-redundant call into the busiest worker's mailbox.
-spillover_candidates(PoolName, FullWorker) ->
+spillover_candidates(PoolName, Excluded) ->
     Workers = wpool:get_workers(PoolName),
     {Front, Back} = lists:split(rand:uniform(length(Workers)) - 1, Workers),
-    [W || W <- Back ++ Front, whereis(W) =/= FullWorker].
+    [W || W <- Back ++ Front, whereis(W) =/= Excluded].
 
-spillover([], _Msg, _Bound) ->
+spillover([], _Msg, _Deadline) ->
     {error, katipo_req:error_map(overload, <<>>)};
-spillover([Worker | Workers], Msg, Bound) ->
-    case attempt(fun() -> wpool_process:call(Worker, Msg, Bound) end, Bound) of
+spillover([Worker | Workers], Msg, Deadline) ->
+    case attempt(fun(M, T) -> wpool_process:call(Worker, M, T) end, Msg,
+                 Deadline) of
         {ok, Reply} ->
             {ok, Reply};
         admission_timeout ->
-            %% Same fail-fast rationale as the first attempt: at most one
-            %% bounded wait per admission, never one per candidate.
+            %% The caller's whole admission budget is gone -- the deadline
+            %% is shared, so there is nothing left to offer anyone else.
             {error, katipo_req:error_map(admission_timeout, <<>>)};
         _NoRoom ->
             %% Full, dead, or restarting: nothing to offer here, keep going.
-            spillover(Workers, Msg, Bound)
+            spillover(Workers, Msg, Deadline)
     end.
 
 -doc """

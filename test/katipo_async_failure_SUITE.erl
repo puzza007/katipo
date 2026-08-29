@@ -27,7 +27,7 @@
 -export([admission_error_when_worker_restarting/1]).
 -export([no_message_after_cancel_against_dead_port/1]).
 -export([timeout_aborts_transfer_in_port/1]).
--export([admission_timeout_when_worker_wedged/1]).
+-export([late_admission_refused_after_caller_timeout/1]).
 
 -include_lib("common_test/include/ct.hrl").
 -include_lib("stdlib/include/assert.hrl").
@@ -37,7 +37,7 @@ all() ->
      admission_error_when_worker_restarting,
      no_message_after_cancel_against_dead_port,
      timeout_aborts_transfer_in_port,
-     admission_timeout_when_worker_wedged].
+     late_admission_refused_after_caller_timeout].
 
 init_per_suite(Config) ->
     {ok, _} = application:ensure_all_started(katipo),
@@ -81,11 +81,7 @@ admission_error_when_port_closes_before_dispatch(Config) ->
                                                blackhole_req()),
                         Parent ! {async_result, Res}
                 end),
-    ok = wait_until(fun() ->
-                            {message_queue_len, N} =
-                                process_info(WorkerPid, message_queue_len),
-                            N >= 1
-                    end, 50),
+    ok = wait_until(fun() -> queue_len(WorkerPid) >= 1 end, 50),
     true = port_close(Port),
     ok = sys:resume(WorkerPid),
 
@@ -195,17 +191,56 @@ timeout_aborts_transfer_in_port(Config) ->
     ok = swap_port(WorkerPid, RealPort),
     true = port_close(FakePort).
 
-%% A worker that accepts no messages at all (here: suspended; in production
-%% a C port that stopped draining its pipe and blocked the worker inside
-%% port_command) must not block callers forever: the bounded admission call
-%% gives up and reports admission_timeout. Runs for the full 5s bound.
-admission_timeout_when_worker_wedged(Config) ->
+%% Two claims about a worker that accepts no messages (here: suspended; in
+%% production a C port that stopped draining its pipe and blocked the
+%% worker inside port_command), forced in one 5s window. First, the bounded
+%% admission call must not block the caller forever: it gives up and
+%% reports admission_timeout. Second -- KatipoAdmit.tla, mechanism 1 (late
+%% admit) -- the admission call is still queued when that bounded wait
+%% elapses, and before the deadline fix the resumed worker admitted it
+%% anyway: an orphaned request nobody was waiting for ran to resolution and
+%% pushed a terminal message at reply_to with a ref the caller never
+%% received. The stamped deadline makes the worker refuse instead: nothing
+%% registered, nothing ever delivered. (KatipoAdmit_fix_contract.cfg shows
+%% the complementary reply race is not closable worker-side; that residue
+%% is documented on async_req.) Runs for the full 5s admission bound.
+late_admission_refused_after_caller_timeout(Config) ->
     Pool = ?config(pool, Config),
     WorkerPid = worker_pid(Pool),
     ok = sys:suspend(WorkerPid),
-    Res = katipo:async_req(Pool, blackhole_req()),
-    ok = sys:resume(WorkerPid),
-    ?assertMatch({error, #{code := admission_timeout}}, Res).
+    %% The request must be one that RESOLVES quickly once admitted, or the
+    %% stray-message check below could never fail: with blackhole_req's 30s
+    %% timers, an orphaned request produces nothing inside the 500ms
+    %% window, and the check would pass whether or not the fix is present.
+    %% A 100ms request timer means an admitted orphan pushes
+    %% {katipo_error, Ref, timeout} at reply_to almost immediately.
+    Res = try
+              katipo:async_req(Pool, short_timeout_req())
+          after
+              %% The queued admission is processed here, after the caller
+              %% gave up. Resume even if the assertions below fail, or
+              %% end_per_testcase tears down a frozen gen_server.
+              ok = sys:resume(WorkerPid)
+          end,
+    ?assertMatch({error, #{code := admission_timeout}}, Res),
+    ok = wait_until(fun() -> queue_len(WorkerPid) =:= 0 end, 50),
+    %% The user-visible half of the contract first: no katipo_* message for
+    %% a ref we never received. Checked before the Reqs assertion so that
+    %% it, not the internal one, is what a regression trips.
+    receive
+        {Tag, _Ref, _Payload} = Msg
+          when Tag =:= katipo_response; Tag =:= katipo_error ->
+            ct:fail({stray_message_after_admission_timeout, Msg})
+    after 500 ->
+            ok
+    end,
+    %% And the internal one: refused, not admitted, so no orphan in Reqs.
+    ?assertEqual(#{}, worker_reqs(WorkerPid)).
+
+%% Unroutable like blackhole_req, but with a request timer short enough
+%% that an admitted request resolves well inside a test's patience.
+short_timeout_req() ->
+    (blackhole_req())#{connecttimeout_ms => 100, timeout_ms => 100}.
 
 wait_until(_Fun, 0) ->
     {error, condition_never_true};
@@ -216,6 +251,15 @@ wait_until(Fun, Retries) ->
         false ->
             timer:sleep(20),
             wait_until(Fun, Retries - 1)
+    end.
+
+%% process_info/2 answers `undefined' for a dead process, so a worker that
+%% died while we waited (a killed port takes the worker with it) must name
+%% itself rather than surface as a badmatch inside a wait_until fun.
+queue_len(Pid) ->
+    case process_info(Pid, message_queue_len) of
+        {message_queue_len, N} -> N;
+        undefined -> ct:fail({worker_died_while_waiting, Pid})
     end.
 
 %% The single pool worker's pid (every test here runs a size-1 pool).
