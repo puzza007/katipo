@@ -419,6 +419,16 @@ Only for buffered async requests: a streamed response (`stream => true`)
 arrives as a message sequence, which `await` does not understand -- receive
 those messages directly.
 
+A response that arrives while the timeout is firing is still returned --
+`await` checks the mailbox once more before giving up, so a completed
+request is never discarded.
+
+An `await_timeout` does not cancel the request: it keeps running, and keeps
+its `max_in_flight` slot, until its own `timeout_ms`, after which its
+terminal message is delivered to `reply_to` regardless. Either `await`
+again for the remaining time, or call `cancel/2` if the response is no
+longer wanted -- and in that case be prepared to drop a late message for
+that `Ref`, since the cancel is best-effort.
 """.
 -spec await(reference(), timeout()) -> response().
 await(Ref, Timeout) ->
@@ -428,14 +438,18 @@ await(Ref, Timeout) ->
         {katipo_error, Ref, Error} ->
             {error, Error}
     after Timeout ->
-        %% Flush any late-arriving response for this Ref
+        %% One last look before giving up. A terminal message that landed
+        %% while the timer was firing is a real outcome for this request,
+        %% and nothing will redeliver it -- discarding it here would lose a
+        %% completed response and report a timeout that did not happen.
         receive
-            {katipo_response, Ref, _} -> ok;
-            {katipo_error, Ref, _} -> ok
+            {katipo_response, Ref, Response} ->
+                {ok, Response};
+            {katipo_error, Ref, Error} ->
+                {error, Error}
         after 0 ->
-            ok
-        end,
-        {error, #{code => await_timeout, message => <<>>}}
+            {error, #{code => await_timeout, message => <<>>}}
+        end
     end.
 
 -doc """
