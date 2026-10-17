@@ -1,89 +1,124 @@
-katipo
-=====
+# katipo
 
-An HTTP/HTTP2/HTTP3 client library for Erlang built around libcurl-multi and libevent.
-
-### Status
-
-![build status](https://github.com/puzza007/katipo/actions/workflows/ci.yml/badge.svg)
-[![Hex pm](http://img.shields.io/hexpm/v/katipo.svg?style=flat)](https://hex.pm/packages/katipo)
+[![build status](https://github.com/puzza007/katipo/actions/workflows/ci.yml/badge.svg)](https://github.com/puzza007/katipo/actions/workflows/ci.yml)
+[![Hex pm](https://img.shields.io/hexpm/v/katipo.svg?style=flat)](https://hex.pm/packages/katipo)
 [![Hex Docs](https://img.shields.io/badge/hex-docs-blue.svg)](https://hexdocs.pm/katipo)
 
-### Usage
+An HTTP/1.1, HTTP/2 and HTTP/3 client for Erlang, built on libcurl's multi
+interface and libevent: libcurl's protocol support, many concurrent
+connections per worker.
+
+## Install
 
 ```erlang
-{ok, _} = application:ensure_all_started(katipo).
-Pool = api_server,
-{ok, _} = katipo_pool:start(Pool, 2, [{pipelining, multiplex}]).
-Url = <<"https://example.com">>.
-ReqHeaders = [{<<"User-Agent">>, <<"katipo">>}].
-Opts = #{headers => ReqHeaders,
-         body => <<"0d5cb3c25b0c5678d5297efa448e1938">>,
-         connecttimeout_ms => 5000,
-         proxy => <<"http://127.0.0.1:9000">>,
-         ssl_verifyhost => false,
-         ssl_verifypeer => false},
-{ok, #{status := 200,
-       headers := RespHeaders,
-       cookiejar := CookieJar,
-       body := RespBody}} = katipo:post(Pool, Url, Opts).
+{deps, [{katipo, "2.0.0"}]}.
 ```
 
-Or passing the entire request as a map
+Building needs a C compiler, `make`, and the libcurl and libevent headers:
+
+```sh
+apt-get install gcc make libcurl4-openssl-dev libevent-dev   # Debian/Ubuntu
+brew install curl libevent pkg-config                        # macOS
+```
+
+On macOS the build prefers Homebrew's curl, which has HTTP/3.
+
+## Quick start
 
 ```erlang
-{ok, _} = application:ensure_all_started(katipo).
-Pool = api_server,
-{ok, _} = katipo_pool:start(Pool, 2, [{pipelining, multiplex}]).
-ReqHeaders = [{<<"User-Agent">>, <<"katipo">>}].
-Req = #{url => <<"https://example.com">>,
-        method => post,
-        headers => ReqHeaders,
-        body => <<"0d5cb3c25b0c5678d5297efa448e1938">>,
-        connecttimeout_ms => 5000,
-        proxy => <<"http://127.0.0.1:9000">>,
-        ssl_verifyhost => false,
-        ssl_verifypeer => false},
-{ok, #{status := 200,
-       headers := RespHeaders,
-       cookiejar := CookieJar,
-       body := RespBody}} = katipo:req(Pool, Req).
+{ok, _} = application:ensure_all_started(katipo),
+{ok, _} = katipo_pool:start(api, 2, [{pipelining, multiplex}]),
+
+{ok, #{status := 200, body := Body}} = katipo:get(api, <<"https://example.com">>),
+
+{ok, #{status := 200}} =
+    katipo:post(api, <<"https://httpbin.org/post">>,
+                #{headers => [{<<"content-type">>, <<"application/json">>}],
+                  body => <<"{\"name\":\"katipo\"}">>,
+                  timeout_ms => 5000}).
 ```
 
-### Why
+Every method has a function (`get`, `post`, `put`, `head`, `options`,
+`patch`, `delete`) taking a pool, a URL and an optional options map.
+`katipo:req(Pool, #{url => Url, method => post, ...})` takes the whole
+request as one map.
 
-We wanted a compatible and high-performance HTTP client so took
-advantage of the 25+ years of development that has gone into libcurl.
-To allow large numbers of simultaneous connections libevent is used
-along with the libcurl-multi interface.
-
-### Documentation
-
-#### API
+## Responses
 
 ```erlang
--type method() :: get | post | put | head | options | patch | delete.
-katipo_pool:start(Name :: atom(), size :: pos_integer(), PoolOptions :: proplist()).
-katipo_pool:stop(Name :: atom()).
-
-katipo:req(Pool :: atom(), Req :: map()).
-katipo:Method(Pool :: atom(), URL :: binary()).
-katipo:Method(Pool :: atom(), URL :: binary(), ReqOptions :: map()).
-
-%% Asynchronous: return {ok, Ref} immediately. The response is delivered to the
-%% calling process (or the `reply_to` option) as a {katipo_response, Ref, Response}
-%% or {katipo_error, Ref, Error} message. Use await/1,2 to block for it.
-katipo:async_req(Pool :: atom(), Req :: map()).
-katipo:async_Method(Pool :: atom(), URL :: binary()).
-katipo:async_Method(Pool :: atom(), URL :: binary(), ReqOptions :: map()).
-katipo:await(Ref :: reference()).
-katipo:await(Ref :: reference(), Timeout :: timeout()).
-katipo:cancel(Pool :: atom(), Ref :: reference()).
-katipo:update_flow(Pool :: atom(), Ref :: reference(), Credits :: pos_integer()).
-
+{ok, #{status := pos_integer(), headers := [{binary(), binary()}],
+       cookiejar := cookiejar(), body := binary()}}
+{error, #{code := atom(), message := binary()}}
 ```
 
-#### Request options
+`code` is a curl error name (`couldnt_connect`, `operation_timedout`, ...)
+or one of katipo's: `bad_opts`, `worker_died`, `overload`,
+`admission_timeout`, `await_timeout`.
+
+## Async requests
+
+```erlang
+{ok, Ref} = katipo:async_get(api, Url),
+{ok, #{status := 200}} = katipo:await(Ref, 5000).
+```
+
+The result arrives as one message, `{katipo_response, Ref, Response}` or
+`{katipo_error, Ref, Error}`, sent to the caller or to the `reply_to` pid.
+`await/1,2` receives it for you; `await_timeout` only ends the wait, so a
+later `await` can still collect it. `cancel(Pool, Ref)` aborts the request;
+a message already sent before the cancel took effect may still be in the
+mailbox.
+
+An admitted request always gets exactly one message, including
+`worker_died` if its worker's C port dies. If no worker can take the
+request, `async_*` returns the error itself (`worker_died`, `overload` or
+`admission_timeout`) and sends nothing. The one gap: a worker killed with
+`exit(Pid, kill)` sends nothing, so keep a timeout on the wait.
+
+## Streaming
+
+`stream => true` delivers the body as it arrives instead of buffering it.
+`stream_window => N` pauses the transfer after `N` unacknowledged chunks,
+which pushes back on the server, until `update_flow/3` grants more:
+
+```erlang
+download(Url) ->
+    {ok, Ref} = katipo:async_get(api, Url, #{stream => true, stream_window => 8}),
+    receive {katipo_headers, Ref, #{status := 200}} -> ok end,
+    loop(Ref, []).
+
+loop(Ref, Acc) ->
+    receive
+        {katipo_chunk, Ref, Bin} ->
+            ok = katipo:update_flow(api, Ref, 1),
+            loop(Ref, [Acc | Bin]);
+        {katipo_done, Ref, _} -> {ok, iolist_to_binary(Acc)};
+        {katipo_error, Ref, Error} -> {error, Error}
+    end.
+```
+
+A `katipo_error` can arrive at any point, including mid-body. Grant at
+least once every `N` chunks, or the transfer stays paused until
+`timeout_ms` fires. Streaming is async-only and `await` does not apply.
+With HTTP/2 or HTTP/3 multiplexing, use a recent libcurl: older versions
+can stall other streams on the connection while one is paused.
+
+## Pools
+
+`katipo_pool:start(Name, Size, Opts)` starts `Size` workers, each owning
+one curl multi handle. `katipo_pool:stop(Name)` stops them.
+
+| Option                  | Type                          | Default      | Note                                                                                           |
+|:------------------------|:------------------------------|:-------------|:-----------------------------------------------------------------------------------------------|
+| `pipelining`            | `nothing` <br> `http1` <br> `multiplex` | `nothing`    | HTTP pipelining [CURLMOPT_PIPELINING](https://curl.se/libcurl/c/CURLMOPT_PIPELINING.html) |
+| `max_total_connections` | `non_neg_integer()`           | 0 (no limit) | [docs](https://curl.se/libcurl/c/CURLMOPT_MAX_TOTAL_CONNECTIONS.html)                     |
+| `max_concurrent_streams`| `non_neg_integer()`           | 100          | [docs](https://curl.se/libcurl/c/CURLMOPT_MAX_CONCURRENT_STREAMS.html) curl >= 7.67.0     |
+| `max_in_flight`         | `pos_integer()` \| `infinity` | `infinity`   | katipo's own: per-worker cap on in-flight requests                                             |
+
+With `max_in_flight`, a request that finds its worker full spills over to
+another, and fails fast with `overload` when every worker is full.
+
+## Request options
 
 | Option                  | Type                                | Default     | Notes                                                                               |
 |:------------------------|:------------------------------------|:------------|:------------------------------------------------------------------------------------|
@@ -121,99 +156,15 @@ katipo:update_flow(Pool :: atom(), Ref :: reference(), Credits :: pos_integer())
 | `verbose`               | `boolean()`                         | `false`     | [docs](https://curl.se/libcurl/c/CURLOPT_VERBOSE.html)                         |
 | `reply_to`              | `pid()`                             | `self()`    | Async only (`async_*`): process that receives the response message. Accepted but ignored on synchronous requests. |
 
-#### Responses
+Some options depend on how libcurl was built. Check at runtime with
+`katipo:http3_available/0`, `doh_url_available/0`,
+`tcp_fastopen_available/0`, `unix_socket_path_available/0` and
+`sslkey_blob_available/0`.
 
-```erlang
-{ok, #{status := pos_integer(),
-       headers := headers(),
-       cookiejar := cookiejar(),
-       body := body()}}
+## Observability
 
-{error, #{code := atom(), message := binary()}}
-```
-
-The `code` atom is drawn from the exported `t:katipo:error_code/0` union (curl
-error names plus `bad_opts`, `await_timeout`, `worker_died`, `overload`,
-and `admission_timeout`).
-
-#### Asynchronous requests
-
-`async_req/2` and the `async_Method` wrappers return `{ok, Ref}` immediately and
-deliver the result as a message instead of blocking:
-
-```erlang
-{ok, Ref} = katipo:async_get(Pool, <<"https://example.com">>),
-receive
-    {katipo_response, Ref, #{status := Status}} -> Status;
-    {katipo_error, Ref, Error} -> {error, Error}
-end.
-```
-
-`await/1,2` blocks for that message (default 30s), and `cancel/2` aborts an
-in-flight request (best-effort). The pool argument to `cancel/2` and
-`update_flow/3` is retained for compatibility and ignored — the `Ref` itself
-routes to the worker holding the request. The message goes to the calling
-process by default; set the `reply_to` option to redirect it to another
-process. If the
-worker's port dies while a request is in flight, both sync and async callers
-receive `{error, #{code => worker_died}}`; if an async request cannot be
-handed to a worker at all (it died and is being restarted), `async_req` itself
-returns `{error, #{code => worker_died}}` and no message is delivered. The
-one exception is a worker killed outright (`exit(Pid, kill)`): that skips the
-cleanup that sends `worker_died`, so an admitted request then gets no message
-at all -- keep a timeout on the wait.
-
-#### Streaming responses
-
-Pass `stream => true` to any async function to receive the body incrementally
-instead of as one buffered binary — useful for large downloads, where
-buffering costs roughly twice the body size across the port boundary:
-
-```erlang
-{ok, Ref} = katipo:async_get(Pool, Url, #{stream => true}),
-receive {katipo_headers, Ref, #{status := Status, headers := Headers}} -> ok end,
-collect(Ref) %% ->
-%%   {katipo_chunk, Ref, Bin}      zero or more, in arrival order
-%%   {katipo_done, Ref, #{status := Status, cookiejar := Jar}}  terminal
-```
-
-A `{katipo_error, Ref, ErrorMap}` message is terminal and can arrive at any
-point, including mid-body (e.g. a timeout). `cancel/2` works as usual; after
-it takes effect no further messages arrive. Streaming is async-only — the
-synchronous functions reject `stream => true` — and `await/1,2` does not
-apply.
-
-By default chunks arrive as fast as the transfer produces them. To bound the
-consumer's exposure, pass `stream_window => N`: after `N` outstanding chunk
-messages the transfer pauses client-side (curl stops reading the socket, so
-backpressure reaches the server through TCP or the HTTP/2/3 stream window)
-until `katipo:update_flow(Pool, Ref, Credits)` grants more. A window of `N`
-bounds buffered data to roughly `N` × 16KB (curl's write-buffer size) plus
-one pipe's worth. The request timer keeps running while a transfer is
-paused, so a consumer that stops granting credits eventually receives
-`operation_timedout`. Use a reasonably current libcurl when combining
-`stream_window` with HTTP/2/3 multiplexing — older releases could stall
-other streams sharing the connection while one stream is paused.
-
-#### Pool Options
-
-| Option                  | Type                          | Default      | Note                                                                                           |
-|:------------------------|:------------------------------|:-------------|:-----------------------------------------------------------------------------------------------|
-| `pipelining`            | `nothing` <br> `http1` <br> `multiplex` | `nothing`    | HTTP pipelining [CURLMOPT_PIPELINING](https://curl.se/libcurl/c/CURLMOPT_PIPELINING.html) |
-| `max_total_connections` | `non_neg_integer()`           | 0 (no limit) | [docs](https://curl.se/libcurl/c/CURLMOPT_MAX_TOTAL_CONNECTIONS.html)                     |
-| `max_concurrent_streams`| `non_neg_integer()`           | 100          | [docs](https://curl.se/libcurl/c/CURLMOPT_MAX_CONCURRENT_STREAMS.html) curl >= 7.67.0     |
-
-Katipo adds one Erlang-side pool option of its own: `{max_in_flight, N}`
-(default `infinity`) caps concurrently in-flight requests per worker; a full
-pool rejects requests fast with `{error, #{code => overload}}`.
-
-#### Observability
-
-Katipo uses [OpenTelemetry](https://opentelemetry.io/) for tracing and metrics.
-
-##### Tracing
-
-Each HTTP request creates a span with the following attributes:
+katipo emits OpenTelemetry spans and metrics. Without an SDK they are
+no-ops. Each request gets a span:
 
 | Attribute | Description |
 |:----------|:------------|
@@ -222,9 +173,7 @@ Each HTTP request creates a span with the following attributes:
 | `server.address` | Target host |
 | `http.response.status_code` | Response status code (on success) |
 
-##### Metrics
-
-The following metrics are recorded:
+Metrics (histograms are in milliseconds and carry `http.request.method`):
 
 | Metric | Type | Description |
 |:-------|:-----|:------------|
@@ -238,11 +187,7 @@ The following metrics are recorded:
 | `http.client.redirect_time` | Histogram | Redirect processing time (ms) |
 | `http.client.starttransfer_time` | Histogram | Time to first byte (ms) |
 
-All histogram metrics include the `http.request.method` attribute for filtering by HTTP method.
-
-##### Enabling OpenTelemetry Export
-
-The OpenTelemetry API is a no-op by default. To export telemetry data add the OpenTelemetry SDK and an exporter to your release:
+To export them, add the SDK and an exporter:
 
 ```erlang
 %% In rebar.config
@@ -273,73 +218,24 @@ Configure the exporter in your `sys.config`:
 ].
 ```
 
-##### Migration from metrics library
+## Upgrading from 1.x
 
-If you were using the previous `metrics` library integration, note the following breaking changes:
+Metrics moved to OpenTelemetry: `mod_metrics`, the `return_metrics` option
+and the `metrics` field in responses are gone, and the histograms above
+carry the same timings. Everything else is additive; see the
+[CHANGELOG](CHANGELOG.md).
 
-- The `mod_metrics` application environment option has been removed
-- The `return_metrics` request option has been removed
-- The `metrics` field is no longer included in response maps
+## Development
 
-To access timing metrics, configure an OpenTelemetry exporter as shown above. The histogram metrics provide the same timing data (DNS lookup, connect time, TLS handshake, etc.) that was previously available via `return_metrics`.
+The tests run against httpbin behind Caddy (HTTPS, HTTP/2 and HTTP/3 on
+port 8443):
 
-### System dependencies
-
-* libevent-dev
-* libcurl4-openssl-dev
-* make
-* curl
-* libssl-dev
-* gcc
-
-## Testing
-
-The official Erlang Docker [image](https://hub.docker.com/_/erlang)
-has everything needed to build and test Katipo.
-
-### Local httpbin Setup
-
-The test suite uses a local httpbin instance running behind Caddy (for HTTPS/HTTP2/HTTP3 support).
-
-Start the httpbin container:
-
-```bash
-cd test/http3-httpbin
-docker-compose up -d
-```
-
-This starts:
-- **httpbin**: A local instance of the httpbin.org API
-- **Caddy**: Reverse proxy providing HTTPS with auto-generated self-signed certificates on port 8443
-
-Run the tests (requires httpbin to be running):
-
-```bash
+```sh
+(cd test/http3-httpbin && docker compose up -d)
+curl -k https://localhost:8443/get   # wait for a 200; a 502 means httpbin is down
 rebar3 ct
 ```
 
-To run with coverage:
-
-```bash
-rebar3 ct --cover
-rebar3 cover --verbose
-```
-
-Stop the containers when done:
-
-```bash
-cd test/http3-httpbin
-docker-compose down
-```
-
-### Feature Availability
-
-Some features are only available with newer versions of libcurl. You can check availability at runtime:
-
-```erlang
-katipo:tcp_fastopen_available().    %% curl >= 7.49.0
-katipo:unix_socket_path_available(). %% curl >= 7.40.0
-katipo:doh_url_available().          %% curl >= 7.62.0
-katipo:sslkey_blob_available().      %% curl >= 7.71.0
-katipo:http3_available().            %% curl >= 7.66.0
-```
+The async admission and streaming flow-control protocols are modelled in
+TLA+ and proved in Lean under [`formal/`](https://github.com/puzza007/katipo/tree/master/formal), and
+`formal/trace.sh` checks the test runs against the Lean model.
