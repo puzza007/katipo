@@ -24,6 +24,10 @@
 #define KATIPO_PATCH 5
 #define KATIPO_DELETE 6
 
+/* A buffered body goes to Erlang as one {packet, 4} frame, whose length and
+ * BINARY_EXT size are 32 bits; the slack covers the rest of the message. */
+#define MAX_BUFFERED_BODY ((size_t)UINT32_MAX - 16 * 1024 * 1024)
+
 #define K_CURLOPT_CONNECTTIMEOUT_MS 5
 #define K_CURLOPT_FOLLOWLOCATION 6
 #define K_CURLOPT_SSL_VERIFYHOST 7
@@ -80,9 +84,7 @@ typedef struct _ConnInfo {
   char *url;
   erlang_pid *pid;
   erlang_ref *ref;
-  char *memory;
-  size_t size;
-  size_t capacity;
+  struct evbuffer *body; /* the buffered response body */
   GlobalInfo *global;
   char error[CURL_ERROR_SIZE];
   size_t num_headers;
@@ -93,7 +95,7 @@ typedef struct _ConnInfo {
   char *post_data;
   long post_data_size;
   /* Streaming (stream => true): body bytes are forwarded as they arrive
-   * instead of being buffered in `memory`. headers_sent tracks the one-time
+   * instead of being buffered in `body`. headers_sent tracks the one-time
    * headers message that precedes the first chunk (or the done message for
    * bodyless responses). window is the remaining chunk-message credits
    * (-1 = unbounded); at zero the transfer is paused until the consumer
@@ -420,19 +422,21 @@ static void mcode_or_die(const char *where, CURLMcode code) {
   }
 }
 
-static void send_to_erlang(GlobalInfo *global, char *buffer, size_t buffer_len) {
-  u_int32_t erl_pkt_len;
-  char size_buf[4];
+/* The 4-byte big-endian length that {packet, 4} reads before each frame. */
+static void add_frame_len(struct evbuffer *out, size_t len) {
+  uint32_t n = htonl((uint32_t)len);
 
-  erl_pkt_len = htonl((uint32_t)buffer_len);
-
-  (void)memcpy(size_buf, &erl_pkt_len, sizeof(erl_pkt_len));
-  if (bufferevent_write(global->to_erlang, size_buf, sizeof(size_buf)) < 0) {
-    errx(2, "bufferevent_write");
+  if (evbuffer_add(out, &n, sizeof(n))) {
+    errx(2, "evbuffer_add");
   }
+}
 
-  if (bufferevent_write(global->to_erlang, buffer, buffer_len) < 0) {
-    errx(2, "bufferevent_write");
+static void send_to_erlang(GlobalInfo *global, char *buffer, size_t buffer_len) {
+  struct evbuffer *out = bufferevent_get_output(global->to_erlang);
+
+  add_frame_len(out, buffer_len);
+  if (evbuffer_add(out, buffer, buffer_len)) {
+    errx(2, "evbuffer_add");
   }
 }
 
@@ -536,28 +540,55 @@ static void begin_msg(ei_x_buff *result, const char *tag,
   }
 }
 
+/* A BINARY_EXT header for a len-byte binary whose bytes the caller writes
+ * straight after the encoded message, so they are never copied into the ei
+ * buffer. ei has no call that encodes just the header. */
+static void append_binary_header(ei_x_buff *b, size_t len) {
+  char hdr[5];
+  uint32_t n = htonl((uint32_t)len);
+
+  hdr[0] = ERL_BINARY_EXT;
+  memcpy(hdr + 1, &n, sizeof(n));
+  if (ei_x_append_buf(b, hdr, sizeof(hdr))) {
+    errx(2, "Failed to encode binary header");
+  }
+}
+
+/* {ok, {{Pid, Ref}, {Status, Headers, CookieJar, Body, Metrics}}}. The body
+ * is not copied: the message is encoded up to the body's BINARY_EXT header
+ * and on through the metrics, and the body's evbuffer chains are moved into
+ * the output between the two halves, so libevent owns and frees them. The
+ * whole frame is appended in this one callback, so no other frame can land
+ * inside it. See formal/KatipoBodyHandoff.tla. */
 static void send_ok_to_erlang(ConnInfo *conn) {
-  ei_x_buff result;
+  ei_x_buff msg;
+  size_t split;
+  size_t body_len = evbuffer_get_length(conn->body);
+  struct evbuffer *out = bufferevent_get_output(conn->global->to_erlang);
 
-  begin_msg(&result, "ok", conn->pid, conn->ref);
-  if (ei_x_encode_tuple_header(&result, 5) ||
-      ei_x_encode_long(&result, conn->response_code) ||
-      ei_x_encode_list_header(&result, conn->num_headers)) {
-    errx(2, "Failed to encode &result");
+  begin_msg(&msg, "ok", conn->pid, conn->ref);
+  if (ei_x_encode_tuple_header(&msg, 5) ||
+      ei_x_encode_long(&msg, conn->response_code) ||
+      ei_x_encode_list_header(&msg, conn->num_headers)) {
+    errx(2, "Failed to encode ok message");
   }
 
-  encode_headers(&result, conn);
+  encode_headers(&msg, conn);
 
-  encode_cookies(&result, conn);
+  encode_cookies(&msg, conn);
 
-  if (ei_x_encode_binary(&result, conn->memory, conn->size)) {
-    errx(2, "Failed to encode body");
+  append_binary_header(&msg, body_len);
+  split = msg.index;
+
+  encode_metrics(&msg, conn);
+
+  add_frame_len(out, msg.index + body_len);
+  if (evbuffer_add(out, msg.buff, split) ||
+      evbuffer_add_buffer(out, conn->body) ||
+      evbuffer_add(out, msg.buff + split, msg.index - split)) {
+    errx(2, "evbuffer_add");
   }
-
-  encode_metrics(&result, conn);
-
-  send_to_erlang(conn->global, result.buff, result.index);
-  ei_x_free(&result);
+  ei_x_free(&msg);
 }
 
 /* Streaming: {headers, {Pid, Ref}, {Status, Headers}} -- sent once, before
@@ -587,30 +618,18 @@ static void send_headers_to_erlang(ConnInfo *conn) {
 
 /* Streaming: {chunk, {Pid, Ref}, Body} -- one per write callback. This is
  * the per-16KB hot path, so the payload is written to the pipe straight
- * from curl's buffer instead of being copied into the ei buffer first: the
- * BINARY_EXT header (tag 109, 4-byte big-endian length) is appended to the
- * small ei-encoded prefix by hand. */
+ * from curl's buffer instead of being copied into the ei buffer first. */
 static void send_chunk_to_erlang(ConnInfo *conn, void *data, size_t len) {
   ei_x_buff prefix;
-  char bin_hdr[5];
-  uint32_t nlen;
-  u_int32_t erl_pkt_len;
-  char size_buf[4];
+  struct evbuffer *out = bufferevent_get_output(conn->global->to_erlang);
 
   begin_msg(&prefix, "chunk", conn->pid, conn->ref);
-  bin_hdr[0] = 109; /* BINARY_EXT */
-  nlen = htonl((uint32_t)len);
-  memcpy(bin_hdr + 1, &nlen, 4);
-  if (ei_x_append_buf(&prefix, bin_hdr, 5)) {
-    errx(2, "Failed to encode chunk header");
-  }
+  append_binary_header(&prefix, len);
 
-  erl_pkt_len = htonl((uint32_t)(prefix.index + len));
-  memcpy(size_buf, &erl_pkt_len, sizeof(size_buf));
-  if (bufferevent_write(conn->global->to_erlang, size_buf, sizeof(size_buf)) < 0 ||
-      bufferevent_write(conn->global->to_erlang, prefix.buff, prefix.index) < 0 ||
-      bufferevent_write(conn->global->to_erlang, data, len) < 0) {
-    errx(2, "bufferevent_write");
+  add_frame_len(out, prefix.index + len);
+  if (evbuffer_add(out, prefix.buff, prefix.index) ||
+      evbuffer_add(out, data, len)) {
+    errx(2, "evbuffer_add");
   }
   ei_x_free(&prefix);
 }
@@ -686,7 +705,7 @@ static void free_conn(GlobalInfo *global, ConnInfo *conn) {
   free(conn->url);
   free(conn->pid);
   free(conn->ref);
-  free(conn->memory);
+  evbuffer_free(conn->body);
   free(conn->post_data);
   curl_slist_free_all(conn->req_cookies);
   curl_slist_free_all(conn->req_headers);
@@ -900,21 +919,11 @@ static size_t write_cb(void *ptr, size_t size, size_t nmemb, void *data) {
     return realsize;
   }
 
-  size_t needed = conn->size + realsize;
-  if (needed > conn->capacity) {
-    size_t new_cap = conn->capacity ? conn->capacity : 4096;
-    while (new_cap < needed) {
-      new_cap *= 2;
-    }
-    char *new_memory = (char *)realloc(conn->memory, new_cap);
-    if (new_memory == NULL) {
-      return 0;
-    }
-    conn->memory = new_memory;
-    conn->capacity = new_cap;
+  /* Returning short fails the transfer with CURLE_WRITE_ERROR. */
+  if (evbuffer_get_length(conn->body) + realsize > MAX_BUFFERED_BODY ||
+      evbuffer_add(conn->body, ptr, realsize)) {
+    return 0;
   }
-  memcpy(&(conn->memory[conn->size]), ptr, realsize);
-  conn->size += realsize;
 
   return realsize;
 }
@@ -997,12 +1006,16 @@ static void new_conn(long method, char *url, struct curl_slist *req_headers,
   struct curl_slist *nc;
 
   conn = calloc(1, sizeof(*conn));
-  /* calloc zero-initializes the struct, so error/memory/size/capacity/
-   * num_headers/resp_headers already start empty. */
+  /* calloc zero-initializes the struct, so error/num_headers/resp_headers
+   * already start empty. */
 
   conn->easy = curl_easy_init();
   if (!conn->easy) {
     errx(2, "curl_easy_init() failed, exiting!\n");
+  }
+  conn->body = evbuffer_new();
+  if (!conn->body) {
+    errx(2, "evbuffer_new() failed, exiting!\n");
   }
   conn->global = global;
   register_conn(global, conn);

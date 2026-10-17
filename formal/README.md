@@ -94,6 +94,23 @@ vacuous. Dropping `terminate/2`'s `worker_died` makes
 `katipo_SUITE` checks the same thing against the real code: headers, a
 chunk, a port kill, then exactly one `worker_died` and silence.
 
+
+### Body handoff in the C port
+
+`KatipoBodyHandoff.tla`: a buffered response body lives in an evbuffer, and
+`send_ok_to_erlang` moves its chains into the output with
+`evbuffer_add_buffer` instead of copying them; `free_conn` runs straight
+afterwards while the pipe drains later. Two
+buffered transfers and a streaming one share the output buffer, writes may
+be partial, and bodies may be empty.
+
+| config | question | result |
+|---|---|---|
+| `KatipoBodyHandoff.cfg` | each body freed exactly once, never written after it is freed, frames intact on the pipe, every body eventually freed | pass (548 states, every action fires) |
+| `KatipoBodyHandoffCopy.cfg` | the same for the previous code, which copied the body | pass |
+| `KatipoBodyHandoffShared.cfg` | sabotage: the output references the body without taking it over | **fails** as expected: `free_conn` frees the body before libevent writes it |
+| `KatipoBodyHandoffSplit.cfg` | sabotage: the frame is appended across callbacks | **fails** as expected: another transfer's frame lands inside it |
+
 ## Lean proofs (`lean/`)
 
 Core Lean 4 only (no Mathlib), toolchain pinned in `lean/lean-toolchain`.
