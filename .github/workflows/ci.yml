@@ -63,6 +63,12 @@ jobs:
           disable_search: true
           fail_ci_if_error: false
 
+      - name: Compile the shipped build with warnings as errors
+        # Tests run with trace hooks on (KATIPO_TRACE); this catches warnings
+        # that only the build users get can show. Runs after the coverage
+        # steps so the C port they measure is the instrumented build.
+        run: rebar3 as strict compile
+
       - name: Run dialyzer
         run: rebar3 dialyzer
 

@@ -262,7 +262,8 @@ handle_info({cancel, Ref}, State = #state{port = Port, reqs = Reqs}) ->
     {noreply, State#state{reqs = Reqs2}};
 handle_info({flow, Ref, N}, State = #state{port = Port, reqs = Reqs}) ->
     %% Sent directly to the request's alias by katipo:update_flow/3.
-    From = {Self = self(), Ref},
+    Self = self(),
+    From = {Self, Ref},
     _ = case is_map_key(From, Reqs) of
             true -> port_cmd(Port, {Self, Ref, flow, N});
             false -> ok
