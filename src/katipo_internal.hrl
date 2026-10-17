@@ -8,11 +8,13 @@
 %% Trace-validation hooks (formal/README.md, "Trace validation"): the test
 %% profile defines KATIPO_TRACE and test/katipo_trace.erl records each event;
 %% in every other build a hook is the atom ok, or the wrapped expression.
+%% Binding the (side-effect-free) event to _ keeps its variables used, and
+%% the compiler drops the unused term.
 -ifdef(KATIPO_TRACE).
 -define(TRACE(Event), katipo_trace:emit(Event)).
 -define(TRACE_ATTEMPT(Msg, Expr), katipo_trace:attempt(Msg, fun() -> Expr end)).
 -else.
--define(TRACE(Event), ok).
+-define(TRACE(Event), begin _ = Event, ok end).
 -define(TRACE_ATTEMPT(Msg, Expr), Expr).
 -endif.
 
