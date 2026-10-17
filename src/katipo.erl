@@ -46,8 +46,10 @@ so the caller fails fast instead of blocking until the request timeout. If the
 request cannot be handed to a worker at all (the worker is dead or being
 restarted), the async function returns `{error, #{code => worker_died}}`
 instead of `{ok, Ref}` -- an accepted request always produces exactly one
-terminal message. Handing an async request to a worker is itself bounded
-(5s): a wedged or deeply backed-up worker yields
+terminal message, unless the worker is killed outright (`exit(Pid, kill)`
+skips the cleanup that sends `worker_died`), so keep a timeout on the wait.
+Handing an async request to a worker is itself bounded (5s): a wedged or
+deeply backed-up worker yields
 `{error, #{code => admission_timeout}}` rather than blocking the caller.
 (Sync requests are bounded by the request timeout instead -- their single
 call carries the whole response.)
@@ -373,7 +375,10 @@ must have been started with a bounded `stream_window`. Routed like
 `cancel/2` (directly to the owning worker; the pool argument is unused) and
 equally best-effort: granting credits to an unknown, completed, or
 unbounded-window request is a harmless no-op. Granting in batches (e.g.
-half the window at a time) amortizes the per-grant messaging.
+half the window at a time) amortizes the per-grant messaging, but never
+wait for more than `stream_window` chunks before granting: the transfer
+is paused once the window is spent, so those chunks never arrive and the
+request stalls until its timeout.
 """.
 -spec update_flow(katipo_pool:name(), reference(), pos_integer()) -> ok.
 update_flow(_PoolName, Ref, N) when is_reference(Ref) andalso
@@ -391,6 +396,11 @@ Blocks until an async response for `Ref` arrives or the timeout expires.
 Only for buffered async requests: a streamed response (`stream => true`)
 arrives as a message sequence, which `await` does not understand -- receive
 those messages directly.
+
+`await_timeout` only ends the wait: the request is still in flight and its
+response or error will still be delivered, so a later `await/2` on the same
+`Ref` can collect it. To give up on the request, call `cancel/2` and be
+prepared to flush a late message (see `cancel/2`).
 """.
 -spec await(reference(), timeout()) -> response().
 await(Ref, Timeout) ->
@@ -400,13 +410,6 @@ await(Ref, Timeout) ->
         {katipo_error, Ref, Error} ->
             {error, Error}
     after Timeout ->
-        %% Flush any late-arriving response for this Ref
-        receive
-            {katipo_response, Ref, _} -> ok;
-            {katipo_error, Ref, _} -> ok
-        after 0 ->
-            ok
-        end,
         {error, #{code => await_timeout, message => <<>>}}
     end.
 
@@ -423,6 +426,7 @@ already-completed `Ref` is a harmless no-op.
 """.
 -spec cancel(katipo_pool:name(), reference()) -> ok.
 cancel(_PoolName, Ref) when is_reference(Ref) ->
+    ?TRACE({cancel, Ref}),
     Ref ! {cancel, Ref},
     ok.
 
@@ -454,8 +458,8 @@ call_worker(PoolName, Req) ->
 %% naming/startup bug behind a transient-looking error.
 pool_call(PoolName, Msg) ->
     Bound = admission_bound(Msg),
-    case attempt(fun() -> wpool:call(PoolName, Msg, random_worker,
-                                     Bound) end, Bound) of
+    case attempt(fun(M) -> wpool:call(PoolName, M, random_worker, Bound) end,
+                 Msg, Bound) of
         {overload, FullWorker} ->
             %% The randomly-picked worker is at max_in_flight; others may
             %% have room, so offer the request to each remaining worker.
@@ -464,9 +468,9 @@ pool_call(PoolName, Msg) ->
             {ok, Reply};
         Err when Err =:= worker_died; Err =:= admission_timeout ->
             %% admission_timeout fails fast by design: a caller retry
-            %% re-rolls onto a (likely healthy) random worker immediately,
-            %% and a request the worker admits after we gave up is cleaned
-            %% up by its own request timer.
+            %% re-rolls onto a (likely healthy) random worker immediately.
+            %% The worker refuses the abandoned request once it reaches it
+            %% (see stamp/2), so the retry cannot duplicate it.
             {error, katipo_req:error_map(Err, <<>>)}
     end.
 
@@ -477,15 +481,31 @@ pool_call(PoolName, Msg) ->
 admission_bound({async_req, _ReplyTo, _Req, _Obs}) -> ?ADMISSION_TIMEOUT;
 admission_bound(#req{}) -> infinity.
 
+%% Stamp an async admission with the deadline after which the worker must
+%% refuse it. A timed-out gen_server:call cannot withdraw its message, so
+%% without this a worker that was merely slow would admit a request whose
+%% caller was already told admission_timeout: the transfer would run and
+%% message reply_to with a Ref the caller never saw. The deadline is
+%% ?ADMISSION_SLACK ahead of the call timeout so an admitted request's reply
+%% always beats the caller's timer. Stamped per attempt, since each
+%% spillover attempt carries its own bound.
+stamp({async_req, ReplyTo, Req, Obs}, Bound) ->
+    Deadline = erlang:monotonic_time(millisecond) + Bound - ?ADMISSION_SLACK,
+    {async_req, ReplyTo, Req, Obs, Deadline};
+stamp(Req = #req{}, infinity) ->
+    Req.
+
 %% One admission attempt, however the worker is addressed. Only a real
 %% reply, an at-capacity rejection carrying the full worker's pid, a
-%% bounded call timing out against an unresponsive worker, or the worker
-%% dying with the call in flight can come back. The timeout mapping guards
-%% on the bound: on an unbounded call a {timeout, _} exit can only be a
-%% worker that died with exit reason `timeout`.
-attempt(CallFun, Bound) ->
-    try CallFun() of
+%% bounded call timing out against an unresponsive worker (or refused by a
+%% worker that reached it after its deadline), or the worker dying with the
+%% call in flight can come back. The timeout mapping guards on the bound:
+%% on an unbounded call a {timeout, _} exit can only be a worker that died
+%% with exit reason `timeout`.
+attempt(CallFun, Msg, Bound) ->
+    try ?TRACE_ATTEMPT(Msg, CallFun(stamp(Msg, Bound))) of
         {overload, Pid} -> {overload, Pid};
+        expired -> admission_timeout;
         Reply -> {ok, Reply}
     catch
         exit:{timeout, {gen_server, call, _}} when Bound =/= infinity ->
@@ -505,7 +525,8 @@ spillover_candidates(PoolName, FullWorker) ->
 spillover([], _Msg, _Bound) ->
     {error, katipo_req:error_map(overload, <<>>)};
 spillover([Worker | Workers], Msg, Bound) ->
-    case attempt(fun() -> wpool_process:call(Worker, Msg, Bound) end, Bound) of
+    case attempt(fun(M) -> wpool_process:call(Worker, M, Bound) end,
+                 Msg, Bound) of
         {ok, Reply} ->
             {ok, Reply};
         admission_timeout ->

@@ -14,7 +14,8 @@
 
 %% Plan: #{content_length := non_neg_integer(),   advertised, not enforced
 %%         pieces := [{DelayMs :: non_neg_integer(), Bytes :: binary()}],
-%%         finish := close | stall}
+%%         finish := close | stall,
+%%         headers => [iodata()]}               extra raw header lines
 start(Plan) ->
     Owner = self(),
     Pid = spawn_link(fun() -> serve(Owner, Plan) end),
@@ -32,9 +33,9 @@ stop(Pid) ->
 url(Port) ->
     <<"http://127.0.0.1:", (integer_to_binary(Port))/binary, "/">>.
 
-serve(Owner, #{content_length := ContentLength,
-               pieces := Pieces,
-               finish := Finish}) ->
+serve(Owner, Plan = #{content_length := ContentLength,
+                      pieces := Pieces,
+                      finish := Finish}) ->
     {ok, Listen} = gen_tcp:listen(0, [binary, {active, false}]),
     {ok, Port} = inet:port(Listen),
     Owner ! {drip_listening, self(), Port},
@@ -45,6 +46,7 @@ serve(Owner, #{content_length := ContentLength,
                        "content-length: ", integer_to_list(ContentLength),
                        "\r\n",
                        "connection: close\r\n",
+                       [[H, "\r\n"] || H <- maps:get(headers, Plan, [])],
                        "\r\n"]),
     drip(Sock, Owner, Pieces),
     case Finish of

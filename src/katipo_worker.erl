@@ -43,6 +43,7 @@ init([MaxInFlight, CurlOpts]) ->
         {ok, Args} ->
             Prog = filename:join([code:priv_dir(katipo), "katipo"]),
             Port = open_port({spawn, Prog ++ " " ++ Args}, [{packet, 4}, binary]),
+            ?TRACE(start),
             {ok, #state{port = Port, reqs = #{}, max_in_flight = MaxInFlight}};
         {error, Error} ->
             {stop, Error}
@@ -54,40 +55,71 @@ init([MaxInFlight, CurlOpts]) ->
 handle_call(Msg, From, State) ->
     case at_capacity(State) of
         true ->
+            ?TRACE({overload, Msg}),
             {reply, {overload, self()}, State};
         false ->
             admit_call(Msg, From, State)
     end.
 
-admit_call(Req = #req{}, From, State) ->
-    {noreply, admit(From, sync, Req, State)};
-admit_call({async_req, ReplyTo, Req = #req{}, Obs}, _From, State) ->
+admit_call(Req = #req{}, From, State = #state{port = Port}) ->
+    send_to_port(Port, From, Req),
+    {noreply, register_req(From, sync, Req, State)};
+admit_call({async_req, ReplyTo, Req = #req{}, Obs, Deadline}, _From,
+           State = #state{port = Port}) ->
     %% The user-facing Ref is a process alias, so cancel/flow commands are
     %% plain sends to the Ref itself: they route straight to this worker,
     %% and once the alias dies (with us) or is deactivated (on resolution)
     %% the runtime drops them -- the documented best-effort no-op. Doubling
     %% it as the ref in the port identity makes command handling a direct
     %% map lookup on {self(), Ref}.
-    Alias = alias(),
-    State2 = admit({self(), Alias}, {async, ReplyTo, Obs}, Req, State),
-    {reply, Alias, State2}.
+    %%
+    %% The deadline is checked twice: before the port write (the usual
+    %% stale case -- a backed-up mailbox -- never reaches the port) and
+    %% after it, since port_command itself can block past the deadline when
+    %% the C side stops draining its pipe; the just-sent transfer is then
+    %% aborted. Either way nothing is registered and the reply is dropped
+    %% with the caller's expired call alias. See katipo:stamp/2.
+    ?TRACE({clock, Deadline}),
+    case past(Deadline) of
+        true ->
+            ?TRACE(pre_refused),
+            {reply, expired, State};
+        false ->
+            ?TRACE(sending),
+            Alias = alias(),
+            From = {self(), Alias},
+            send_to_port(Port, From, Req),
+            ?TRACE({clock, Deadline}),
+            case past(Deadline) of
+                true ->
+                    ?TRACE({post_refused, Alias}),
+                    _ = unalias(Alias),
+                    abort_transfer(Port, From),
+                    {reply, expired, State};
+                false ->
+                    ?TRACE({admitted, Alias}),
+                    {reply, Alias,
+                     register_req(From, {async, ReplyTo, Obs}, Req, State)}
+            end
+    end.
+
+past(Deadline) ->
+    erlang:monotonic_time(millisecond) >= Deadline.
 
 at_capacity(#state{max_in_flight = infinity}) ->
     false;
 at_capacity(#state{reqs = Reqs, max_in_flight = Max}) ->
     maps:size(Reqs) >= Max.
 
-%% Register a request: hand it to the port, arm its timer, record it in Reqs.
-%% send_to_port runs BEFORE the Reqs insert on purpose: if the port is
-%% already closed, port_command's badarg crashes us while this request is
-%% still unregistered, so terminate/2 sends nothing for it and the caller's
-%% call monitor reports the death instead. Registering first would make
-%% terminate AND the call monitor both report it. The insert and the reply
-%% have no crash point between them, so an admitted request is always
-%% exactly-once: either the ok/response reply or a worker_died notification.
-admit(From, Kind, Req = #req{timeout = Timeout},
-      State = #state{port = Port, reqs = Reqs}) ->
-    send_to_port(Port, From, Req),
+%% Register a request already handed to the port: arm its timer, record it
+%% in Reqs. send_to_port runs BEFORE this on purpose: if the port is already
+%% closed, port_command's badarg crashes us while this request is still
+%% unregistered, so terminate/2 sends nothing for it and the caller's call
+%% monitor reports the death instead. Registering first would make terminate
+%% AND the call monitor both report it. The insert and the reply have no
+%% crash point between them, so an admitted request is always exactly-once:
+%% either the ok/response reply or a worker_died notification.
+register_req(From, Kind, #req{timeout = Timeout}, State = #state{reqs = Reqs}) ->
     Tref = erlang:start_timer(Timeout, self(), {req_timeout, From}),
     State#state{reqs = Reqs#{From => {Tref, Kind}}}.
 
@@ -131,9 +163,10 @@ handle_port_msg({done, {From, {Status, CookieJar, Metrics}}}, Reqs) ->
 forward_progress(From = {_Self, UserRef}, Reqs, BuildMsg) ->
     _ = case maps:find(From, Reqs) of
             {ok, {_Tref, {async, ReplyTo, _Obs}}} ->
-                ReplyTo ! BuildMsg(UserRef);
+                ReplyTo ! BuildMsg(UserRef),
+                ?TRACE({progress, From, forwarded});
             _ ->
-                ok
+                ?TRACE({progress, From, dropped})
         end,
     Reqs.
 
@@ -146,6 +179,7 @@ finish_req(From, Result, Response, Reqs) ->
             deactivate(From, Kind),
             Rest;
         error ->
+            ?TRACE({terminal, From, dropped}),
             Reqs
     end.
 
@@ -162,14 +196,16 @@ deactivate(_From, sync) ->
 %% async ReplyTo (via a flattened katipo_response/katipo_error/katipo_done
 %% message). `done` only occurs for streaming requests, which are async by
 %% construction.
-deliver({async, ReplyTo, Obs}, {_Self, UserRef}, done, {DoneMap, Metrics}) ->
+deliver({async, ReplyTo, Obs}, From = {_Self, UserRef}, done, {DoneMap, Metrics}) ->
     ReplyTo ! {katipo_done, UserRef, DoneMap},
+    ?TRACE({delivered, From}),
     katipo_span:finish_async(Obs, ok, DoneMap, Metrics);
 deliver(sync, From, Result, Response) ->
     gen_server:reply(From, {Result, Response});
-deliver({async, ReplyTo, Obs}, {_Self, UserRef}, Result, {ResponseMap, Metrics}) ->
+deliver({async, ReplyTo, Obs}, From = {_Self, UserRef}, Result, {ResponseMap, Metrics}) ->
     Tag = case Result of ok -> katipo_response; error -> katipo_error end,
     ReplyTo ! {Tag, UserRef, ResponseMap},
+    ?TRACE({delivered, From}),
     katipo_span:finish_async(Obs, Result, ResponseMap, Metrics).
 
 %% Deliver a request timeout to a sync caller or an async ReplyTo.
@@ -180,8 +216,9 @@ deliver_timeout(Kind, From) ->
 %% reply_to (as a katipo_error message).
 deliver_error(sync, From, Error) ->
     gen_server:reply(From, {error, {Error, []}});
-deliver_error({async, ReplyTo, Obs}, {_Self, UserRef}, Error) ->
+deliver_error({async, ReplyTo, Obs}, From = {_Self, UserRef}, Error) ->
     ReplyTo ! {katipo_error, UserRef, Error},
+    ?TRACE({delivered, From}),
     katipo_span:finish_async(Obs, error, Error, []).
 
 handle_info({Port, {data, Data}}, State = #state{port = Port, reqs = Reqs}) ->
@@ -200,6 +237,7 @@ handle_info({timeout, Tref, {req_timeout, From}},
                 abort_transfer(Port, From),
                 Rest;
             error ->
+                ?TRACE({terminal, From, dropped}),
                 Reqs
         end,
     {noreply, State#state{reqs = Reqs2}};
@@ -211,12 +249,14 @@ handle_info({cancel, Ref}, State = #state{port = Port, reqs = Reqs}) ->
     Reqs2 =
         case maps:take(From, Reqs) of
             {{Tref, Kind = {async, _ReplyTo, Obs}}, Rest} ->
+                ?TRACE({cancel, From, effective}),
                 _ = erlang:cancel_timer(Tref),
                 deactivate(From, Kind),
                 abort_transfer(Port, From),
                 katipo_span:end_async(Obs),
                 Rest;
             error ->
+                ?TRACE({cancel, From, noop}),
                 Reqs
         end,
     {noreply, State#state{reqs = Reqs2}};
@@ -239,6 +279,7 @@ terminate(_Reason, #state{port = Port, reqs = Reqs}) ->
     %% replied `ok` and no monitor watches it, so push a worker_died error to
     %% each async reply_to before we exit -- otherwise those callers would
     %% block until their await/request timeout.
+    ?TRACE(terminate),
     maps:foreach(fun notify_worker_died/2, Reqs),
     %% port_close/1 raises badarg if the port is already dead (the common case
     %% when we get here via port death); ignore it -- we're terminating anyway.
@@ -341,11 +382,14 @@ send_to_port(Port, {Self, Ref},
 parse_headers([_StatusLine | Lines]) ->
     [parse_header(L) || L <- Lines].
 
+%% RFC 9110: field-name ":" OWS field-value OWS, where OWS is any run of
+%% spaces and tabs -- possibly none. libcurl passes HTTP/1.1 lines through
+%% verbatim, so "name:value" and padded values do occur.
 -spec parse_header(binary()) -> katipo:header().
 parse_header(Line) when is_binary(Line) ->
-    case binary:split(Line, <<": ">>, [trim]) of
+    case binary:split(Line, <<":">>) of
         [K] -> {K, <<>>};
-        [K, V] -> {K, V}
+        [K, V] -> {K, string:trim(V, both, " \t")}
     end.
 
 get_mopts(Opts) ->

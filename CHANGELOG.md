@@ -5,6 +5,46 @@ All notable changes to this project are documented here. This project follows
 
 ## [Unreleased]
 
+### Fixed
+- An async request whose admission timed out (`{error, #{code =>
+  admission_timeout}}`) could still be admitted later by the slow worker:
+  the transfer ran and `reply_to` received a terminal message for a `Ref`
+  the caller never saw, so a retry could perform the request twice. The
+  request's span was also ended twice and its metrics recorded twice. Each
+  admission attempt now carries a deadline (`?ADMISSION_SLACK` ahead of the
+  caller's own 5s bound) that the worker checks before and after the port
+  write, refusing a late admission without registering or delivering
+  anything. Found by model checking (`formal/KatipoAdmissionTimeout.cfg`).
+- HTTP/1.1 response headers with no space after the colon (`name:value`)
+  came back with the whole line as the name and an empty value, and
+  values padded with extra spaces or tabs kept the padding. Header values
+  are now split on the first `:` and trimmed of optional whitespace.
+- `await/2` no longer discards a response that arrives just as its timeout
+  fires. `await_timeout` now only ends the wait, so the response can be
+  collected by a later `await/2`; the docs spell out that the request
+  keeps running until it completes or is cancelled with `cancel/2`.
+
+### Added
+- Lean 4 proofs (`formal/lean`) of the async admission/delivery contract
+  for any number of requests, crashes and restarts, and of streaming flow
+  control (credit conservation, at most `stream_window` chunks buffered,
+  no lost chunks, termination) for every window and body size; plus a TLA+
+  model of streaming flow control (`formal/KatipoFlow.tla`) whose state
+  graph is mechanically checked identical to the Lean transcription.
+  Also proved: no transfer the C port runs is ever orphaned, every async
+  request is eventually answered or cancelled (given only that the worker
+  runs and request timers fire), and a stream whose C port dies mid-body
+  still ends with exactly one `worker_died`.
+- Trace validation (`formal/trace.sh`): the test suites can record what the
+  caller and each worker actually did and replay every run against the
+  Lean admission model; `katipo_stress_SUITE` drives a randomized async
+  workload with port deaths, a worker kill and a wedged worker for it.
+
+### Documentation
+- An admitted async request gets no message at all if its worker is killed
+  outright (`exit(Pid, kill)` skips the cleanup that sends `worker_died`);
+  keep a timeout on the wait.
+
 ## [2.0.0-rc.2] — 2026-07-18
 
 ### Changed

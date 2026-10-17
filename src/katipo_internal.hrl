@@ -5,6 +5,17 @@
 -ifndef(KATIPO_INTERNAL_HRL).
 -define(KATIPO_INTERNAL_HRL, true).
 
+%% Trace-validation hooks (formal/README.md, "Trace validation"): the test
+%% profile defines KATIPO_TRACE and test/katipo_trace.erl records each event;
+%% in every other build a hook is the atom ok, or the wrapped expression.
+-ifdef(KATIPO_TRACE).
+-define(TRACE(Event), katipo_trace:emit(Event)).
+-define(TRACE_ATTEMPT(Msg, Expr), katipo_trace:attempt(Msg, fun() -> Expr end)).
+-else.
+-define(TRACE(Event), ok).
+-define(TRACE_ATTEMPT(Msg, Expr), Expr).
+-endif.
+
 %% Compile-time curl feature availability (flags set by rebar.config.script).
 -ifdef(tcp_fastopen_available).
 -define(TCP_FASTOPEN_AVAILABLE, true).
@@ -84,6 +95,12 @@
 %% this only trips when a worker is wedged (e.g. its C port stopped draining
 %% the pipe and port_command blocked it) or its mailbox is deeply backed up.
 -define(ADMISSION_TIMEOUT, 5000).
+%% The worker refuses an async admission whose deadline has passed, and the
+%% caller stamps that deadline this much earlier than its own call timeout,
+%% so a worker that admits a request always gets its reply to a caller that
+%% is still waiting (formal/KatipoFixed.tla, ReplyWithinSlack). The segment
+%% the slack must cover -- post-check to reply -- never blocks.
+-define(ADMISSION_SLACK, 250).
 -define(FOLLOWLOCATION_TRUE, 1).
 -define(FOLLOWLOCATION_FALSE, 0).
 -define(SSL_VERIFYHOST_TRUE, 2).
