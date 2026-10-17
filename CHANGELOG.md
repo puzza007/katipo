@@ -5,6 +5,11 @@ All notable changes to this project are documented here. This project follows
 
 ## [Unreleased]
 
+## [2.0.0] — 2026-10-18
+
+The first stable 2.0 release. It includes everything in 2.0.0-rc.1 and
+2.0.0-rc.2 below, plus these changes since rc.2.
+
 ### Fixed
 - An async request whose admission timed out (`{error, #{code =>
   admission_timeout}}`) could still be admitted later by the slow worker:
@@ -128,9 +133,6 @@ All notable changes to this project are documented here. This project follows
 - The `return_metrics` request option has been removed.
 - The `metrics` field is no longer included in response maps. Configure an
   OpenTelemetry exporter to collect the equivalent timing data.
-
-## Roadmap
-- Streaming responses to the caller.
 
 ## Earlier releases
 See the git history and tags (`1.0.x`, `1.1.0`, …) for pre-2.0 changes.
