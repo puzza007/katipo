@@ -158,7 +158,10 @@ process. If the
 worker's port dies while a request is in flight, both sync and async callers
 receive `{error, #{code => worker_died}}`; if an async request cannot be
 handed to a worker at all (it died and is being restarted), `async_req` itself
-returns `{error, #{code => worker_died}}` and no message is delivered.
+returns `{error, #{code => worker_died}}` and no message is delivered. The
+one exception is a worker killed outright (`exit(Pid, kill)`): that skips the
+cleanup that sends `worker_died`, so an admitted request then gets no message
+at all -- keep a timeout on the wait.
 
 #### Streaming responses
 

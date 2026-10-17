@@ -32,6 +32,7 @@ init_per_suite(Config) ->
     application:ensure_all_started(opentelemetry_experimental),
     application:ensure_all_started(katipo),
     application:ensure_all_started(meck),
+    ok = katipo_trace:start(),
     {ok, _} = katipo_pool:start(?POOL, ?POOL_SIZE),
     DataDir = ?config(data_dir, Config),
     CACert = filename:join(DataDir, "ca-bundle.crt"),
@@ -43,7 +44,8 @@ init_per_suite(Config) ->
      {httpbin_opts, HttpbinOpts} | Config].
 
 end_per_suite(_Config) ->
-    ok = application:stop(katipo).
+    ok = application:stop(katipo),
+    katipo_trace:dump(?MODULE).
 
 init_per_group(otel, Config) ->
     %% OTel tests will configure their own exporters since each test
@@ -192,7 +194,8 @@ groups() ->
        protocol_restriction,
        dns_cache_timeout,
        ca_cache_timeout,
-       pipewait]},
+       pipewait,
+       header_optional_whitespace]},
      {malformed_requests, [],
       [malformed_identity_bad_method,
        malformed_url,
@@ -251,6 +254,7 @@ groups() ->
        async_await_timeout,
        async_await_explicit_timeout,
        async_await_own_timeout,
+       async_await_again_after_timeout,
        async_multiple_outstanding,
        async_put,
        async_head,
@@ -274,7 +278,8 @@ groups() ->
        streaming_flow_starvation,
        streaming_error_mid_body,
        streaming_timeout_mid_body,
-       streaming_cancel_mid_stream]},
+       streaming_cancel_mid_stream,
+       streaming_worker_death_mid_body]},
      {otel, [],
       [otel_span_created,
        otel_metrics_recorded,
@@ -1485,6 +1490,25 @@ streaming_worker_death(Config) ->
     end,
     ok = katipo_pool:stop(PoolName).
 
+%% HTTP/1.1 allows any amount of optional whitespace (or none) around a
+%% header value, and libcurl passes HTTP/1.1 header lines through verbatim.
+header_optional_whitespace(_Config) ->
+    {ok, Drip, Port} = katipo_drip_server:start(
+                         #{content_length => 0,
+                           pieces => [],
+                           finish => close,
+                           headers => [<<"x-tight:bar">>,
+                                       <<"x-loose: \tqux \t">>,
+                                       <<"x-empty:">>,
+                                       <<"x-colon: a:b">>]}),
+    {ok, #{headers := Headers}} =
+        katipo:get(?POOL, katipo_drip_server:url(Port)),
+    ?assertEqual(<<"bar">>, proplists:get_value(<<"x-tight">>, Headers)),
+    ?assertEqual(<<"qux">>, proplists:get_value(<<"x-loose">>, Headers)),
+    ?assertEqual(<<>>, proplists:get_value(<<"x-empty">>, Headers)),
+    ?assertEqual(<<"a:b">>, proplists:get_value(<<"x-colon">>, Headers)),
+    ok = katipo_drip_server:stop(Drip).
+
 %% -- drip-server streaming tests -----------------------------------------
 %% The local httpbin stack buffers whole responses, so these mid-response
 %% behaviors need katipo_drip_server: a real socket that is still open,
@@ -1549,6 +1573,28 @@ streaming_cancel_mid_stream(_Config) ->
     end,
     ok = assert_cancelled_stream_silent(Ref),
     ok = katipo_drip_server:stop(Drip).
+
+%% KatipoFlowCrash.cfg: the C port dying mid-body ends the stream with one
+%% worker_died, after the headers and chunks that already arrived, and
+%% nothing follows it.
+streaming_worker_death_mid_body(_Config) ->
+    PoolName = streaming_worker_death_mid_body_test,
+    {ok, _} = katipo_pool:start(PoolName, 1),
+    {ok, Drip, Port} = katipo_drip_server:start(
+                         #{content_length => 100,
+                           pieces => [{0, <<"early bytes">>}],
+                           finish => stall}),
+    {ok, Ref} = katipo:async_req(PoolName,
+                                 #{url => katipo_drip_server:url(Port),
+                                   method => get,
+                                   stream => true}),
+    ok = expect_stream_headers(Ref),
+    _ = expect_first_chunk(Ref),
+    _ = kill_worker_port(PoolName),
+    ok = expect_stream_error(Ref, worker_died, 5000),
+    ok = assert_stream_stopped(Ref, 300),
+    ok = katipo_drip_server:stop(Drip),
+    ok = katipo_pool:stop(PoolName).
 
 %% Drain progress messages already in flight at cancel time, then require
 %% the same silence as any cancelled stream.
@@ -1912,7 +1958,16 @@ async_await_own_timeout(_Config) ->
     %% await/2 timeout fires before the response arrives
     {ok, Ref} = katipo:async_get(?POOL, <<"http://192.0.2.1">>,
                                  #{timeout_ms => 30000, connecttimeout_ms => 30000}),
-    {error, #{code := await_timeout}} = katipo:await(Ref, 1).
+    {error, #{code := await_timeout}} = katipo:await(Ref, 1),
+    ok = katipo:cancel(?POOL, Ref).
+
+async_await_again_after_timeout(Config) ->
+    %% await_timeout only ends the wait; the response can still be collected
+    {req_opts, Opts} = lists:keyfind(req_opts, 1, Config),
+    Url = httpbin_url(Config, <<"/delay/1">>),
+    {ok, Ref} = katipo:async_get(?POOL, Url, Opts),
+    {error, #{code := await_timeout}} = katipo:await(Ref, 0),
+    {ok, #{status := 200}} = katipo:await(Ref, 10000).
 
 async_multiple_outstanding(Config) ->
     {req_opts, Opts} = lists:keyfind(req_opts, 1, Config),

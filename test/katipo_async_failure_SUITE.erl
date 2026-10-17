@@ -28,6 +28,7 @@
 -export([no_message_after_cancel_against_dead_port/1]).
 -export([timeout_aborts_transfer_in_port/1]).
 -export([admission_timeout_when_worker_wedged/1]).
+-export([no_message_after_admission_timeout/1]).
 
 -include_lib("common_test/include/ct.hrl").
 -include_lib("stdlib/include/assert.hrl").
@@ -37,13 +38,16 @@ all() ->
      admission_error_when_worker_restarting,
      no_message_after_cancel_against_dead_port,
      timeout_aborts_transfer_in_port,
-     admission_timeout_when_worker_wedged].
+     admission_timeout_when_worker_wedged,
+     no_message_after_admission_timeout].
 
 init_per_suite(Config) ->
     {ok, _} = application:ensure_all_started(katipo),
+    ok = katipo_trace:start(),
     Config.
 
 end_per_suite(Config) ->
+    ok = katipo_trace:dump(?MODULE),
     Config.
 
 init_per_testcase(TestCase, Config) ->
@@ -206,6 +210,27 @@ admission_timeout_when_worker_wedged(Config) ->
     Res = katipo:async_req(Pool, blackhole_req()),
     ok = sys:resume(WorkerPid),
     ?assertMatch({error, #{code := admission_timeout}}, Res).
+
+%% KatipoFixed.tla (KatipoAdmissionTimeout.cfg): NoMessageAfterAdmissionError
+%% violated via SendAsync -> Expire -> CallerTimeout -> WorkerRecvReq ->
+%% WorkerAdmitReply. A timed-out admission call leaves its message in the
+%% worker's mailbox; before the admission deadline the worker admitted it
+%% once resumed, ran the transfer, and messaged the caller a
+%% katipo_error for a Ref async_req never returned. The worker must now
+%% refuse it: nothing registered, nothing delivered.
+no_message_after_admission_timeout(Config) ->
+    Pool = ?config(pool, Config),
+    WorkerPid = worker_pid(Pool),
+    ok = sys:suspend(WorkerPid),
+    Res = katipo:async_req(Pool, (blackhole_req())#{timeout_ms => 500}),
+    ok = sys:resume(WorkerPid),
+    ?assertMatch({error, #{code := admission_timeout}}, Res),
+    ?assertEqual(#{}, worker_reqs(WorkerPid)),
+    receive
+        Late -> ct:fail({late_message_after_admission_timeout, Late})
+    after 1500 ->
+        ok
+    end.
 
 wait_until(_Fun, 0) ->
     {error, condition_never_true};
