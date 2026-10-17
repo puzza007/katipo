@@ -1,0 +1,13 @@
+name = "KatipoProofs"
+version = "0.1.0"
+defaultTargets = ["KatipoProofs"]
+
+[leanOptions]
+autoImplicit = false
+
+[[lean_lib]]
+name = "KatipoProofs"
+
+[[lean_exe]]
+name = "tracecheck"
+root = "TraceCheck"
