@@ -5,6 +5,20 @@ All notable changes to this project are documented here. This project follows
 
 ## [Unreleased]
 
+### Changed
+- Buffered responses no longer copy the body in the C port: it is
+  collected in an evbuffer, whose chains move to the pipe's output buffer
+  and are freed once written, instead of being grown with realloc and then
+  copied twice more. Ownership is modelled in `formal/KatipoBodyHandoff.tla`, and
+  `bench/run.sh` measures buffered-response throughput.
+
+### Fixed
+- A buffered response body that would not fit in a 32-bit frame (about
+  4 GiB) now fails that request with `write_error` instead of corrupting
+  the port's output and taking down every request on the worker.
+- `katipo_worker` no longer warns on OTP 29 (a variable bound inside a
+  tuple and used afterwards).
+
 ## [2.0.0] — 2026-10-18
 
 The first stable 2.0 release. It includes everything in 2.0.0-rc.1 and
