@@ -19,21 +19,23 @@ main(Args) ->
     OsPid = port_os_pid(),
     io:format("~-10s ~8s ~6s ~10s ~10s ~12s~n",
               ["body", "requests", "conc", "req/s", "MB/s", "port CPU ms"]),
-    [run(Port, OsPid, Size, N, C, Reps)
-     || {Size, N, C} <- [{1024, 20000, 16},
-                         {65536, 5000, 16},
-                         {1048576, 1000, 8},
-                         {10485760, 100, 4}]],
+    %% {body bytes, extra response headers, requests, concurrency}
+    [run(Port, OsPid, Size, H, N, C, Reps)
+     || {Size, H, N, C} <- [{1024, 0, 20000, 16},
+                            {1024, 20, 20000, 16},
+                            {65536, 0, 5000, 16},
+                            {1048576, 0, 1000, 8},
+                            {10485760, 0, 100, 4}]],
     ok.
 
-run(Port, OsPid, Size, N, Conc, Reps) ->
+run(Port, OsPid, Size, Headers, N, Conc, Reps) ->
     Url = iolist_to_binary(["http://127.0.0.1:", integer_to_list(Port), "/",
-                            integer_to_list(Size)]),
+                            integer_to_list(Size), "/", integer_to_list(Headers)]),
     _ = batch(Url, Size, min(N, 50), Conc),   %% warm up the connections
     Results = [measure(Url, OsPid, Size, N, Conc) || _ <- lists:seq(1, Reps)],
     {Secs, CpuMs} = median(Results),
     io:format("~-10s ~8B ~6B ~10B ~10.1f ~12B~n",
-              [human(Size), N, Conc, round(N / Secs), N * Size / Secs / 1048576, CpuMs]).
+              [label(Size, Headers), N, Conc, round(N / Secs), N * Size / Secs / 1048576, CpuMs]).
 
 measure(Url, OsPid, Size, N, Conc) ->
     Cpu0 = cpu_ms(OsPid),
@@ -61,6 +63,9 @@ median(Results) ->
     Sorted = lists:sort(Results),
     lists:nth((length(Sorted) + 1) div 2, Sorted).
 
+label(Size, 0) -> human(Size);
+label(Size, H) -> human(Size) ++ "+" ++ integer_to_list(H) ++ "h".
+
 human(B) when B >= 1048576 -> integer_to_list(B div 1048576) ++ "MB";
 human(B) when B >= 1024 -> integer_to_list(B div 1024) ++ "KB";
 human(B) -> integer_to_list(B) ++ "B".
@@ -83,7 +88,7 @@ cpu_ms(OsPid) ->
 num(S) ->
     try list_to_float(S) catch error:badarg -> list_to_integer(S) end.
 
-%% ---- a minimal keep-alive HTTP/1.1 server serving GET /<Bytes> ----
+%% ---- a minimal keep-alive HTTP/1.1 server serving GET /<Bytes>/<Headers> ----
 
 start_server() ->
     Self = self(),
@@ -105,12 +110,11 @@ accept(L) ->
 
 conn(S, Cache) ->
     case gen_tcp:recv(S, 0) of
-        {ok, {http_request, 'GET', {abs_path, <<"/", N/binary>>}, _}} ->
+        {ok, {http_request, 'GET', {abs_path, <<"/", Path/binary>>}, _}} ->
             ok = skip_headers(S),
-            Size = binary_to_integer(N),
-            {Body, Cache2} = body(Size, Cache),
-            ok = gen_tcp:send(S, [<<"HTTP/1.1 200 OK\r\nContent-Length: ">>,
-                                  integer_to_binary(Size), <<"\r\n\r\n">>, Body]),
+            [Size, H] = [binary_to_integer(P) || P <- binary:split(Path, <<"/">>)],
+            {Resp, Cache2} = response(Size, H, Cache),
+            ok = gen_tcp:send(S, Resp),
             conn(S, Cache2);
         _ ->
             gen_tcp:close(S)
@@ -122,8 +126,17 @@ skip_headers(S) ->
         {ok, {http_header, _, _, _, _}} -> skip_headers(S)
     end.
 
-body(Size, Cache) ->
+%% Built once per connection and shape, so the server's own work stays
+%% out of the comparison.
+response(Size, H, Cache) ->
     case Cache of
-        #{Size := B} -> {B, Cache};
-        _ -> B = binary:copy(<<"x">>, Size), {B, Cache#{Size => B}}
+        #{{Size, H} := R} -> {R, Cache};
+        _ ->
+            Extra = [[<<"X-Bench-">>, integer_to_binary(I),
+                      <<": a typical header value of moderate length\r\n">>]
+                     || I <- lists:seq(1, H)],
+            R = iolist_to_binary([<<"HTTP/1.1 200 OK\r\n">>, Extra,
+                                  <<"Content-Length: ">>, integer_to_binary(Size),
+                                  <<"\r\n\r\n">>, binary:copy(<<"x">>, Size)]),
+            {R, Cache#{{Size, H} => R}}
     end.
