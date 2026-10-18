@@ -323,14 +323,14 @@ get(Config) ->
     {req_opts, Opts} = lists:keyfind(req_opts, 1, Config),
     {ok, #{status := 200, body := Body}} =
         katipo:get(?POOL, httpbin_url(Config, <<"/get?a=%21%40%23%24%25%5E%26%2A%28%29_%2B">>), Opts),
-    Json = jsx:decode(Body),
+    Json = json:decode(Body),
     ?assertEqual(<<"!@#$%^&*()_+">>, maps:get(<<"a">>, maps:get(<<"args">>, Json))).
 
 get_http(Config) ->
     {req_opts, Opts} = lists:keyfind(req_opts, 1, Config),
     {ok, #{status := 200, body := Body}} =
         katipo:get(?POOL, httpbin_url(Config, <<"/get?a=%21%40%23%24%25%5E%26%2A%28%29_%2B">>), Opts),
-    Json = jsx:decode(Body),
+    Json = json:decode(Body),
     ?assertEqual(<<"!@#$%^&*()_+">>, maps:get(<<"a">>, maps:get(<<"args">>, Json))).
 
 get_req(Config) ->
@@ -338,7 +338,7 @@ get_req(Config) ->
     Url = httpbin_url(Config, <<"/get?a=%21%40%23%24%25%5E%26%2A%28%29_%2B">>),
     {ok, #{status := 200, body := Body}} =
         katipo:req(?POOL, Opts#{url => Url}),
-    Json = jsx:decode(Body),
+    Json = json:decode(Body),
     ?assertEqual(<<"!@#$%^&*()_+">>, maps:get(<<"a">>, maps:get(<<"args">>, Json))).
 
 head(Config) ->
@@ -352,7 +352,7 @@ post_body_binary(Config) ->
         katipo:post(?POOL, httpbin_url(Config, <<"/post">>),
                     Opts#{headers => [{<<"Content-Type">>, <<"application/json">>}],
                           body => <<"!@#$%^&*()">>}),
-    Json = jsx:decode(Body),
+    Json = json:decode(Body),
     ?assertEqual(<<"!@#$%^&*()">>, maps:get(<<"data">>, Json)).
 
 post_body_iolist(Config) ->
@@ -361,7 +361,7 @@ post_body_iolist(Config) ->
         katipo:post(?POOL, httpbin_url(Config, <<"/post">>),
                     Opts#{headers => [{<<"Content-Type">>, <<"application/json">>}],
                           body => ["foo", $b, $a, $r, <<"baz">>]}),
-    Json = jsx:decode(Body),
+    Json = json:decode(Body),
     ?assertEqual(<<"foobarbaz">>, maps:get(<<"data">>, Json)).
 
 post_body_qs_vals(Config) ->
@@ -370,7 +370,7 @@ post_body_qs_vals(Config) ->
         katipo:post(?POOL, httpbin_url(Config, <<"/post">>),
                     Opts#{headers => [{<<"Content-Type">>, <<"application/json">>}],
                           body => [<<"!@#$%">>, <<"^&*()">>]}),
-    Json = jsx:decode(Body),
+    Json = json:decode(Body),
     ?assertEqual(<<"!@#$%^&*()">>, maps:get(<<"data">>, Json)).
 
 post_body_bad(_) ->
@@ -386,7 +386,7 @@ post_arity_2(Config) ->
     {req_opts, Opts} = lists:keyfind(req_opts, 1, Config),
     {ok, #{status := 200, body := Body}} =
         katipo:post(?POOL, httpbin_url(Config, <<"/post">>), Opts),
-    Json = jsx:decode(Body),
+    Json = json:decode(Body),
     ?assertNot(maps:is_key(<<>>, Json)).
 
 post_qs(Config) ->
@@ -394,7 +394,7 @@ post_qs(Config) ->
     QsVals = [{<<"foo">>, <<"bar">>}, {<<"baz">>, true}],
     {ok, #{status := 200, body := Body}} =
         katipo:post(?POOL, httpbin_url(Config, <<"/post">>), Opts#{body => QsVals}),
-    Json = jsx:decode(Body),
+    Json = json:decode(Body),
     Form = maps:get(<<"form">>, Json),
     ?assertEqual(<<>>, maps:get(<<"baz">>, Form)),
     ?assertEqual(<<"bar">>, maps:get(<<"foo">>, Form)).
@@ -412,7 +412,7 @@ post_req(Config) ->
                                 method => post,
                                 headers => [{<<"Content-Type">>, <<"application/json">>}],
                                 body => <<"!@#$%^&*()">>}),
-    Json = jsx:decode(Body),
+    Json = json:decode(Body),
     ?assertEqual(<<"!@#$%^&*()">>, maps:get(<<"data">>, Json)).
 
 url_missing(_) ->
@@ -437,14 +437,14 @@ put_data(Config) ->
     {ok, #{status := 200, body := Body}} =
         katipo:put(?POOL, httpbin_url(Config, <<"/put">>),
                    Opts#{headers => Headers, body => <<"!@#$%^&*()">>}),
-    Json = jsx:decode(Body),
+    Json = json:decode(Body),
     ?assertEqual(<<"!@#$%^&*()">>, maps:get(<<"data">>, Json)).
 
 put_arity_2(Config) ->
     {req_opts, Opts} = lists:keyfind(req_opts, 1, Config),
     {ok, #{status := 200, body := Body}} =
         katipo:put(?POOL, httpbin_url(Config, <<"/put">>), Opts),
-    Json = jsx:decode(Body),
+    Json = json:decode(Body),
     ?assertNot(maps:is_key(<<>>, Json)).
 
 put_qs(Config) ->
@@ -452,7 +452,7 @@ put_qs(Config) ->
     QsVals = [{<<"foo">>, <<"bar">>}, {<<"baz">>, true}],
     {ok, #{status := 200, body := Body}} =
         katipo:put(?POOL, httpbin_url(Config, <<"/put">>), Opts#{body => QsVals}),
-    Json = jsx:decode(Body),
+    Json = json:decode(Body),
     Form = maps:get(<<"form">>, Json),
     ?assertEqual(<<>>, maps:get(<<"baz">>, Form)),
     ?assertEqual(<<"bar">>, maps:get(<<"foo">>, Form)).
@@ -463,14 +463,14 @@ patch_data(Config) ->
     {ok, #{status := 200, body := Body}} =
         katipo:patch(?POOL, httpbin_url(Config, <<"/patch">>),
                    Opts#{headers => Headers, body => <<"!@#$%^&*()">>}),
-    Json = jsx:decode(Body),
+    Json = json:decode(Body),
     ?assertEqual(<<"!@#$%^&*()">>, maps:get(<<"data">>, Json)).
 
 patch_arity_2(Config) ->
     {req_opts, Opts} = lists:keyfind(req_opts, 1, Config),
     {ok, #{status := 200, body := Body}} =
         katipo:patch(?POOL, httpbin_url(Config, <<"/patch">>), Opts),
-    Json = jsx:decode(Body),
+    Json = json:decode(Body),
     ?assertEqual(<<>>, maps:get(<<"data">>, Json)).
 
 patch_qs(Config) ->
@@ -478,7 +478,7 @@ patch_qs(Config) ->
     QsVals = [{<<"foo">>, <<"bar">>}, {<<"baz">>, true}],
     {ok, #{status := 200, body := Body}} =
         katipo:patch(?POOL, httpbin_url(Config, <<"/patch">>), Opts#{body => QsVals}),
-    Json = jsx:decode(Body),
+    Json = json:decode(Body),
     Form = maps:get(<<"form">>, Json),
     ?assertEqual(<<>>, maps:get(<<"baz">>, Form)),
     ?assertEqual(<<"bar">>, maps:get(<<"foo">>, Form)).
@@ -510,7 +510,7 @@ headers(Config) ->
     Headers = [{<<"header1">>, <<"!@#$%^&*()">>}],
     {ok, #{status := 200, body := Body}} =
         katipo:get(?POOL, Url, Opts#{headers => Headers}),
-    Json = jsx:decode(Body),
+    Json = json:decode(Body),
     RespHeaders = maps:get(<<"headers">>, Json),
     ?assertEqual(<<"*/*">>, maps:get(<<"Accept">>, RespHeaders)),
     ?assertEqual(<<"!@#$%^&*()">>, maps:get(<<"Header1">>, RespHeaders)),
@@ -531,7 +531,7 @@ header_remove(Config) ->
     Headers = [{<<"Accept-Encoding">>, <<>>}],
     {ok, #{status := 200, body := Body}} =
         katipo:get(?POOL, Url, Opts#{headers => Headers}),
-    Json = jsx:decode(Body),
+    Json = json:decode(Body),
     RespHeaders = maps:get(<<"headers">>, Json),
     ?assertEqual(<<"*/*">>, maps:get(<<"Accept">>, RespHeaders)),
     ?assertEqual(ExpectedHost, maps:get(<<"Host">>, RespHeaders)).
@@ -539,13 +539,13 @@ header_remove(Config) ->
 gzip(Config) ->
     {req_opts, Opts} = lists:keyfind(req_opts, 1, Config),
     {ok, #{status := 200, body := Body}} = katipo:get(?POOL, httpbin_url(Config, <<"/gzip">>), Opts),
-    Json = jsx:decode(Body),
+    Json = json:decode(Body),
     ?assert(maps:get(<<"gzipped">>, Json)).
 
 deflate(Config) ->
     {req_opts, Opts} = lists:keyfind(req_opts, 1, Config),
     {ok, #{status := 200, body := Body}} = katipo:get(?POOL, httpbin_url(Config, <<"/deflate">>), Opts),
-    Json = jsx:decode(Body),
+    Json = json:decode(Body),
     ?assert(maps:get(<<"deflated">>, Json)).
 
 %% Use /range rather than /bytes: httpbin's /bytes seeds Python's global
@@ -594,7 +594,7 @@ cookies(Config) ->
     {req_opts, Opts} = lists:keyfind(req_opts, 1, Config),
     Url = httpbin_url(Config, <<"/cookies/set?cname=cvalue">>),
     {ok, #{status := 200, body := Body}} = katipo:get(?POOL, Url, Opts#{followlocation => true}),
-    Json = jsx:decode(Body),
+    Json = json:decode(Body),
     ?assertEqual(#{<<"cname">> => <<"cvalue">>}, maps:get(<<"cookies">>, Json)).
 
 cookies_delete(Config) ->
@@ -604,7 +604,7 @@ cookies_delete(Config) ->
     DeleteUrl = httpbin_url(Config, <<"/cookies/delete?cname">>),
     {ok, #{status := 200, body := Body}} =
         katipo:get(?POOL, DeleteUrl, Opts#{cookiejar => CookieJar, followlocation => true}),
-    Json = jsx:decode(Body),
+    Json = json:decode(Body),
     ?assertEqual(#{}, maps:get(<<"cookies">>, Json)).
 
 cookies_bad_cookie_jar(_) ->
@@ -726,7 +726,7 @@ basic_authorised(Config) ->
     {ok, #{status := 200, body := Body}} =
         katipo:get(?POOL, httpbin_url(Config, <<"/basic-auth/johndoe/p455w0rd">>),
                   Opts#{http_auth => basic, username => Username, password => Password}),
-    Json = jsx:decode(Body),
+    Json = json:decode(Body),
     ?assert(maps:get(<<"authenticated">>, Json)),
     ?assertEqual(Username, maps:get(<<"user">>, Json)).
 
@@ -737,7 +737,7 @@ basic_authorised_userpwd(Config) ->
     {ok, #{status := 200, body := Body}} =
         katipo:get(?POOL, httpbin_url(Config, <<"/basic-auth/johndoe/p455w0rd">>),
                   BaseOpts#{http_auth => basic, userpwd => <<Username/binary,":",Password/binary>>}),
-    Json = jsx:decode(Body),
+    Json = json:decode(Body),
     ?assert(maps:get(<<"authenticated">>, Json)),
     ?assertEqual(Username, maps:get(<<"user">>, Json)).
 
@@ -753,7 +753,7 @@ digest_authorised(Config) ->
     {ok, #{status := 200, body := Body}} =
         katipo:get(?POOL, httpbin_url(Config, <<"/digest-auth/auth/johndoe/p455w0rd">>),
                   Opts#{http_auth => digest, username => Username, password => Password}),
-    Json = jsx:decode(Body),
+    Json = json:decode(Body),
     ?assert(maps:get(<<"authenticated">>, Json)),
     ?assertEqual(Username, maps:get(<<"user">>, Json)).
 
@@ -764,7 +764,7 @@ digest_authorised_userpwd(Config) ->
     {ok, #{status := 200, body := Body}} =
         katipo:get(?POOL, httpbin_url(Config, <<"/digest-auth/auth/johndoe/p455w0rd">>),
                   BaseOpts#{http_auth => digest, userpwd => <<Username/binary,":",Password/binary>>}),
-    Json = jsx:decode(Body),
+    Json = json:decode(Body),
     ?assert(maps:get(<<"authenticated">>, Json)),
     ?assertEqual(Username, maps:get(<<"user">>, Json)).
 
@@ -1896,7 +1896,7 @@ async_get_with_opts(Config) ->
     Url = httpbin_url(Config, <<"/get?a=1">>),
     {ok, Ref} = katipo:async_get(?POOL, Url, Opts),
     {ok, #{status := 200, body := Body}} = katipo:await(Ref),
-    Json = jsx:decode(Body),
+    Json = json:decode(Body),
     ?assertEqual(<<"1">>, maps:get(<<"a">>, maps:get(<<"args">>, Json))).
 
 async_post(Config) ->
@@ -1906,7 +1906,7 @@ async_post(Config) ->
                                   Opts#{headers => [{<<"Content-Type">>, <<"application/json">>}],
                                         body => <<"hello">>}),
     {ok, #{status := 200, body := Body}} = katipo:await(Ref),
-    Json = jsx:decode(Body),
+    Json = json:decode(Body),
     ?assertEqual(<<"hello">>, maps:get(<<"data">>, Json)).
 
 async_req(Config) ->
@@ -1999,7 +1999,7 @@ async_multiple_outstanding(Config) ->
             || {N, Url} <- lists:zip(lists:seq(1, 5), Urls)],
     Results = [{N, katipo:await(Ref)} || {N, Ref} <- Refs],
     lists:foreach(fun({N, {ok, #{status := 200, body := Body}}}) ->
-        Json = jsx:decode(Body),
+        Json = json:decode(Body),
         Expected = integer_to_binary(N),
         ?assertEqual(Expected, maps:get(<<"n">>, maps:get(<<"args">>, Json)))
     end, Results).
