@@ -12,6 +12,7 @@
 #include <getopt.h>
 #include <arpa/inet.h>
 #include <err.h>
+#include <limits.h>
 #include <string.h>
 #include <ei.h>
 #include <curl/curl.h>
@@ -88,7 +89,7 @@ typedef struct _ConnInfo {
   GlobalInfo *global;
   char error[CURL_ERROR_SIZE];
   size_t num_headers;
-  struct curl_slist *resp_headers;
+  ei_x_buff resp_headers; /* num_headers binaries, already encoded */
   struct curl_slist *req_headers;
   struct curl_slist *req_cookies;
   long response_code;
@@ -440,27 +441,13 @@ static void send_to_erlang(GlobalInfo *global, char *buffer, size_t buffer_len) 
   }
 }
 
+/* "HTTP/1.1 200 OK", "HTTP/2 200", or NCSA 1.5's "HTTP 200": header names
+ * cannot contain '/' or ' ', so this prefix tells a status line from a
+ * header (or a chunked trailer). */
 static int is_status_line(const char *header, size_t len) {
-  int httpversion_major;
-  int httpversion;
-  int httpcode;
-  int nc;
-
-  /* curl's header buffer is not NUL-terminated, so scanning it directly with
-   * sscanf can over-read past `len`. Copy just the prefix (a status line is
-   * short) into a bounded, NUL-terminated buffer first. */
-  char line[32];
-  size_t n = len < sizeof(line) - 1 ? len : sizeof(line) - 1;
-  memcpy(line, header, n);
-  line[n] = '\0';
-
-  nc = sscanf(line, "HTTP/%d.%d %d", &httpversion_major, &httpversion,
-              &httpcode);
-  if (nc == 3)
-    return 1;
-  // NCSA 1.5.x
-  nc = sscanf(line, "HTTP %3d", &httpcode);
-  return nc;
+  return len > 5 && memcmp(header, "HTTP", 4) == 0 &&
+         (header[4] == '/' || header[4] == ' ') &&
+         header[5] >= '0' && header[5] <= '9';
 }
 
 static void encode_metrics(ei_x_buff *result, ConnInfo *conn) {
@@ -510,16 +497,13 @@ static void encode_cookies(ei_x_buff *result, ConnInfo *conn) {
 }
 
 static void encode_headers(ei_x_buff *result, ConnInfo *conn) {
-  struct curl_slist *headers = NULL;
-
-  headers = conn->resp_headers;
-  while (headers) {
-    if (ei_x_encode_binary(result, headers->data, strlen(headers->data))) {
-      errx(2, "Failed to encode headers");
-    }
-    headers = headers->next;
+  /* A zero-length list header is itself the empty list, so only a
+   * non-empty list gets one before its tail. */
+  if (conn->num_headers > 0 &&
+      (ei_x_encode_list_header(result, conn->num_headers) ||
+       ei_x_append_buf(result, conn->resp_headers.buff, conn->resp_headers.index))) {
+    errx(2, "Failed to encode headers");
   }
-
   if (ei_x_encode_empty_list(result)) {
     errx(2, "Failed to encode headers");
   }
@@ -568,8 +552,7 @@ static void send_ok_to_erlang(ConnInfo *conn) {
 
   begin_msg(&msg, "ok", conn->pid, conn->ref);
   if (ei_x_encode_tuple_header(&msg, 5) ||
-      ei_x_encode_long(&msg, conn->response_code) ||
-      ei_x_encode_list_header(&msg, conn->num_headers)) {
+      ei_x_encode_long(&msg, conn->response_code)) {
     errx(2, "Failed to encode ok message");
   }
 
@@ -604,8 +587,7 @@ static void send_headers_to_erlang(ConnInfo *conn) {
 
   begin_msg(&result, "headers", conn->pid, conn->ref);
   if (ei_x_encode_tuple_header(&result, 2) ||
-      ei_x_encode_long(&result, conn->response_code) ||
-      ei_x_encode_list_header(&result, conn->num_headers)) {
+      ei_x_encode_long(&result, conn->response_code)) {
     errx(2, "Failed to encode headers message");
   }
 
@@ -709,7 +691,7 @@ static void free_conn(GlobalInfo *global, ConnInfo *conn) {
   free(conn->post_data);
   curl_slist_free_all(conn->req_cookies);
   curl_slist_free_all(conn->req_headers);
-  curl_slist_free_all(conn->resp_headers);
+  ei_x_free(&conn->resp_headers);
   curl_easy_cleanup(conn->easy);
   free(conn);
 }
@@ -931,33 +913,29 @@ static size_t write_cb(void *ptr, size_t size, size_t nmemb, void *data) {
 static size_t header_cb(void *ptr, size_t size, size_t nmemb, void *data) {
   size_t realsize = size * nmemb;
   ConnInfo *conn = (ConnInfo *)data;
-  char *header;
 
   // Headers end with \r\n (CRLF). Strip trailing whitespace to get clean header.
   // Modern curl normalizes HTTP/2 and HTTP/3 headers to HTTP/1.x style with \r\n.
-  if (realsize > 2) {
-    if (conn->resp_headers && is_status_line(ptr, realsize)) {
-      curl_slist_free_all(conn->resp_headers);
-      conn->resp_headers = NULL;
-      conn->num_headers = 0;
-    }
-    // Strip trailing \r\n, \n, or \r from header
-    size_t header_len = realsize;
-    const char *src = (const char *)ptr;
-    while (header_len > 0 && (src[header_len - 1] == '\r' || src[header_len - 1] == '\n')) {
-      header_len--;
-    }
-    if (header_len > 0) {
-      header = (char *)malloc(header_len + 1);
-      if (header != NULL) {
-        memcpy(header, src, header_len);
-        header[header_len] = '\0';
-        conn->resp_headers = curl_slist_append(conn->resp_headers, header);
-        free(header);
-        conn->num_headers++;
-      }
-    }
+  // Each header is encoded as it arrives, so sending them is one append.
+  size_t header_len = realsize;
+  const char *src = (const char *)ptr;
+  while (header_len > 0 && (src[header_len - 1] == '\r' || src[header_len - 1] == '\n')) {
+    header_len--;
   }
+  if (header_len == 0) {
+    return realsize; /* the blank line ending a header block */
+  }
+  if (conn->num_headers > 0 && is_status_line(src, header_len)) {
+    /* A new response (after a redirect or 100-continue): start over. */
+    conn->resp_headers.index = 0;
+    conn->num_headers = 0;
+  }
+  /* Returning short fails just this transfer, with CURLE_WRITE_ERROR. */
+  if (header_len > INT_MAX ||
+      ei_x_encode_binary(&conn->resp_headers, src, (int)header_len)) {
+    return 0;
+  }
+  conn->num_headers++;
   return realsize;
 }
 
@@ -1006,16 +984,16 @@ static void new_conn(long method, char *url, struct curl_slist *req_headers,
   struct curl_slist *nc;
 
   conn = calloc(1, sizeof(*conn));
-  /* calloc zero-initializes the struct, so error/num_headers/resp_headers
-   * already start empty. */
+  /* calloc zero-initializes the struct, so error/num_headers already start
+   * empty. */
 
   conn->easy = curl_easy_init();
   if (!conn->easy) {
     errx(2, "curl_easy_init() failed, exiting!\n");
   }
   conn->body = evbuffer_new();
-  if (!conn->body) {
-    errx(2, "evbuffer_new() failed, exiting!\n");
+  if (!conn->body || ei_x_new(&conn->resp_headers)) {
+    errx(2, "Failed to allocate response buffers, exiting!\n");
   }
   conn->global = global;
   register_conn(global, conn);

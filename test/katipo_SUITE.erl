@@ -623,10 +623,15 @@ connecttimeout_ms(_) ->
     {error, #{code := operation_timedout}} =
         katipo:get(?POOL, <<"http://192.0.2.1">>, #{connecttimeout_ms => 1}).
 
+%% Only the final response's headers come back: the redirect hops' status
+%% lines and Location headers are dropped, over HTTP/2 and HTTP/3 too.
 followlocation_true(Config) ->
     {req_opts, Opts} = lists:keyfind(req_opts, 1, Config),
-    {ok, #{status := 200}} =
-        katipo:get(?POOL, httpbin_url(Config, <<"/redirect/6">>), Opts#{followlocation => true}).
+    {ok, #{status := 200, headers := Headers}} =
+        katipo:get(?POOL, httpbin_url(Config, <<"/redirect/6">>), Opts#{followlocation => true}),
+    Names = [string:lowercase(K) || {K, _} <- Headers],
+    ?assertNot(lists:member(<<"location">>, Names)),
+    ?assertEqual([], [K || K <- Names, binary:match(K, <<"http/">>) =/= nomatch]).
 
 followlocation_false(Config) ->
     {req_opts, Opts} = lists:keyfind(req_opts, 1, Config),

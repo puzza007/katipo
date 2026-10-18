@@ -11,8 +11,19 @@ All notable changes to this project are documented here. This project follows
   and are freed once written, instead of being grown with realloc and then
   copied twice more. Ownership is modelled in `formal/KatipoBodyHandoff.tla`, and
   `bench/run.sh` measures buffered-response throughput.
+- Response headers are encoded as they arrive instead of being collected
+  in a curl list (two allocations and a temporary copy per header) and
+  encoded at the end, and a new status line is recognised by its prefix
+  rather than with `sscanf`.
 
 ### Fixed
+- Over HTTP/2 and HTTP/3, a followed redirect (or a 1xx, auth retry or
+  proxy CONNECT) returned every hop's headers, plus a `{<<"HTTP/2 302 ">>,
+  <<>>}` entry for each status line, because those status lines were not
+  recognised. Only the final response's headers are returned now, as over
+  HTTP/1.1.
+- A response with no header lines at all was mis-encoded by the C port and
+  crashed the worker.
 - A buffered response body that would not fit in a 32-bit frame (about
   4 GiB) now fails that request with `write_error` instead of corrupting
   the port's output and taking down every request on the worker.

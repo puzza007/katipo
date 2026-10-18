@@ -380,6 +380,8 @@ send_to_port(Port, {Self, Ref},
     true = port_command(Port, term_to_binary(Command)).
 
 -spec parse_headers([binary()]) -> katipo:headers().
+parse_headers([]) ->
+    [];
 parse_headers([_StatusLine | Lines]) ->
     [parse_header(L) || L <- Lines].
 
