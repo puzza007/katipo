@@ -5,6 +5,8 @@ All notable changes to this project are documented here. This project follows
 
 ## [Unreleased]
 
+## [2.0.1] — 2026-10-19
+
 ### Changed
 - Buffered responses no longer copy the body in the C port: it is
   collected in an evbuffer, whose chains move to the pipe's output buffer
