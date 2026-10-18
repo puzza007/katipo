@@ -383,17 +383,33 @@ send_to_port(Port, {Self, Ref},
 parse_headers([]) ->
     [];
 parse_headers([_StatusLine | Lines]) ->
-    [parse_header(L) || L <- Lines].
+    Colon = binary:compile_pattern(<<":">>),
+    [parse_header(L, Colon) || L <- Lines].
 
 %% RFC 9110: field-name ":" OWS field-value OWS, where OWS is any run of
 %% spaces and tabs -- possibly none. libcurl passes HTTP/1.1 lines through
-%% verbatim, so "name:value" and padded values do occur.
--spec parse_header(binary()) -> katipo:header().
-parse_header(Line) when is_binary(Line) ->
-    case binary:split(Line, <<":">>) of
+%% verbatim, so "name:value" and padded values do occur. OWS is octets, so
+%% it is trimmed byte-wise rather than with string:trim, whose grapheme
+%% handling dominated the cost of a response with many headers.
+-spec parse_header(binary(), binary:cp()) -> katipo:header().
+parse_header(Line, Colon) ->
+    case binary:split(Line, Colon) of
         [K] -> {K, <<>>};
-        [K, V] -> {K, string:trim(V, both, " \t")}
+        [K, V] -> {K, trim_ows(V)}
     end.
+
+trim_ows(<<C, Rest/binary>>) when C =:= $\s; C =:= $\t ->
+    trim_ows(Rest);
+trim_ows(V) ->
+    rtrim_ows(V, byte_size(V)).
+
+rtrim_ows(V, N) when N > 0 ->
+    case binary:at(V, N - 1) of
+        C when C =:= $\s; C =:= $\t -> rtrim_ows(V, N - 1);
+        _ -> binary:part(V, 0, N)
+    end;
+rtrim_ows(_V, 0) ->
+    <<>>.
 
 get_mopts(Opts) ->
     L = lists:filtermap(fun mopt_supported/1, Opts),

@@ -195,7 +195,8 @@ groups() ->
        dns_cache_timeout,
        ca_cache_timeout,
        pipewait,
-       header_optional_whitespace]},
+       header_optional_whitespace,
+       header_non_utf8_value]},
      {malformed_requests, [],
       [malformed_identity_bad_method,
        malformed_url,
@@ -1512,6 +1513,19 @@ header_optional_whitespace(_Config) ->
     ?assertEqual(<<"qux">>, proplists:get_value(<<"x-loose">>, Headers)),
     ?assertEqual(<<>>, proplists:get_value(<<"x-empty">>, Headers)),
     ?assertEqual(<<"a:b">>, proplists:get_value(<<"x-colon">>, Headers)),
+    ok = katipo_drip_server:stop(Drip).
+
+%% Header values are octets (RFC 9110 obs-text), not UTF-8: a Latin-1 value
+%% comes back as-is instead of crashing the worker in string:trim/3.
+header_non_utf8_value(_Config) ->
+    {ok, Drip, Port} = katipo_drip_server:start(
+                         #{content_length => 0,
+                           pieces => [],
+                           finish => close,
+                           headers => [<<"x-latin1: ", 16#C9, "mile ">>]}),
+    {ok, #{headers := Headers}} =
+        katipo:get(?POOL, katipo_drip_server:url(Port)),
+    ?assertEqual(<<16#C9, "mile">>, proplists:get_value(<<"x-latin1">>, Headers)),
     ok = katipo_drip_server:stop(Drip).
 
 %% -- drip-server streaming tests -----------------------------------------
