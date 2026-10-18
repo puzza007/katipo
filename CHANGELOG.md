@@ -15,8 +15,15 @@ All notable changes to this project are documented here. This project follows
   in a curl list (two allocations and a temporary copy per header) and
   encoded at the end, and a new status line is recognised by its prefix
   rather than with `sscanf`.
+- Response header values are trimmed byte-wise instead of with
+  `string:trim/3`, whose Unicode handling made up most of the Erlang-side
+  cost of a response with many headers: a response with 20 extra headers
+  is now about as fast as one with none.
 
 ### Fixed
+- A response header value starting with a byte that is not valid UTF-8
+  (Latin-1 or other obs-text) crashed the worker, failing every request on
+  it; `string:trim/3` raised `badarg` on it.
 - Over HTTP/2 and HTTP/3, a followed redirect (or a 1xx, auth retry or
   proxy CONNECT) returned every hop's headers, plus a `{<<"HTTP/2 302 ">>,
   <<>>}` entry for each status line, because those status lines were not
