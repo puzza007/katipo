@@ -22,6 +22,8 @@
 -export([handle_info/2]).
 -export([terminate/2]).
 -export([code_change/3]).
+%% For the raw-port tests, which read the C port without a worker.
+-export([decode/1]).
 
 -include("katipo_internal.hrl").
 
@@ -156,6 +158,34 @@ handle_port_msg({done, {From, {Status, CookieJar, Metrics}}}, Reqs) ->
     Done = #{status => Status, cookiejar => CookieJar},
     finish_req(From, done, {Done, Metrics}, Reqs).
 
+%% Decode one port frame. An ok or chunk frame is a body frame: its term
+%% has an empty-binary placeholder for the body, whose raw bytes follow the
+%% term. Keeping the body out of the term lets it be a sub-binary of the
+%% frame, where binary_to_term would copy it; `used' says where it starts.
+-spec decode(binary()) -> term().
+decode(Data) ->
+    case binary_to_term(Data, [used]) of
+        {{ok, {From, {Status, Headers, CookieJar, <<>>, Metrics}}}, Used} ->
+            {ok, {From, {Status, Headers, CookieJar, body(Data, Used), Metrics}}};
+        {{chunk, {From, <<>>}}, Used} ->
+            {chunk, {From, body(Data, Used)}};
+        {Msg, _Used} ->
+            Msg
+    end.
+
+body(Data, Used) ->
+    <<_:Used/binary, Body/binary>> = Data,
+    own_body(Body, Data).
+
+%% A sub-binary keeps the whole frame alive for as long as the caller holds
+%% the body, so it is only worth it when the body is most of the frame. A
+%% small body under a large header block is copied out instead, which is
+%% cheap precisely because it is small.
+own_body(Body, Frame) when byte_size(Body) * 2 >= byte_size(Frame) ->
+    Body;
+own_body(Body, _Frame) ->
+    binary:copy(Body).
+
 %% Progress messages forward to the async reply_to iff the request is still
 %% in flight; otherwise they are dropped silently (the request timed out,
 %% was cancelled, or already completed). The message is only built when it
@@ -222,7 +252,7 @@ deliver_error({async, ReplyTo, Obs}, From = {_Self, UserRef}, Error) ->
     katipo_span:finish_async(Obs, error, Error, []).
 
 handle_info({Port, {data, Data}}, State = #state{port = Port, reqs = Reqs}) ->
-    Reqs2 = handle_port_msg(binary_to_term(Data), Reqs),
+    Reqs2 = handle_port_msg(decode(Data), Reqs),
     {noreply, State#state{reqs = Reqs2}};
 handle_info({timeout, Tref, {req_timeout, From}},
             State = #state{port = Port, reqs = Reqs}) ->

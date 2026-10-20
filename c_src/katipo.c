@@ -25,8 +25,8 @@
 #define KATIPO_PATCH 5
 #define KATIPO_DELETE 6
 
-/* A buffered body goes to Erlang as one {packet, 4} frame, whose length and
- * BINARY_EXT size are 32 bits; the slack covers the rest of the message. */
+/* A buffered body goes to Erlang in one {packet, 4} frame, after its term,
+ * and the frame length is 32 bits; the slack covers the term. */
 #define MAX_BUFFERED_BODY ((size_t)UINT32_MAX - 16 * 1024 * 1024)
 
 #define K_CURLOPT_CONNECTTIMEOUT_MS 5
@@ -524,30 +524,26 @@ static void begin_msg(ei_x_buff *result, const char *tag,
   }
 }
 
-/* A BINARY_EXT header for a len-byte binary whose bytes the caller writes
- * straight after the encoded message, so they are never copied into the ei
- * buffer. ei has no call that encodes just the header. */
-static void append_binary_header(ei_x_buff *b, size_t len) {
-  char hdr[5];
-  uint32_t n = htonl((uint32_t)len);
-
-  hdr[0] = ERL_BINARY_EXT;
-  memcpy(hdr + 1, &n, sizeof(n));
-  if (ei_x_append_buf(b, hdr, sizeof(hdr))) {
-    errx(2, "Failed to encode binary header");
+/* Start a body frame: the frame length, then the term, whose body element
+ * is an empty-binary placeholder. The caller appends the body's raw bytes
+ * straight after the term, so they are never copied into the ei buffer, and
+ * since binary_to_term never sees them the worker takes the body as a
+ * sub-binary of the frame instead of a copy (katipo_worker:decode/1). */
+static void begin_body_frame(struct evbuffer *out, ei_x_buff *term,
+                             size_t body_len) {
+  add_frame_len(out, term->index + body_len);
+  if (evbuffer_add(out, term->buff, term->index)) {
+    errx(2, "evbuffer_add");
   }
 }
 
-/* {ok, {{Pid, Ref}, {Status, Headers, CookieJar, Body, Metrics}}}. The body
- * is not copied: the message is encoded up to the body's BINARY_EXT header
- * and on through the metrics, and the body's evbuffer chains are moved into
- * the output between the two halves, so libevent owns and frees them. The
- * whole frame is appended in this one callback, so no other frame can land
- * inside it. See formal/KatipoBodyHandoff.tla. */
+/* {ok, {{Pid, Ref}, {Status, Headers, CookieJar, Body, Metrics}}}, as a
+ * body frame. The body is not copied: its evbuffer chains are moved into the
+ * output after the term, so libevent owns and frees them. The whole frame is
+ * appended in this one callback, so no other frame can land inside it. See
+ * formal/KatipoBodyHandoff.tla. */
 static void send_ok_to_erlang(ConnInfo *conn) {
   ei_x_buff msg;
-  size_t split;
-  size_t body_len = evbuffer_get_length(conn->body);
   struct evbuffer *out = bufferevent_get_output(conn->global->to_erlang);
 
   begin_msg(&msg, "ok", conn->pid, conn->ref);
@@ -560,16 +556,15 @@ static void send_ok_to_erlang(ConnInfo *conn) {
 
   encode_cookies(&msg, conn);
 
-  append_binary_header(&msg, body_len);
-  split = msg.index;
+  if (ei_x_encode_binary(&msg, "", 0)) {
+    errx(2, "Failed to encode ok message");
+  }
 
   encode_metrics(&msg, conn);
 
-  add_frame_len(out, msg.index + body_len);
-  if (evbuffer_add(out, msg.buff, split) ||
-      evbuffer_add_buffer(out, conn->body) ||
-      evbuffer_add(out, msg.buff + split, msg.index - split)) {
-    errx(2, "evbuffer_add");
+  begin_body_frame(out, &msg, evbuffer_get_length(conn->body));
+  if (evbuffer_add_buffer(out, conn->body)) {
+    errx(2, "evbuffer_add_buffer");
   }
   ei_x_free(&msg);
 }
@@ -598,19 +593,21 @@ static void send_headers_to_erlang(ConnInfo *conn) {
   conn->headers_sent = 1;
 }
 
-/* Streaming: {chunk, {Pid, Ref}, Body} -- one per write callback. This is
- * the per-16KB hot path, so the payload is written to the pipe straight
- * from curl's buffer instead of being copied into the ei buffer first. */
+/* Streaming: {chunk, {{Pid, Ref}, Body}}, as a body frame -- one per write
+ * callback. This is the per-16KB hot path, so the payload is written to the
+ * pipe straight from curl's buffer instead of being copied into the ei
+ * buffer first. */
 static void send_chunk_to_erlang(ConnInfo *conn, void *data, size_t len) {
   ei_x_buff prefix;
   struct evbuffer *out = bufferevent_get_output(conn->global->to_erlang);
 
   begin_msg(&prefix, "chunk", conn->pid, conn->ref);
-  append_binary_header(&prefix, len);
+  if (ei_x_encode_binary(&prefix, "", 0)) {
+    errx(2, "Failed to encode chunk message");
+  }
 
-  add_frame_len(out, prefix.index + len);
-  if (evbuffer_add(out, prefix.buff, prefix.index) ||
-      evbuffer_add(out, data, len)) {
+  begin_body_frame(out, &prefix, len);
+  if (evbuffer_add(out, data, len)) {
     errx(2, "evbuffer_add");
   }
   ei_x_free(&prefix);
