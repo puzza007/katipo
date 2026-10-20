@@ -7,8 +7,8 @@
 (*                                                                         *)
 (*  Complete(c)  check_multi_info, CURLE_OK, buffered request:             *)
 (*               send_ok_to_erlang appends the frame to the output         *)
-(*               evbuffer -- length, prefix, body, suffix -- then          *)
-(*               free_conn frees conn->body. With ZeroCopy the body        *)
+(*               evbuffer -- length, prefix, body -- then free_conn       *)
+(*               frees conn->body. With ZeroCopy the body                  *)
 (*               segment is moved and libevent frees it once written; with *)
 (*               HandOver the move leaves conn->body empty, so free_conn   *)
 (*               frees nothing of it. Without ZeroCopy the body is copied  *)
@@ -58,7 +58,6 @@ Segs(r) ==
          Seg(r, "chunk", FALSE, 1)>>
   ELSE <<Seg(r, "len", FALSE, 1), Seg(r, "prefix", FALSE, 1)>>
        \o (IF empty[r] THEN <<>> ELSE <<Seg(r, "body", ZeroCopy, 2)>>)
-       \o <<Seg(r, "suffix", FALSE, 1)>>
 
 \* free_conn: frees the body's bytes unless the move took them.
 Finish(c) ==

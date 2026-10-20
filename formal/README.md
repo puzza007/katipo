@@ -106,8 +106,8 @@ be partial, and bodies may be empty.
 
 | config | question | result |
 |---|---|---|
-| `KatipoBodyHandoff.cfg` | each body freed exactly once, never written after it is freed, frames intact on the pipe, every body eventually freed | pass (548 states, every action fires) |
-| `KatipoBodyHandoffCopy.cfg` | the same for the previous code, which copied the body | pass |
+| `KatipoBodyHandoff.cfg` | each body freed exactly once, never written after it is freed, frames intact on the pipe, every body eventually freed | pass (460 states, every action fires) |
+| `KatipoBodyHandoffCopy.cfg` | the same with the body copied into the output instead of moved, as before 2.0.1 (in today's frame layout) | pass |
 | `KatipoBodyHandoffShared.cfg` | sabotage: the output references the body without taking it over | **fails** as expected: `free_conn` frees the body before libevent writes it |
 | `KatipoBodyHandoffSplit.cfg` | sabotage: the frame is appended across callbacks | **fails** as expected: another transfer's frame lands inside it |
 

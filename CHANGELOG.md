@@ -5,6 +5,19 @@ All notable changes to this project are documented here. This project follows
 
 ## [Unreleased]
 
+### Changed
+- Buffered response bodies and streamed chunks now follow their term in
+  the port frame instead of travelling inside it, so the worker takes the
+  body as a sub-binary of the frame rather than the copy `binary_to_term`
+  made: decoding a 1 MB body in the worker drops from about 430 µs to
+  about 20 µs, and the worker's reductions per request no longer grow
+  with body size. A body that is less than half its frame is still
+  copied, so a kept body references at most twice its own size; call
+  `binary:copy/1` on bodies you hold for a long time if even that
+  matters. The port's wire format changed, so `priv/katipo` and the
+  Erlang modules must be upgraded together: restart rather than
+  hot-upgrade.
+
 ## [2.0.1] — 2026-10-19
 
 ### Changed

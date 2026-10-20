@@ -196,7 +196,10 @@ groups() ->
        ca_cache_timeout,
        pipewait,
        header_optional_whitespace,
-       header_non_utf8_value]},
+       header_non_utf8_value,
+       body_frame_shares_large_body,
+       body_frame_copies_small_body,
+       body_frame_chunk]},
      {malformed_requests, [],
       [malformed_identity_bad_method,
        malformed_url,
@@ -821,10 +824,42 @@ raw_send(Port, Command) ->
 
 raw_recv(Port, Timeout) ->
     receive
-        {Port, {data, Data}} -> {ok, binary_to_term(Data)}
+        {Port, {data, Data}} -> {ok, katipo_worker:decode(Data)}
     after Timeout ->
         timeout
     end.
+
+%% Body frames as the C port writes them: the term, with an empty-binary
+%% placeholder for the body, followed by the body's raw bytes.
+ok_frame(Headers, Body) ->
+    Term = {ok, {{self(), make_ref()}, {200, Headers, [], <<>>, []}}},
+    <<(term_to_binary(Term))/binary, Body/binary>>.
+
+body_frame_shares_large_body(_Config) ->
+    Body = binary:copy(<<"x">>, 4096),
+    Frame = ok_frame([<<"a: b">>], Body),
+    {ok, {_, {200, [<<"a: b">>], [], Body, []}}} = katipo_worker:decode(Frame),
+    {ok, {_, {_, _, _, Decoded, _}}} = katipo_worker:decode(Frame),
+    %% A sub-binary of the frame, not a copy.
+    true = binary:referenced_byte_size(Decoded) =:= byte_size(Frame).
+
+body_frame_copies_small_body(_Config) ->
+    %% 100 bytes is past the 64-byte heap binary limit, so a copy is a
+    %% refc binary of its own and referenced_byte_size counts bytes.
+    Body = binary:copy(<<"x">>, 100),
+    Headers = [binary:copy(<<"h">>, 200)],
+    Frame = ok_frame(Headers, Body),
+    {ok, {_, {200, Headers, [], Decoded, []}}} = katipo_worker:decode(Frame),
+    Body = Decoded,
+    100 = binary:referenced_byte_size(Decoded).
+
+body_frame_chunk(_Config) ->
+    From = {self(), make_ref()},
+    Body = binary:copy(<<"y">>, 16384),
+    Frame = <<(term_to_binary({chunk, {From, <<>>}}))/binary, Body/binary>>,
+    {chunk, {From, Body}} = katipo_worker:decode(Frame),
+    Empty = term_to_binary({chunk, {From, <<>>}}),
+    {chunk, {From, <<>>}} = katipo_worker:decode(Empty).
 
 bad_opts_response(Self, Ref) ->
     {ok, {error, {{Self, Ref}, {bad_opts, <<"Couldn't read req">>, []}}}}.
