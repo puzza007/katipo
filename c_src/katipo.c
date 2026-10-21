@@ -966,10 +966,10 @@ static void set_method(long method, ConnInfo *conn) {
       errx(2, "Unknown method: '%ld'", method);
   }
 
-  /* Every method but HEAD sends its body. POST, PUT and PATCH always
-   * declare one, if only Content-Length: 0; GET, DELETE and OPTIONS send
-   * an empty body as none at all, so a bodyless request is what it always
-   * was. */
+  /* Every method but HEAD (rejected with a body by katipo_req) sends its
+   * body. POST, PUT and PATCH always declare one, if only Content-Length:
+   * 0; GET, DELETE and OPTIONS send an empty body as none at all, so a
+   * bodyless request is what it always was. */
   if (method == KATIPO_HEAD ||
       (conn->post_data_size == 0 && method != KATIPO_POST &&
        method != KATIPO_PUT && method != KATIPO_PATCH)) {

@@ -172,10 +172,27 @@ request_round_trips(Config) ->
                  redirect()},
                 request_ok(Port, Method, Headers ++ ContentType, Body, Redirect))).
 
-%% The request must reach the server -- through a redirect, if one is
-%% generated -- as the model says: the method, every sent header in order,
-%% the body and its length, and the Content-Type katipo is responsible for.
+%% A HEAD request with a body is refused. Anything else must reach the
+%% server -- through a redirect, if one is generated -- as the model says:
+%% the method, every sent header in order, the body and its length, and
+%% the Content-Type katipo is responsible for.
+request_ok(Port, head, Headers, Body, Redirect) ->
+    case sent_bytes(Body) of
+        <<>> ->
+            request_sent(Port, head, Headers, Body, Redirect);
+        _ ->
+            Result = katipo:head(?POOL, <<"http://127.0.0.1:1/">>,
+                                 #{body => unwrap(Body)}),
+            ?WHENFAIL(ct:pal("head with a body: ~P", [Result, 20]),
+                      case Result of
+                          {error, #{code := bad_opts}} -> true;
+                          _ -> false
+                      end)
+    end;
 request_ok(Port, Method, Headers, Body, Redirect) ->
+    request_sent(Port, Method, Headers, Body, Redirect).
+
+request_sent(Port, Method, Headers, Body, Redirect) ->
     Key = key(),
     EchoUrl = katipo_prop_server:script(Port, Key, echo),
     Url = case Redirect of

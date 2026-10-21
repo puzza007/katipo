@@ -33,7 +33,7 @@ build_req(Opts, Mode) ->
         {ok, #req{url = undefined}} ->
             {error, error_map(bad_opts, <<"[{url,undefined}]">>)};
         {ok, Req} ->
-            case stream_opts_error(Req, Mode) of
+            case cross_field_error(Req, Mode) of
                 ok ->
                     {ok, Req#req{timeout = ?MODULE:get_timeout(Req)}};
                 {error, _} = Error ->
@@ -42,6 +42,23 @@ build_req(Opts, Mode) ->
         {error, _} = Error ->
             Error
     end.
+
+cross_field_error(Req, Mode) ->
+    case head_body_error(Req) of
+        ok -> stream_opts_error(Req, Mode);
+        {error, _} = Error -> Error
+    end.
+
+%% A HEAD request cannot carry a body (curl's NOBODY), so one given is a
+%% mistake to report rather than drop. The message names the rule, not the
+%% body, which may be large.
+head_body_error(#req{method = ?HEAD, body = Body}) ->
+    case sends_body(Body) of
+        true -> {error, error_map(bad_opts, <<"[{body,not_allowed_with_head}]">>)};
+        false -> ok
+    end;
+head_body_error(#req{}) ->
+    ok.
 
 %% The cross-field stream rules, shared with check_opts/1 so pre-validation
 %% agrees with the request entry points.
@@ -59,7 +76,7 @@ stream_opts_error(#req{}, _Mode) ->
 check_opts(Opts) when is_map(Opts) ->
     case process_opts(Opts) of
         {ok, Req} ->
-            stream_opts_error(Req, async);
+            cross_field_error(Req, async);
         {error, _} = Error ->
             Error
     end.

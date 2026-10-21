@@ -34,6 +34,8 @@ All notable changes to this project are documented here. This project follows
   `get`, `delete` or `options`) request lose its body while keeping its
   method. The body is now re-sent. A `post` still becomes a bodyless GET,
   as browsers do.
+- A `head` request with a non-empty body now fails with `bad_opts`
+  instead of silently dropping it.
 
 ## [2.0.1] — 2026-10-19
 
