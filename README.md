@@ -53,7 +53,10 @@ request as one map.
 
 `code` is a curl error name (`couldnt_connect`, `operation_timedout`, ...)
 or one of katipo's: `bad_opts`, `worker_died`, `overload`,
-`admission_timeout`, `await_timeout`.
+`admission_timeout`, `await_timeout`. A malformed response that libcurl
+rejects, such as one with an invalid Content-Length, is
+`ftp_weird_server_reply`: curl's `CURLE_WEIRD_SERVER_REPLY` under the name
+it had before curl 7.51, kept so existing matches keep working.
 
 ## Async requests
 
