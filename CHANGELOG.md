@@ -26,6 +26,10 @@ All notable changes to this project are documented here. This project follows
   methods (for instance one options map shared across methods) now puts
   it on the wire, and some intermediaries, such as CloudFront and Google
   Cloud load balancers, reject a GET with a body.
+- With `followlocation`, a 301, 302 or 303 made a `put`, `patch` (and now
+  `get`, `delete` or `options`) request lose its body while keeping its
+  method. The body is now re-sent. A `post` still becomes a bodyless GET,
+  as browsers do.
 
 ## [2.0.1] — 2026-10-19
 

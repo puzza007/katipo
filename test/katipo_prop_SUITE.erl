@@ -167,21 +167,28 @@ filler_value() ->
 
 request_round_trips(Config) ->
     Port = ?config(port, Config),
-    run(?FORALL({Method, Headers, Body}, {method(), req_headers(), req_body()},
-                request_ok(Port, Method, Headers, Body))).
+    run(?FORALL({Method, Headers, Body, Redirect},
+                {method(), req_headers(), req_body(), redirect()},
+                request_ok(Port, Method, Headers, Body, Redirect))).
 
-%% The request must reach the server as the model says: the method, every
-%% sent header in order, and the body and its length.
-request_ok(Port, Method, Headers, Body) ->
+%% The request must reach the server -- through a redirect, if one is
+%% generated -- as the model says: the method, every sent header in order,
+%% and the body and its length.
+request_ok(Port, Method, Headers, Body, Redirect) ->
     Key = key(),
-    Url = katipo_prop_server:script(Port, Key, echo),
+    EchoUrl = katipo_prop_server:script(Port, Key, echo),
+    Url = case Redirect of
+              none -> EchoUrl;
+              Status -> katipo_prop_server:script(Port, key(), {redirect, Status, Key})
+          end,
     {ok, #{status := 200}} =
         katipo:req(?POOL, #{url => Url, method => Method, headers => Headers,
-                            body => unwrap(Body), timeout_ms => 60000}),
+                            body => unwrap(Body), followlocation => true,
+                            timeout_ms => 60000}),
     Echo = {GotMethod, GotHeaders, GotBody} = katipo_prop_server:received(Key),
-    {ExpMethod, ExpBody, ExpLength} = expected_request(Method, Body),
-    ?WHENFAIL(ct:pal("sent ~p~n~P~n~P~ngot ~P",
-                     [Method, Headers, 30, Body, 30, Echo, 30]),
+    {ExpMethod, ExpBody, ExpLength} = expected_request(Method, Body, Redirect),
+    ?WHENFAIL(ct:pal("sent ~p ~p~n~P~n~P~ngot ~P",
+                     [Method, Redirect, Headers, 30, Body, 30, Echo, 30]),
               GotMethod =:= ExpMethod
                   andalso in_order(Headers, GotHeaders)
                   andalso GotBody =:= ExpBody
@@ -190,10 +197,14 @@ request_ok(Port, Method, Headers, Body) ->
 
 %% Every method but HEAD sends its body. POST, PUT and PATCH always declare
 %% one, if only Content-Length: 0; GET, DELETE and OPTIONS send an empty
-%% body as none at all.
-expected_request(head, _Body) ->
+%% body as none at all. A followed 301, 302 or 303 turns a POST into a GET
+%% without its body, as browsers do; every other method keeps both.
+expected_request(post, _Body, Status) when Status =:= 301; Status =:= 302;
+                                           Status =:= 303 ->
+    {<<"GET">>, <<>>, undefined};
+expected_request(head, _Body, _Redirect) ->
     {<<"HEAD">>, <<>>, undefined};
-expected_request(Method, Body) ->
+expected_request(Method, Body, _Redirect) ->
     Sent = sent_bytes(Body),
     Length = case Sent =:= <<>> andalso not lists:member(Method, [post, put, patch]) of
                  true -> undefined;
@@ -249,6 +260,10 @@ header(Name, Headers) ->
 method() ->
     frequency([{3, post}, {2, put}, {2, patch},
                {1, get}, {1, delete}, {1, options}, {1, head}]).
+
+%% Most requests go straight to the server; some through one redirect.
+redirect() ->
+    frequency([{3, exactly(none)}, {1, elements([301, 302, 303, 307, 308])}]).
 
 req_headers() ->
     ?LET(N, frequency([{1, exactly(0)}, {4, range(1, 8)}, {1, range(9, 40)}]),
@@ -609,6 +624,9 @@ generators_cover_edges(_Config) ->
                     {inner_whitespace, fun(Hs) -> any_value(fun has_inner_ws/1, Hs) end, 0.3},
                     {colon_in_value, fun(Hs) -> any_value(fun(V) -> nomatch =/= binary:match(V, <<":">>) end, Hs) end, 0.2},
                     {long_value, fun(Hs) -> any_value(fun(V) -> byte_size(V) > 200 end, Hs) end, 0.08}]),
+    check_coverage(redirect, N, redirect(), fun(R) -> R end,
+                   [{none, fun(R) -> R =:= none end, 0.5}]
+                   ++ [{S, fun(R) -> R =:= S end, 0.03} || S <- [301, 302, 303, 307, 308]]),
     check_coverage(method, N, method(), fun(M) -> M end,
                    [{M, fun(X) -> X =:= M end, 0.05}
                     || M <- [get, post, put, patch, delete, options, head]]),
