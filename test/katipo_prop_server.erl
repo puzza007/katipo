@@ -2,7 +2,11 @@
 
 %% Keep-alive HTTP/1.1 server for the property tests. Each request is
 %% answered from a script registered under the request path's key:
-%%   {raw, Bytes}  sent verbatim, so a test controls every header byte.
+%%   {raw, Bytes}  sent verbatim, so a test controls every header byte and
+%%                 can chain 1xx and redirect responses;
+%%   echo          an empty 200, after recording the request as received,
+%%                 {Method, Headers, Body}, for received/1 to return (in the
+%%                 table rather than the response, so HEAD works too).
 %% Request headers are parsed from the raw bytes, not with {packet, http},
 %% so names and values arrive exactly as curl sent them. Not linked to its
 %% starter, so it outlives init_per_suite's process; stop/1 ends it, its
@@ -10,8 +14,10 @@
 
 -export([start/0]).
 -export([stop/1]).
+-export([header/2]).
 -export([script/3]).
 -export([url/2]).
+-export([received/1]).
 
 start() ->
     Self = self(),
@@ -34,6 +40,12 @@ stop(Pid) ->
 script(Port, Key, Script) ->
     true = ets:insert(?MODULE, {Key, Script}),
     url(Port, Key).
+
+%% The request an echo script received; it is recorded before the response
+%% is sent, so it is there once the client has the response.
+received(Key) ->
+    [{_, Echo}] = ets:take(?MODULE, {received, Key}),
+    Echo.
 
 url(Port, Key) ->
     <<"http://127.0.0.1:", (integer_to_binary(Port))/binary, "/", Key/binary>>.
@@ -68,7 +80,10 @@ conn(S, Buf) ->
     end.
 
 respond({raw, Bytes}, _Key, _Method, _Headers, _Body) ->
-    Bytes.
+    Bytes;
+respond(echo, Key, Method, Headers, Body) ->
+    true = ets:insert(?MODULE, {{received, Key}, {Method, Headers, Body}}),
+    <<"HTTP/1.1 200 OK\r\ncontent-length: 0\r\n\r\n">>.
 
 read_head(S, Buf) ->
     case binary:split(Buf, <<"\r\n\r\n">>) of
