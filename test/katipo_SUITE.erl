@@ -1440,7 +1440,15 @@ streaming_flow_control(Config) ->
     <<186,131,222,164,69,192,190,233,191,135,112,45,73,76,148,71>> =
         crypto:hash(md5, Body),
     %% Granting credits to an unknown Ref is a harmless no-op.
-    ok = katipo:update_flow(?POOL, make_ref(), 1).
+    ok = katipo:update_flow(?POOL, make_ref(), 1),
+    %% Grants stop at 2^31-1, so the port's credit count cannot overflow.
+    %% Found by fuzz/fuzz_request.c.
+    ok = katipo:update_flow(?POOL, make_ref(), 16#7fffffff),
+    try katipo:update_flow(?POOL, make_ref(), 16#80000000) of
+        Result -> ct:fail({grant_above_max_accepted, Result})
+    catch
+        error:function_clause -> ok
+    end.
 
 %% stream_window must be a positive integer or infinity, and only means
 %% something on a streaming request.

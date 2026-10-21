@@ -740,8 +740,9 @@ static void flow_conn(GlobalInfo *global, erlang_pid *pid, erlang_ref *ref,
     return;
   }
   /* Credits first: curl may invoke write_cb synchronously inside
-   * curl_easy_pause to flush the buffer it held while paused. */
-  conn->window += n;
+   * curl_easy_pause to flush the buffer it held while paused. Saturate
+   * rather than overflow: a negative window would mean unbounded. */
+  conn->window = n > LONG_MAX - conn->window ? LONG_MAX : conn->window + n;
   if (conn->paused) {
     conn->paused = 0;
     curl_easy_pause(conn->easy, CURLPAUSE_CONT);

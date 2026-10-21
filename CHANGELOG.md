@@ -37,6 +37,13 @@ body sent without a `content-type` header no longer goes out as
   which it rejected with an opaque `bad_opts` "Couldn't read req". Such
   values are now rejected up front with a `bad_opts` naming the option;
   2^31-1 ms is still over 24 days.
+- `update_flow/3` accepted any positive grant, and two grants near 2^62
+  overflowed the port's credit count (undefined behaviour in C; in
+  practice the window went negative and the stream ran unbounded), while
+  one of 2^63 or more was silently dropped, leaving a paused stream
+  stalled until its timeout. Grants above 2^31-1 now raise
+  `function_clause`, and the port saturates the count instead of
+  overflowing.
 - A request body given with `get`, `delete` or `options` was silently
   dropped: only `post`, `put` and `patch` sent one. Every method but
   `head` now sends its body; an empty body still sends nothing, so
