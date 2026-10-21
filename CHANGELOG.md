@@ -5,6 +5,11 @@ All notable changes to this project are documented here. This project follows
 
 ## [Unreleased]
 
+### Fixed
+- A `capath`, `cacert`, `sslcert` or `sslkey` string that is not valid
+  text (such as a lone surrogate, or bytes that are not UTF-8) crashed the
+  calling process with `try_clause` instead of returning `bad_opts`.
+
 ## [2.1.0] — 2026-10-21
 
 Three fixes can change what an existing caller sees: a body passed to

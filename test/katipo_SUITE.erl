@@ -238,6 +238,7 @@ groups() ->
        capath_string,
        cacert_string,
        path_opts_bad_list,
+       path_opts_not_text,
        sslversion,
        badssl]},
      {https_mutual, [],
@@ -1241,6 +1242,15 @@ path_opts_bad_list(_) ->
     {error, #{code := bad_opts}} =
         katipo:get(?POOL, <<"https://localhost/">>,
                    #{sslkey => InvalidList}).
+
+%% Strings that are not valid text: unicode:characters_to_binary/1 returns
+%% {error, _, _} or {incomplete, _, _} for these rather than raising, which
+%% must still be bad_opts, not a crash in the caller.
+path_opts_not_text(_) ->
+    [{error, #{code := bad_opts}} = katipo:check_opts(#{Opt => Value})
+     || Opt <- [capath, cacert, sslcert, sslkey],
+        Value <- [[16#D800], [<<255>>], [<<195>>]]],
+    ok.
 
 sslversion(_) ->
     %% Test the sslversion option to set minimum TLS version

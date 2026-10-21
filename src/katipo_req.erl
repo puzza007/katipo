@@ -212,13 +212,15 @@ opt(capath, CAPath, {Req, Errors}) when is_binary(CAPath) ->
     {Req#req{capath = CAPath}, Errors};
 opt(capath, CAPath, {Req, Errors}) when is_list(CAPath) ->
     try unicode:characters_to_binary(CAPath) of
-        Bin when is_binary(Bin) -> {Req#req{capath = Bin}, Errors}
+        Bin when is_binary(Bin) -> {Req#req{capath = Bin}, Errors};
+        _Invalid -> {Req, [{capath, CAPath} | Errors]}
     catch _:_ -> {Req, [{capath, CAPath} | Errors]} end;
 opt(cacert, CACert, {Req, Errors}) when is_binary(CACert) ->
     {Req#req{cacert = CACert}, Errors};
 opt(cacert, CACert, {Req, Errors}) when is_list(CACert) ->
     try unicode:characters_to_binary(CACert) of
-        Bin when is_binary(Bin) -> {Req#req{cacert = Bin}, Errors}
+        Bin when is_binary(Bin) -> {Req#req{cacert = Bin}, Errors};
+        _Invalid -> {Req, [{cacert, CACert} | Errors]}
     catch _:_ -> {Req, [{cacert, CACert} | Errors]} end;
 opt(timeout_ms, Ms, {Req, Errors}) when is_integer(Ms) andalso Ms > 0 ->
     {Req#req{timeout_ms = Ms}, Errors};
@@ -283,13 +285,15 @@ opt(sslcert, Cert, {Req, Errors}) when is_binary(Cert) ->
     {Req#req{sslcert = Cert}, Errors};
 opt(sslcert, Cert, {Req, Errors}) when is_list(Cert) ->
     try unicode:characters_to_binary(Cert) of
-        Bin when is_binary(Bin) -> {Req#req{sslcert = Bin}, Errors}
+        Bin when is_binary(Bin) -> {Req#req{sslcert = Bin}, Errors};
+        _Invalid -> {Req, [{sslcert, Cert} | Errors]}
     catch _:_ -> {Req, [{sslcert, Cert} | Errors]} end;
 opt(sslkey, Key, {Req, Errors}) when is_binary(Key) ->
     {Req#req{sslkey = Key}, Errors};
 opt(sslkey, Key, {Req, Errors}) when is_list(Key) ->
     try unicode:characters_to_binary(Key) of
-        Bin when is_binary(Bin) -> {Req#req{sslkey = Bin}, Errors}
+        Bin when is_binary(Bin) -> {Req#req{sslkey = Bin}, Errors};
+        _Invalid -> {Req, [{sslkey, Key} | Errors]}
     catch _:_ -> {Req, [{sslkey, Key} | Errors]} end;
 opt(sslkey_blob, Key, {Req, Errors})
   when ?SSLKEY_BLOB_AVAILABLE andalso is_binary(Key) ->
