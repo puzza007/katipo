@@ -939,21 +939,18 @@ static size_t header_cb(void *ptr, size_t size, size_t nmemb, void *data) {
 static void set_method(long method, ConnInfo *conn) {
   switch (method) {
     case KATIPO_GET:
+      /* Named even though GET is curl's default: POSTFIELDS alone would
+       * turn a GET with a body into a POST. */
+      curl_easy_setopt(conn->easy, CURLOPT_CUSTOMREQUEST, "GET");
       break;
     case KATIPO_POST:
       curl_easy_setopt(conn->easy, CURLOPT_POST, 1L);
-      curl_easy_setopt(conn->easy, CURLOPT_POSTFIELDS, conn->post_data);
-      curl_easy_setopt(conn->easy, CURLOPT_POSTFIELDSIZE, conn->post_data_size);
       break;
     case KATIPO_PUT:
       curl_easy_setopt(conn->easy, CURLOPT_CUSTOMREQUEST, "PUT");
-      curl_easy_setopt(conn->easy, CURLOPT_POSTFIELDS, conn->post_data);
-      curl_easy_setopt(conn->easy, CURLOPT_POSTFIELDSIZE, conn->post_data_size);
       break;
     case KATIPO_PATCH:
       curl_easy_setopt(conn->easy, CURLOPT_CUSTOMREQUEST, "PATCH");
-      curl_easy_setopt(conn->easy, CURLOPT_POSTFIELDS, conn->post_data);
-      curl_easy_setopt(conn->easy, CURLOPT_POSTFIELDSIZE, conn->post_data_size);
       break;
     case KATIPO_HEAD:
       curl_easy_setopt(conn->easy, CURLOPT_CUSTOMREQUEST, "HEAD");
@@ -968,6 +965,18 @@ static void set_method(long method, ConnInfo *conn) {
     default:
       errx(2, "Unknown method: '%ld'", method);
   }
+
+  /* Every method but HEAD sends its body. POST, PUT and PATCH always
+   * declare one, if only Content-Length: 0; GET, DELETE and OPTIONS send
+   * an empty body as none at all, so a bodyless request is what it always
+   * was. */
+  if (method == KATIPO_HEAD ||
+      (conn->post_data_size == 0 && method != KATIPO_POST &&
+       method != KATIPO_PUT && method != KATIPO_PATCH)) {
+    return;
+  }
+  curl_easy_setopt(conn->easy, CURLOPT_POSTFIELDS, conn->post_data);
+  curl_easy_setopt(conn->easy, CURLOPT_POSTFIELDSIZE, conn->post_data_size);
 }
 
 static void free_eopts(EasyOpts *eopts);

@@ -18,6 +18,15 @@ All notable changes to this project are documented here. This project follows
   Erlang modules must be upgraded together: restart rather than
   hot-upgrade.
 
+### Fixed
+- A request body given with `get`, `delete` or `options` was silently
+  dropped: only `post`, `put` and `patch` sent one. Every method but
+  `head` now sends its body; an empty body still sends nothing, so
+  bodyless requests are unchanged. Code that passed a body to these
+  methods (for instance one options map shared across methods) now puts
+  it on the wire, and some intermediaries, such as CloudFront and Google
+  Cloud load balancers, reject a GET with a body.
+
 ## [2.0.1] — 2026-10-19
 
 ### Changed

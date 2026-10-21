@@ -188,15 +188,18 @@ request_ok(Port, Method, Headers, Body) ->
                   andalso header(<<"content-length">>, GotHeaders) =:= ExpLength
                   andalso (ExpBody =:= <<>> orelse form_ok(Body, GotBody))).
 
-%% katipo attaches a body to POST, PUT and PATCH only (set_method in
-%% c_src/katipo.c), always declaring it, if only as Content-Length: 0; the
-%% other methods send none.
-expected_request(Method, Body) when Method =:= post; Method =:= put;
-                                    Method =:= patch ->
+%% Every method but HEAD sends its body. POST, PUT and PATCH always declare
+%% one, if only Content-Length: 0; GET, DELETE and OPTIONS send an empty
+%% body as none at all.
+expected_request(head, _Body) ->
+    {<<"HEAD">>, <<>>, undefined};
+expected_request(Method, Body) ->
     Sent = sent_bytes(Body),
-    {method_name(Method), Sent, integer_to_binary(byte_size(Sent))};
-expected_request(Method, _Body) ->
-    {method_name(Method), <<>>, undefined}.
+    Length = case Sent =:= <<>> andalso not lists:member(Method, [post, put, patch]) of
+                 true -> undefined;
+                 false -> integer_to_binary(byte_size(Sent))
+             end,
+    {method_name(Method), Sent, Length}.
 
 unwrap({form, KVs}) -> KVs;
 unwrap(IoData) -> IoData.
