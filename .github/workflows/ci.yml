@@ -131,7 +131,14 @@ jobs:
           # directly (the port is a child process), so route them to files we can
           # check after the run instead of relying on the exit code.
           ASAN_OPTIONS: halt_on_error=1:detect_leaks=1:log_path=${{ github.workspace }}/asan_log
-          LSAN_OPTIONS: suppressions=${{ github.workspace }}/test/lsan.suppressions
+          # print_suppressions=0: LeakSanitizer otherwise writes a table of the
+          # suppressions that matched even when every leak was suppressed, and
+          # the check below fails on any log. Ubuntu's libcurl 8.5 leaks after
+          # a chunked response with trailers (a known curl bug, fixed upstream
+          # in a later refactor; curl.se/mail/distros-2025-07/0001.html), so
+          # that table appears whenever the trailer tests run. Unsuppressed
+          # leaks and memory errors still write a log and fail the job.
+          LSAN_OPTIONS: suppressions=${{ github.workspace }}/test/lsan.suppressions:print_suppressions=0
         run: |
           rebar3 ct
           # A clean run (no unsuppressed leaks/errors) writes nothing; any
