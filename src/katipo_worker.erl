@@ -414,7 +414,20 @@ parse_headers([]) ->
     [];
 parse_headers([_StatusLine | Lines]) ->
     Colon = binary:compile_pattern(<<":">>),
-    [parse_header(L, Colon) || L <- Lines].
+    [parse_header(L, Colon) || L <- unfold(Lines)].
+
+%% RFC 9112 5.2: a line starting with SP or HTAB continues the previous
+%% field's value (obs-fold), and a recipient may replace the fold with a
+%% single SP. Newer libcurl unfolds before handing lines over; older
+%% versions (8.5, for one) pass the continuation through as a line of its
+%% own, which would otherwise become a header whose name is the text.
+unfold([Line, <<C, _/binary>> = Next | Rest]) when C =:= $\s; C =:= $\t ->
+    unfold([<<(rtrim_ows(Line, byte_size(Line)))/binary, " ",
+              (trim_ows(Next))/binary>> | Rest]);
+unfold([Line | Rest]) ->
+    [Line | unfold(Rest)];
+unfold([]) ->
+    [].
 
 %% RFC 9110: field-name ":" OWS field-value OWS, where OWS is any run of
 %% spaces and tabs -- possibly none. libcurl passes HTTP/1.1 lines through

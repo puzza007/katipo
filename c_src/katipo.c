@@ -932,6 +932,18 @@ static size_t header_cb(void *ptr, size_t size, size_t nmemb, void *data) {
       ei_x_encode_binary(&conn->resp_headers, src, (int)header_len)) {
     return 0;
   }
+  /* RFC 9110 5.5: a recipient of CR, LF or NUL within a field value must
+   * reject the message or replace each with SP. Newer libcurl rejects
+   * them; older versions (8.5, for one) pass a bare CR through, so replace
+   * whatever arrives, in the copy just encoded. */
+  {
+    char *copy = conn->resp_headers.buff + conn->resp_headers.index - header_len;
+    for (size_t i = 0; i < header_len; i++) {
+      if (copy[i] == '\r' || copy[i] == '\n' || copy[i] == '\0') {
+        copy[i] = ' ';
+      }
+    }
+  }
   conn->num_headers++;
   return realsize;
 }

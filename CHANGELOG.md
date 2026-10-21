@@ -36,6 +36,12 @@ All notable changes to this project are documented here. This project follows
   as browsers do.
 - A `head` request with a non-empty body now fails with `bad_opts`
   instead of silently dropping it.
+- With an older libcurl (8.5, for one), a folded header (a line starting
+  with a space or tab continuing the previous one) came back as an extra
+  header named after the continuation text, and a bare CR in a header
+  value was returned as is. Folded values are now joined with a single
+  space, and CR, LF and NUL in a value are replaced with a space, as RFC
+  9110 allows; newer libcurl already unfolds, and rejects those bytes.
 
 ## [2.0.1] — 2026-10-19
 
