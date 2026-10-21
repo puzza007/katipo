@@ -5,11 +5,13 @@
 %% test rather than models of them:
 %%
 %%   * response bodies (the body frame) arrive byte-for-byte, buffered and
-%%     streamed, and a kept body references at most twice its own size;
+%%     streamed, whether framed by Content-Length, chunked or the closing
+%%     connection, and a kept body references at most twice its own size;
 %%   * requests -- method, headers, and binary, iolist or form bodies --
 %%     arrive at the server exactly as given;
 %%   * response headers are parsed as RFC 9110 says (names as sent, values
-%%     with surrounding OWS trimmed and nothing else changed), and after
+%%     with surrounding OWS trimmed, obs-fold continuations joined with a
+%%     single space, and nothing else changed), and after
 %%     1xx responses and followed redirects only the final response's
 %%     headers are returned;
 %%   * span URL sanitising never leaks userinfo, query or fragment, and
@@ -71,9 +73,9 @@ run(Prop) ->
 
 buffered_body_round_trips(Config) ->
     Port = ?config(port, Config),
-    run(?FORALL({Body, Headers}, {resp_body(), resp_body_headers()},
+    run(?FORALL({Body, Headers, Framing}, {resp_body(), resp_body_headers(), framing()},
                 begin
-                    Url = raw_response(Port, Body, Headers),
+                    Url = raw_response(Port, Body, Headers, Framing),
                     {ok, #{status := 200, headers := Got, body := B}} =
                         katipo:get(?POOL, Url),
                     B =:= Body andalso has_headers(Headers, Got)
@@ -82,9 +84,9 @@ buffered_body_round_trips(Config) ->
 
 streamed_body_round_trips(Config) ->
     Port = ?config(port, Config),
-    run(?FORALL({Body, Headers}, {resp_body(), resp_body_headers()},
+    run(?FORALL({Body, Headers, Framing}, {resp_body(), resp_body_headers(), framing()},
                 begin
-                    Url = raw_response(Port, Body, Headers),
+                    Url = raw_response(Port, Body, Headers, Framing),
                     {ok, Ref} = katipo:async_get(?POOL, Url, #{stream => true}),
                     {200, Got, Chunks} = collect(Ref),
                     iolist_to_binary(Chunks) =:= Body
@@ -92,14 +94,38 @@ streamed_body_round_trips(Config) ->
                         andalso lists:all(fun bounded/1, Chunks)
                 end)).
 
-raw_response(Port, Body, Headers) ->
-    katipo_prop_server:script(
-      Port, key(),
-      {raw, iolist_to_binary(
-              [<<"HTTP/1.1 200 OK\r\n">>,
-               [[K, <<": ">>, V, <<"\r\n">>] || {K, V} <- Headers],
-               <<"content-length: ">>, integer_to_binary(byte_size(Body)),
-               <<"\r\n\r\n">>, Body])}).
+%% The body framed by Content-Length, by chunked transfer coding, or by
+%% the server closing the connection.
+raw_response(Port, Body, Headers, Framing) ->
+    Head = [<<"HTTP/1.1 200 OK\r\n">>,
+            [[K, <<": ">>, V, <<"\r\n">>] || {K, V} <- Headers]],
+    Script =
+        case Framing of
+            content_length ->
+                {raw, [Head, <<"content-length: ">>, integer_to_binary(byte_size(Body)),
+                       <<"\r\n\r\n">>, Body]};
+            {chunked, Sizes, Case, Ext} ->
+                {raw, [Head, <<"transfer-encoding: chunked\r\n\r\n">>,
+                       chunks(Body, Sizes, Case, Ext), <<"0\r\n\r\n">>]};
+            close ->
+                {raw_close, [Head, <<"connection: close\r\n\r\n">>, Body]}
+        end,
+    katipo_prop_server:script(Port, key(), iolist_to_binary_script(Script)).
+
+iolist_to_binary_script({Kind, IoData}) -> {Kind, iolist_to_binary(IoData)}.
+
+%% Cut Body into chunks of the given sizes, cycling through them.
+chunks(<<>>, _Sizes, _Case, _Ext) ->
+    [];
+chunks(Body, [Size | Sizes], Case, Ext) ->
+    N = min(Size, byte_size(Body)),
+    <<Chunk:N/binary, Rest/binary>> = Body,
+    Hex = case Case of
+              upper -> integer_to_binary(N, 16);
+              lower -> string:lowercase(integer_to_binary(N, 16))
+          end,
+    [Hex, Ext, <<"\r\n">>, Chunk, <<"\r\n">>
+     | chunks(Rest, Sizes ++ [Size], Case, Ext)].
 
 %% A kept body is the frame's sub-binary only when it is at least half the
 %% frame, and a copy of exactly its own size otherwise.
@@ -127,6 +153,21 @@ collect_chunks(Ref, Acc) ->
     after 10000 ->
             ct:fail(no_stream_done)
     end.
+
+%% Content-Length most often; chunked with random chunk sizes (from one
+%% byte to past curl's 16 KB buffer), hex case and chunk extensions; or
+%% delimited by the connection closing.
+framing() ->
+    frequency([{3, exactly(content_length)},
+               {2, {chunked, non_empty(list(chunk_size())), elements([upper, lower]),
+                    elements([<<>>, <<";ext=1">>, <<"; name=\"q\"">>])}},
+               {1, exactly(close)}]).
+
+%% Large sizes are built from 4 KB steps: PropEr draws from a wide range
+%% mostly near its low end, which would leave curl's 16 KB buffer untested.
+chunk_size() ->
+    frequency([{3, range(1, 16)}, {2, range(17, 4096)},
+               {2, ?LET({Steps, Extra}, {range(1, 16), range(1, 4095)}, Steps * 4096 + Extra)}]).
 
 resp_body() ->
     ?LET({Len, Seed, Lead}, {resp_body_len(), non_empty(binary()), lead()},
@@ -312,9 +353,21 @@ user_content_type() ->
 redirect() ->
     frequency([{3, exactly(none)}, {1, elements([301, 302, 303, 307, 308])}]).
 
+%% Sometimes a header is repeated under a name differing only in case;
+%% both must be sent.
 req_headers() ->
-    ?LET(N, frequency([{1, exactly(0)}, {4, range(1, 8)}, {1, range(9, 40)}]),
-         vector(N, {header_name(), req_value()})).
+    ?LET({Headers, Dup},
+         {?LET(N, frequency([{1, exactly(0)}, {4, range(1, 8)}, {1, range(9, 40)}]),
+               vector(N, {header_name(), req_value()})),
+          frequency([{4, false}, {1, true}])},
+         case {Dup, Headers} of
+             {true, [{Name, Value} | _]} -> Headers ++ [{flip_case(Name), Value}];
+             _ -> Headers
+         end).
+
+flip_case(Name) ->
+    << <<(if C >= $a, C =< $z -> C - 32; C >= $A, C =< $Z -> C + 32; true -> C end)>>
+       || <<C>> <= Name >>.
 
 %% Prefixed so a generated name never collides with a header curl manages
 %% (Host, Content-Length, Expect...), which it would replace or drop.
@@ -428,7 +481,7 @@ response_chain_ok(Port, Hops) ->
     _ = [katipo_prop_server:script(Port, K, {raw, hop_bytes(Hop, N)})
          || {K, Hop, N} <- lists:zip3(Keys, Hops, Next)],
     {_Hints, {Status, _Reason}, Final} = lists:last(Hops),
-    Expected = [{Name, Value} || {Name, _Ows1, Value, _Ows2} <- Final]
+    Expected = [{Name, value_of(Value)} || {Name, _Ows1, Value, _Ows2} <- Final]
         ++ [{<<"content-length">>, <<"2">>}],
     {ok, #{status := GotStatus, headers := Got, body := <<"ok">>}} =
         katipo:get(?POOL, Url, #{followlocation => true, maxredirs => 10}),
@@ -452,8 +505,23 @@ status_line({Status, Reason}) ->
     [<<"HTTP/1.1 ">>, integer_to_binary(Status), Reason, <<"\r\n">>].
 
 header_lines(Headers) ->
-    [[Name, <<":">>, Ows1, Value, Ows2, <<"\r\n">>]
+    [[Name, <<":">>, Ows1, value_bytes(Value), Ows2, <<"\r\n">>]
      || {Name, Ows1, Value, Ows2} <- Headers].
+
+%% A folded value goes over several lines: each part but the last ends in
+%% optional whitespace and CRLF, and the next line starts with whitespace.
+value_bytes({folded, [First | Parts], Gaps}) ->
+    [First | [[Trail, <<"\r\n">>, Lead, Part]
+              || {{Trail, Lead}, Part} <- lists:zip(Gaps, Parts)]];
+value_bytes(Value) ->
+    Value.
+
+%% The value a folded header must parse to: its parts joined by one space
+%% (RFC 9112 5.2 lets a recipient replace each obs-fold with SP).
+value_of({folded, Parts, _Gaps}) ->
+    iolist_to_binary(lists:join(<<" ">>, Parts));
+value_of(Value) ->
+    Value.
 
 response_chain() ->
     ?LET({Redirects, Final},
@@ -496,7 +564,17 @@ ows() ->
                         list_to_binary(Cs))}]).
 
 resp_value() ->
-    frequency([{1, exactly(<<>>)}, {8, req_value()}]).
+    frequency([{1, exactly(<<>>)}, {8, req_value()}, {1, folded_value()}]).
+
+%% Two or three parts on successive lines (obs-fold), each continuation
+%% line starting with at least one SP or HTAB.
+folded_value() ->
+    ?LET(Parts, vector_of(range(2, 3), req_value()),
+         ?LET(Gaps, vector(length(Parts) - 1, {ows(), fold_lead()}),
+              {folded, Parts, Gaps})).
+
+fold_lead() ->
+    ?LET(Cs, vector_of(range(1, 3), elements([$\s, $\t])), list_to_binary(Cs)).
 
 %% =====================================================================
 %% Span URL sanitising
@@ -640,6 +718,13 @@ generators_cover_edges(_Config) ->
                     {cutoff_range, fun(S) -> S >= 200 andalso S =< 4000 end, 0.15},
                     {around_16k, fun(S) -> abs(S - 16384) =< 4 end, 0.08},
                     {over_16k, fun(S) -> S > 16388 end, 0.03}]),
+    check_coverage(framing, N, framing(), fun(F) -> F end,
+                   [{content_length, fun(F) -> F =:= content_length end, 0.3},
+                    {chunked, fun({chunked, _, _, _}) -> true; (_) -> false end, 0.2},
+                    {one_byte_chunks, fun({chunked, Sizes, _, _}) -> lists:member(1, Sizes); (_) -> false end, 0.02},
+                    {chunk_over_16k, fun({chunked, Sizes, _, _}) -> lists:any(fun(S) -> S > 16384 end, Sizes); (_) -> false end, 0.05},
+                    {chunk_extension, fun({chunked, _, _, Ext}) -> Ext =/= <<>>; (_) -> false end, 0.1},
+                    {close, fun(F) -> F =:= close end, 0.1}]),
     check_coverage(resp_body_lead, N, resp_body(),
                    fun(<<Lead, _/binary>>) -> Lead; (_) -> none end,
                    [{starts_like_a_term, fun(Lead) -> Lead =:= 131 end,
@@ -670,6 +755,7 @@ generators_cover_edges(_Config) ->
                     {obs_text, fun(Hs) -> any_value(fun has_obs_text/1, Hs) end, 0.3},
                     {inner_whitespace, fun(Hs) -> any_value(fun has_inner_ws/1, Hs) end, 0.3},
                     {colon_in_value, fun(Hs) -> any_value(fun(V) -> nomatch =/= binary:match(V, <<":">>) end, Hs) end, 0.2},
+                    {case_duplicate, fun(Hs) -> case_duplicate(Hs) end, 0.1},
                     {long_value, fun(Hs) -> any_value(fun(V) -> byte_size(V) > 200 end, Hs) end, 0.08}]),
     check_coverage(redirect, N, redirect(), fun(R) -> R end,
                    [{none, fun(R) -> R =:= none end, 0.5}]
@@ -690,8 +776,9 @@ generators_cover_edges(_Config) ->
                    [{ows_around, fun(Hs) -> lists:any(fun({_, O1, _, O2}) -> O1 =/= <<>> andalso O2 =/= <<>> end, Hs) end, 0.3},
                     {tab_in_ows, fun(Hs) -> lists:any(fun({_, O1, _, O2}) -> nomatch =/= binary:match(<<O1/binary, O2/binary>>, <<"\t">>) end, Hs) end, 0.3},
                     {empty_value, fun(Hs) -> lists:any(fun({_, _, V, _}) -> V =:= <<>> end, Hs) end, 0.2},
+                    {folded, fun(Hs) -> lists:any(fun({_, _, V, _}) -> is_tuple(V) end, Hs) end, 0.2},
                     {status_like_name, fun(Hs) -> lists:any(fun({<<H, T, T2, P, _/binary>>, _, _, _}) -> string:uppercase([H, T, T2, P]) =:= "HTTP"; (_) -> false end, Hs) end, 0.2},
-                    {obs_text, fun(Hs) -> lists:any(fun({_, _, V, _}) -> has_obs_text(V) end, Hs) end, 0.3}]),
+                    {obs_text, fun(Hs) -> lists:any(fun({_, _, V, _}) -> has_obs_text(value_of(V)) end, Hs) end, 0.3}]),
     check_coverage(url_parts, N, url_parts(), fun(P) -> P end,
                    [{userinfo, fun(#{userinfo := U}) -> U =/= none end, 0.5},
                     {password, fun(#{userinfo := U}) -> is_binary(U) andalso nomatch =/= binary:match(U, <<":">>) end, 0.2},
@@ -733,6 +820,11 @@ is_proper_list(_) -> false.
 has_sublist([H | _]) when is_list(H) -> true;
 has_sublist([_ | T]) -> has_sublist(T);
 has_sublist(_) -> false.
+
+case_duplicate(Hs) ->
+    Lower = [string:lowercase(K) || {K, _} <- Hs],
+    length(lists:usort(Lower)) < length(Lower)
+        andalso length(lists:usort([K || {K, _} <- Hs])) =:= length(Hs).
 
 any_value(Pred, Hs) ->
     lists:any(fun({_, V}) -> Pred(V) end, Hs).
