@@ -124,7 +124,7 @@ another, and fails fast with `overload` when every worker is full.
 |:------------------------|:------------------------------------|:------------|:------------------------------------------------------------------------------------|
 | `headers`               | `[{binary(), iodata()}]`            | `[]`        |                                                                                     |
 | `cookiejar`             | opaque (returned in response)       | `[]`        |                                                                                     |
-| `body`                  | `iodata()`                          | `<<>>`      | sent with every method but `head`; an empty body adds no `content-length` to GET, DELETE or OPTIONS |
+| `body`                  | `iodata()`                          | `<<>>`      | sent with every method but `head`; a key/value list is form-encoded. Without a `content-type` header, only POST and form bodies get `application/x-www-form-urlencoded` |
 | `connecttimeout_ms`     | `pos_integer()`                     | 30000       | [docs](https://curl.se/libcurl/c/CURLOPT_CONNECTTIMEOUT.html)                  |
 | `followlocation`        | `boolean()`                         | `false`     | [docs](https://curl.se/libcurl/c/CURLOPT_FOLLOWLOCATION.html)                  |
 | `ssl_verifyhost`        | `boolean()`                         | `true`      | [docs](https://curl.se/libcurl/c/CURLOPT_SSL_VERIFYHOST.html)                  |
