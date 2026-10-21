@@ -167,10 +167,9 @@
 %% See [https://curl.haxx.se/libcurl/c/CURLOPT_SSLKEY_BLOB.html]
 -type userpwd() :: binary().
 %% See [https://curl.haxx.se/libcurl/c/CURLOPT_USERPWD.html]
-%% The request options, shared by opts() and request(): Erlang cannot
-%% compose map types, so the fields are spelled out once here instead.
+%% The request options, shared by every request type: Erlang cannot compose
+%% map types, so the fields are spelled out once here instead.
 -define(KATIPO_OPTS_FIELDS,
-        reply_to => pid(),
         headers => headers(),
         cookiejar => cookiejar(),
         body => req_body(),
@@ -200,12 +199,23 @@
         userpwd => userpwd(),
         dns_cache_timeout => -1..?MAX_INT_OPT,
         ca_cache_timeout => -1..?MAX_INT_OPT,
-        pipewait => boolean(),
+        pipewait => boolean()).
+%% The options only the async API takes: where to deliver the response,
+%% and whether to stream it. The synchronous API rejects them.
+-define(KATIPO_ASYNC_OPTS_FIELDS,
+        reply_to => pid(),
         stream => boolean(),
         stream_window => 1..?MAX_INT_OPT | infinity).
--type request() :: #{url := url(), method => method(), ?KATIPO_OPTS_FIELDS}.
+%% Options and full request maps for the synchronous API (req/2, get/3 and
+%% the rest) and for the async API (async_req/2, async_get/3 and the rest).
 -type opts() :: #{?KATIPO_OPTS_FIELDS}.
+-type request() :: #{url := url(), method => method(), ?KATIPO_OPTS_FIELDS}.
+-type async_opts() :: #{?KATIPO_OPTS_FIELDS, ?KATIPO_ASYNC_OPTS_FIELDS}.
+-type async_request() :: #{url := url(), method => method(),
+                           ?KATIPO_OPTS_FIELDS, ?KATIPO_ASYNC_OPTS_FIELDS}.
 -export_type([opts/0]).
+-export_type([async_opts/0]).
+-export_type([async_request/0]).
 %% libcurl's timings for the request, in seconds. Empty when libcurl
 %% reported none: the request failed validation, timed out or lost its
 %% worker on the Erlang side, or never reached a transfer.

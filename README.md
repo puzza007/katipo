@@ -157,7 +157,7 @@ another, and fails fast with `overload` when every worker is full.
 | `password`              | `binary()`                          | `undefined` | [docs](https://curl.se/libcurl/c/CURLOPT_PASSWORD.html)                        |
 | `userpwd`               | `binary()`                          | `undefined` | [docs](https://curl.se/libcurl/c/CURLOPT_USERPWD.html)                         |
 | `verbose`               | `boolean()`                         | `false`     | [docs](https://curl.se/libcurl/c/CURLOPT_VERBOSE.html)                         |
-| `reply_to`              | `pid()`                             | `self()`    | Async only (`async_*`): process that receives the response message. Accepted but ignored on synchronous requests. |
+| `reply_to`              | `pid()`                             | `self()`    | async only; process that receives the response message |
 
 Some options depend on how libcurl was built. Check at runtime with
 `katipo:http3_available/0`, `doh_url_available/0`,

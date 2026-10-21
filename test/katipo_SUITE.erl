@@ -279,6 +279,7 @@ groups() ->
        streaming_timeout,
        streaming_connect_error,
        streaming_sync_rejected,
+       sync_rejects_async_opts,
        streaming_window_invalid,
        streaming_worker_death,
        streaming_flow_starvation,
@@ -1527,6 +1528,21 @@ streaming_connect_error(_Config) ->
 streaming_sync_rejected(_Config) ->
     {error, #{code := bad_opts}} =
         katipo:get(?POOL, <<"http://192.0.2.1">>, #{stream => true}).
+
+%% Every async-only option is rejected by the synchronous API, naming it,
+%% even with a value that would change nothing (stream => false) and even
+%% reply_to, which used to be silently ignored.
+sync_rejects_async_opts(_Config) ->
+    Self = self(),
+    [{error, #{code := bad_opts, message := Message}} =
+         katipo:get(?POOL, <<"http://192.0.2.1">>, #{Opt => Value})
+     || {Opt, Value} <- [{reply_to, Self}, {stream, false},
+                         {stream_window, infinity}],
+        Message <- [iolist_to_binary(io_lib:format("~p", [[{Opt, Value}]]))]],
+    {error, #{code := bad_opts}} =
+        katipo:req(?POOL, #{url => <<"http://192.0.2.1">>, reply_to => Self}),
+    %% check_opts/1 validates under the async rules, so it accepts them.
+    ok = katipo:check_opts(#{reply_to => Self, stream => false}).
 
 %% The request timer keeps running while a transfer is paused awaiting
 %% credits: a consumer that stops granting eventually gets the same

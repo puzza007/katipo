@@ -27,7 +27,17 @@
 %% rules that depend on the caller: a streamed response has no single reply
 %% to return, so `stream` is only valid on the async path, and a
 %% `stream_window` only means something on a streaming request.
--spec build_req(katipo:request(), sync | async) -> {ok, req()} | {error, katipo:error()}.
+-spec build_req(katipo:async_request(), sync | async) ->
+          {ok, req()} | {error, katipo:error()}.
+build_req(Opts, sync) when is_map_key(reply_to, Opts);
+                           is_map_key(stream, Opts);
+                           is_map_key(stream_window, Opts) ->
+    %% Options only the async API can honour. reply_to used to be ignored
+    %% here and stream => false accepted, but katipo:opts() excludes them,
+    %% so the runtime agrees with the types and the mistake is not silent.
+    Given = [{K, V} || K <- [reply_to, stream, stream_window],
+                       {ok, V} <- [maps:find(K, Opts)]],
+    {error, error_map(bad_opts, Given)};
 build_req(Opts, Mode) ->
     case process_opts(Opts) of
         {ok, #req{url = undefined}} ->
@@ -60,10 +70,10 @@ head_body_error(#req{method = ?HEAD, body = Body}) ->
 head_body_error(#req{}) ->
     ok.
 
-%% The cross-field stream rules, shared with check_opts/1 so pre-validation
-%% agrees with the request entry points.
-stream_opts_error(#req{stream = ?STREAM_TRUE}, sync) ->
-    {error, error_map(bad_opts, [{stream, true}])};
+%% The cross-field stream rule, shared with check_opts/1 so pre-validation
+%% agrees with the request entry points: a stream_window only means
+%% something on a streaming request. (The sync API rejects every stream
+%% option before getting here; see build_req/2.)
 stream_opts_error(#req{stream = ?STREAM_FALSE, stream_window = W}, _Mode)
   when W =/= ?STREAM_WINDOW_UNLIMITED ->
     {error, error_map(bad_opts, [{stream_window, W}])};
@@ -72,7 +82,7 @@ stream_opts_error(#req{}, _Mode) ->
 
 %% Validates under the async rules (the superset: `stream` is accepted);
 %% cross-field checks match what req/2 and async_req/2 enforce.
--spec check_opts(katipo:request() | katipo:opts()) -> ok | {error, katipo:error()}.
+-spec check_opts(katipo:async_request() | katipo:async_opts()) -> ok | {error, katipo:error()}.
 check_opts(Opts) when is_map(Opts) ->
     case process_opts(Opts) of
         {ok, Req} ->
@@ -94,7 +104,8 @@ method_int_to_binary(?OPTIONS) -> <<"OPTIONS">>;
 method_int_to_binary(?PATCH) -> <<"PATCH">>;
 method_int_to_binary(?DELETE) -> <<"DELETE">>.
 
--spec process_opts(katipo:request() | katipo:opts()) -> {ok, req()} | {error, katipo:error()}.
+-spec process_opts(katipo:async_request() | katipo:async_opts()) ->
+          {ok, req()} | {error, katipo:error()}.
 process_opts(Opts) ->
     case maps:fold(fun opt/3, {#req{}, []}, Opts) of
         {Req = #req{}, []} ->

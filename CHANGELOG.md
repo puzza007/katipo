@@ -13,6 +13,16 @@ All notable changes to this project are documented here. This project follows
   and `katipo_pool:start/3` return `{error, error()}` rather than
   `{error, map()}`.
 
+### Changed
+- The synchronous API now rejects the async-only options with `bad_opts`,
+  naming them: `reply_to`, which it used to ignore silently, and any
+  `stream` or `stream_window`, where before only `stream => true` was
+  rejected. Their types match: `opts()` and `request()` leave them out,
+  and the async functions take `async_opts()` and `async_request()`, which
+  add them, so dialyzer catches the mistake before it runs. A synchronous
+  call that passed `reply_to`, `stream => false` or
+  `stream_window => infinity` now fails; drop the option.
+
 ### Fixed
 - A `capath`, `cacert`, `sslcert` or `sslkey` string that is not valid
   text (such as a lone surrogate, or bytes that are not UTF-8) crashed the
