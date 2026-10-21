@@ -17,6 +17,10 @@ All notable changes to this project are documented here. This project follows
   matters. The port's wire format changed, so `priv/katipo` and the
   Erlang modules must be upgraded together: restart rather than
   hot-upgrade.
+- A request body sent with any method but `post` no longer gets curl's
+  default `Content-Type: application/x-www-form-urlencoded` unless it is
+  a form body (a key/value list). Set a `content-type` header if a `put`
+  or `patch` relied on that default.
 
 ### Fixed
 - A request body given with `get`, `delete` or `options` was silently

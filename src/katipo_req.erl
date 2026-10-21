@@ -81,9 +81,41 @@ method_int_to_binary(?DELETE) -> <<"DELETE">>.
 process_opts(Opts) ->
     case maps:fold(fun opt/3, {#req{}, []}, Opts) of
         {Req = #req{}, []} ->
-            {ok, Req};
+            {ok, content_type(Req, Opts)};
         {#req{}, Errors} ->
             {error, error_map(bad_opts, Errors)}
+    end.
+
+%% curl sends any body it is given as a form POST would, adding
+%% Content-Type: application/x-www-form-urlencoded unless the caller set
+%% one. That is right for POST, where it has always been the default, and
+%% for a form body (a key/value list) with any method; for any other body
+%% sent with another method it is a guess, so the header is disabled (an
+%% empty "Name:" removes one of curl's own) and the caller's own, if any,
+%% is left alone.
+content_type(Req = #req{method = Method, headers = Headers, body = Body}, Opts)
+  when Method =/= ?POST, Method =/= ?HEAD ->
+    Sends = Method =:= ?PUT orelse Method =:= ?PATCH orelse sends_body(Body),
+    case Sends andalso not has_content_type(maps:get(headers, Opts, [])) of
+        true -> Req#req{headers = Headers ++ [content_type_line(maps:get(body, Opts, <<>>))]};
+        false -> Req
+    end;
+content_type(Req, _Opts) ->
+    Req.
+
+content_type_line([{_, _} | _]) -> <<"Content-Type: application/x-www-form-urlencoded">>;
+content_type_line(_) -> <<"Content-Type:">>.
+
+has_content_type(Headers) ->
+    lists:any(fun({K, _}) ->
+                      string:lowercase(iolist_to_binary(K)) =:= <<"content-type">>
+              end, Headers).
+
+%% Whether a body has any bytes. Malformed iodata counts as a body: the C
+%% port rejects it with bad_opts, as it always has.
+sends_body(Body) ->
+    try iolist_size(Body) > 0
+    catch error:badarg -> true
     end.
 
 -spec headers_to_binary(katipo:headers()) -> [binary()].

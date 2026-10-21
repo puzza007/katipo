@@ -167,13 +167,14 @@ filler_value() ->
 
 request_round_trips(Config) ->
     Port = ?config(port, Config),
-    run(?FORALL({Method, Headers, Body, Redirect},
-                {method(), req_headers(), req_body(), redirect()},
-                request_ok(Port, Method, Headers, Body, Redirect))).
+    run(?FORALL({Method, Headers, ContentType, Body, Redirect},
+                {method(), req_headers(), user_content_type(), req_body(),
+                 redirect()},
+                request_ok(Port, Method, Headers ++ ContentType, Body, Redirect))).
 
 %% The request must reach the server -- through a redirect, if one is
 %% generated -- as the model says: the method, every sent header in order,
-%% and the body and its length.
+%% the body and its length, and the Content-Type katipo is responsible for.
 request_ok(Port, Method, Headers, Body, Redirect) ->
     Key = key(),
     EchoUrl = katipo_prop_server:script(Port, Key, echo),
@@ -193,6 +194,8 @@ request_ok(Port, Method, Headers, Body, Redirect) ->
                   andalso in_order(Headers, GotHeaders)
                   andalso GotBody =:= ExpBody
                   andalso header(<<"content-length">>, GotHeaders) =:= ExpLength
+                  andalso content_types(GotHeaders)
+                          =:= expected_content_types(ExpMethod, ExpBody, Headers, Body)
                   andalso (ExpBody =:= <<>> orelse form_ok(Body, GotBody))).
 
 %% Every method but HEAD sends its body. POST, PUT and PATCH always declare
@@ -211,6 +214,23 @@ expected_request(Method, Body, _Redirect) ->
                  false -> integer_to_binary(byte_size(Sent))
              end,
     {method_name(Method), Sent, Length}.
+
+%% The caller's Content-Type always wins. Without one, a POST and a form
+%% body are form-urlencoded, and any other body -- or no body, including a
+%% POST's after a redirect turned it into a GET -- goes without one, rather
+%% than with the form type curl would guess.
+expected_content_types(Method, Sent, Headers, Body) ->
+    Form = <<"application/x-www-form-urlencoded">>,
+    case {content_types(Headers), Method, Sent, Body} of
+        {[_ | _] = Own, _, _, _} -> Own;
+        {[], <<"POST">>, _, _} -> [Form];
+        {[], _, <<>>, _} -> [];
+        {[], _, _, {form, _}} -> [Form];
+        {[], _, _, _} -> []
+    end.
+
+content_types(Headers) ->
+    [V || {K, V} <- Headers, string:lowercase(K) =:= <<"content-type">>].
 
 unwrap({form, KVs}) -> KVs;
 unwrap(IoData) -> IoData.
@@ -260,6 +280,16 @@ header(Name, Headers) ->
 method() ->
     frequency([{3, post}, {2, put}, {2, patch},
                {1, get}, {1, delete}, {1, options}, {1, head}]).
+
+%% Sometimes the caller sets its own Content-Type, in either case.
+user_content_type() ->
+    frequency([{3, exactly([])},
+               {1, ?LET({Name, Value},
+                        {elements([<<"Content-Type">>, <<"content-type">>]),
+                         elements([<<"application/json">>,
+                                   <<"text/plain; charset=utf-8">>,
+                                   <<"application/x-www-form-urlencoded">>])},
+                        [{Name, Value}])}]).
 
 %% Most requests go straight to the server; some through one redirect.
 redirect() ->
@@ -627,6 +657,10 @@ generators_cover_edges(_Config) ->
     check_coverage(redirect, N, redirect(), fun(R) -> R end,
                    [{none, fun(R) -> R =:= none end, 0.5}]
                    ++ [{S, fun(R) -> R =:= S end, 0.03} || S <- [301, 302, 303, 307, 308]]),
+    check_coverage(user_content_type, N, user_content_type(), fun(CT) -> CT end,
+                   [{none, fun(CT) -> CT =:= [] end, 0.5},
+                    {lower_case, fun(CT) -> [K || {K = <<"content-type">>, _} <- CT] =/= [] end, 0.08},
+                    {form_type, fun(CT) -> [V || {_, V = <<"application/x-www-form-urlencoded">>} <- CT] =/= [] end, 0.05}]),
     check_coverage(method, N, method(), fun(M) -> M end,
                    [{M, fun(X) -> X =:= M end, 0.05}
                     || M <- [get, post, put, patch, delete, options, head]]),
