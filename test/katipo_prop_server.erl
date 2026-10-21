@@ -4,6 +4,10 @@
 %% answered from a script registered under the request path's key:
 %%   {raw, Bytes}  sent verbatim, so a test controls every header byte and
 %%                 can chain 1xx and redirect responses;
+%%   {raw_close, Bytes}
+%%                 sent verbatim, then the connection is closed: a body
+%%                 delimited by the close, a short one, or (with <<>>) no
+%%                 response at all;
 %%   echo          an empty 200, after recording the request as received,
 %%                 {Method, Headers, Body}, for received/1 to return (in the
 %%                 table rather than the response, so HEAD works too);
@@ -74,9 +78,14 @@ conn(S, Buf) ->
                 end,
             Len = binary_to_integer(header(<<"content-length">>, Headers, <<"0">>)),
             {Body, Rest2} = read_body(S, Rest, Len),
-            [{Key, Script}] = ets:take(?MODULE, Key),
-            ok = gen_tcp:send(S, respond(Script, Key, Method, Headers, Body)),
-            conn(S, Rest2);
+            case ets:take(?MODULE, Key) of
+                [{Key, {raw_close, Bytes}}] ->
+                    ok = gen_tcp:send(S, Bytes),
+                    gen_tcp:close(S);
+                [{Key, Script}] ->
+                    ok = gen_tcp:send(S, respond(Script, Key, Method, Headers, Body)),
+                    conn(S, Rest2)
+            end;
         closed ->
             gen_tcp:close(S)
     end.
