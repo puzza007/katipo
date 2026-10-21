@@ -5,6 +5,14 @@ All notable changes to this project are documented here. This project follows
 
 ## [Unreleased]
 
+### Added
+- Exported types for what callers receive: `error()` for the error map,
+  `response_map()` for a successful response, and `async_message()` for
+  every message an async request can deliver, buffered or streamed.
+  `check_opts/1` now takes bare options as well as a full request, and it
+  and `katipo_pool:start/3` return `{error, error()}` rather than
+  `{error, map()}`.
+
 ### Fixed
 - A `capath`, `cacert`, `sslcert` or `sslkey` string that is not valid
   text (such as a lone surrogate, or bytes that are not UTF-8) crashed the

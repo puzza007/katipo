@@ -243,15 +243,25 @@
                   appconnect_time | pretransfer_time | redirect_time |
                   starttransfer_time.
 -type metrics() :: [{metric(), float()}].
--type response() :: {ok, #{status := status(),
-                           headers := resp_headers(),
-                           cookiejar := cookiejar(),
-                           body := body()}} |
-                    {error, #{code := error_code(),
-                              message := error_msg()}}.
--type async_response() :: {ok, reference()} |
-                          {error, #{code := error_code(),
-                                    message := error_msg()}}.
+-type error() :: #{code := error_code(), message := error_msg()}.
+-type response_map() :: #{status := status(),
+                          headers := resp_headers(),
+                          cookiejar := cookiejar(),
+                          body := body()}.
+-type response() :: {ok, response_map()} | {error, error()}.
+-type async_response() :: {ok, reference()} | {error, error()}.
+%% Every message an async request can deliver to its reply_to process. A
+%% buffered request ends with one katipo_response or katipo_error. A
+%% streamed one (stream => true) gets katipo_headers, then zero or more
+%% katipo_chunk, then katipo_done, and katipo_error can end it at any
+%% point. A cancelled request gets nothing more, nor does one whose worker
+%% is killed outright, so keep a timeout on the receive.
+-type async_message() ::
+        {katipo_response, reference(), response_map()} |
+        {katipo_error, reference(), error()} |
+        {katipo_headers, reference(), #{status := status(), headers := resp_headers()}} |
+        {katipo_chunk, reference(), binary()} |
+        {katipo_done, reference(), #{status := status(), cookiejar := cookiejar()}}.
 -type http_auth() :: basic | digest | ntlm | negotiate.
 -type pipelining() :: nothing | http1 | multiplex.
 -type curlopt_http_version() :: curl_http_version_none |
@@ -315,5 +325,8 @@
 -export_type([sslkey_blob/0]).
 -export_type([userpwd/0]).
 -export_type([async_response/0]).
+-export_type([error/0]).
+-export_type([response_map/0]).
+-export_type([async_message/0]).
 
 -endif.

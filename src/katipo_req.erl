@@ -27,7 +27,7 @@
 %% rules that depend on the caller: a streamed response has no single reply
 %% to return, so `stream` is only valid on the async path, and a
 %% `stream_window` only means something on a streaming request.
--spec build_req(katipo:request(), sync | async) -> {ok, req()} | {error, map()}.
+-spec build_req(katipo:request(), sync | async) -> {ok, req()} | {error, katipo:error()}.
 build_req(Opts, Mode) ->
     case process_opts(Opts) of
         {ok, #req{url = undefined}} ->
@@ -72,7 +72,7 @@ stream_opts_error(#req{}, _Mode) ->
 
 %% Validates under the async rules (the superset: `stream` is accepted);
 %% cross-field checks match what req/2 and async_req/2 enforce.
--spec check_opts(katipo:request()) -> ok | {error, map()}.
+-spec check_opts(katipo:request() | katipo:opts()) -> ok | {error, katipo:error()}.
 check_opts(Opts) when is_map(Opts) ->
     case process_opts(Opts) of
         {ok, Req} ->
@@ -94,7 +94,7 @@ method_int_to_binary(?OPTIONS) -> <<"OPTIONS">>;
 method_int_to_binary(?PATCH) -> <<"PATCH">>;
 method_int_to_binary(?DELETE) -> <<"DELETE">>.
 
--spec process_opts(katipo:request()) -> {ok, req()} | {error, map()}.
+-spec process_opts(katipo:request() | katipo:opts()) -> {ok, req()} | {error, katipo:error()}.
 process_opts(Opts) ->
     case maps:fold(fun opt/3, {#req{}, []}, Opts) of
         {Req = #req{}, []} ->
@@ -162,6 +162,7 @@ encode_body(Body) when is_binary(Body) orelse is_list(Body) ->
 encode_body(Body) ->
     {error, {invalid_body, Body}}.
 
+-spec error_map(katipo:error_code(), term()) -> katipo:error().
 error_map(Code, Message) when is_atom(Code) andalso is_binary(Message) ->
     #{code => Code, message => Message};
 error_map(Code, Message) when is_atom(Code) ->
