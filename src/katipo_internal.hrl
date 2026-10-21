@@ -51,6 +51,12 @@
 -define(HTTP3_AVAILABLE, false).
 -endif.
 
+%% The largest value an integer option can take. term_to_binary encodes
+%% anything above 2^31-1 as a bignum, which the port does not read, and a
+%% C long is only 32 bits on some platforms; options beyond it are
+%% rejected here with bad_opts naming the option.
+-define(MAX_INT_OPT, 16#7fffffff).
+
 %% HTTP method codes.
 -define(GET, 0).
 -define(POST, 1).

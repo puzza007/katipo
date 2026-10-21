@@ -191,6 +191,7 @@ groups() ->
        unix_socket_path_cant_connect,
        doh_url,
        badopts,
+       int_opts_too_large,
        protocol_restriction,
        dns_cache_timeout,
        ca_cache_timeout,
@@ -789,6 +790,25 @@ badopts(Config) ->
     {ok, Tokens, _} = erl_scan:string(binary_to_list(Message) ++ "."),
     {ok, L} = erl_parse:parse_term(Tokens),
     [] = L -- [{what, not_even_close}, {timeout_ms, <<"wrong">>}].
+
+%% Integer options stop at 2^31-1: term_to_binary sends anything larger as
+%% a bignum, which the port used to answer with an opaque "Couldn't read
+%% req". Found by fuzz/fuzz_request.c.
+int_opts_too_large(_) ->
+    Url = <<"http://localhost/get">>,
+    Max = 16#7fffffff,
+    Opts = [connecttimeout_ms, timeout_ms, maxredirs, dns_cache_timeout,
+            ca_cache_timeout],
+    lists:foreach(
+      fun(Opt) ->
+              ok = katipo:check_opts(#{url => Url, Opt => Max}),
+              Message = iolist_to_binary(io_lib:format("~p", [[{Opt, Max + 1}]])),
+              {error, #{code := bad_opts, message := Message}} =
+                  katipo:check_opts(#{url => Url, Opt => Max + 1})
+      end, Opts),
+    ok = katipo:check_opts(#{url => Url, stream => true, stream_window => Max}),
+    {error, #{code := bad_opts}} =
+        katipo:check_opts(#{url => Url, stream => true, stream_window => Max + 1}).
 
 proxy_couldnt_connect(Config) ->
     Url = httpbin_url(Config, <<"/get">>),

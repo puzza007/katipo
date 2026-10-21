@@ -194,7 +194,8 @@ opt(body, Body, {Req, Errors}) ->
         {ok, Encoded} ->
             {Req#req{body = Encoded}, Errors}
     end;
-opt(connecttimeout_ms, Ms, {Req, Errors}) when is_integer(Ms) andalso Ms > 0 ->
+opt(connecttimeout_ms, Ms, {Req, Errors})
+  when is_integer(Ms) andalso Ms > 0 andalso Ms =< ?MAX_INT_OPT ->
     {Req#req{connecttimeout_ms = Ms}, Errors};
 opt(followlocation, true, {Req, Errors}) ->
     {Req#req{followlocation = ?FOLLOWLOCATION_TRUE}, Errors};
@@ -220,9 +221,11 @@ opt(cacert, CACert, {Req, Errors}) when is_list(CACert) ->
     try unicode:characters_to_binary(CACert) of
         Bin when is_binary(Bin) -> {Req#req{cacert = Bin}, Errors}
     catch _:_ -> {Req, [{cacert, CACert} | Errors]} end;
-opt(timeout_ms, Ms, {Req, Errors}) when is_integer(Ms) andalso Ms > 0 ->
+opt(timeout_ms, Ms, {Req, Errors})
+  when is_integer(Ms) andalso Ms > 0 andalso Ms =< ?MAX_INT_OPT ->
     {Req#req{timeout_ms = Ms}, Errors};
-opt(maxredirs, M, {Req, Errors}) when is_integer(M) andalso M >= -1 ->
+opt(maxredirs, M, {Req, Errors})
+  when is_integer(M) andalso M >= -1 andalso M =< ?MAX_INT_OPT ->
     {Req#req{maxredirs = M}, Errors};
 opt(http_auth, basic, {Req, Errors}) ->
     {Req#req{http_auth = ?CURLAUTH_BASIC}, Errors};
@@ -298,9 +301,11 @@ opt(keypasswd, Pass, {Req, Errors}) when is_binary(Pass) ->
     {Req#req{keypasswd = Pass}, Errors};
 opt(userpwd, UserPwd, {Req, Errors}) when is_binary(UserPwd) ->
     {Req#req{userpwd = UserPwd}, Errors};
-opt(dns_cache_timeout, Secs, {Req, Errors}) when is_integer(Secs) andalso Secs >= -1 ->
+opt(dns_cache_timeout, Secs, {Req, Errors})
+  when is_integer(Secs) andalso Secs >= -1 andalso Secs =< ?MAX_INT_OPT ->
     {Req#req{dns_cache_timeout = Secs}, Errors};
-opt(ca_cache_timeout, Secs, {Req, Errors}) when is_integer(Secs) andalso Secs >= -1 ->
+opt(ca_cache_timeout, Secs, {Req, Errors})
+  when is_integer(Secs) andalso Secs >= -1 andalso Secs =< ?MAX_INT_OPT ->
     {Req#req{ca_cache_timeout = Secs}, Errors};
 opt(pipewait, true, {Req, Errors}) ->
     {Req#req{pipewait = ?PIPEWAIT_TRUE}, Errors};
@@ -312,7 +317,8 @@ opt(stream, false, {Req, Errors}) ->
     {Req#req{stream = ?STREAM_FALSE}, Errors};
 opt(stream_window, infinity, {Req, Errors}) ->
     {Req#req{stream_window = ?STREAM_WINDOW_UNLIMITED}, Errors};
-opt(stream_window, N, {Req, Errors}) when is_integer(N) andalso N > 0 ->
+opt(stream_window, N, {Req, Errors})
+  when is_integer(N) andalso N > 0 andalso N =< ?MAX_INT_OPT ->
     {Req#req{stream_window = N}, Errors};
 opt(reply_to, Pid, {Req, Errors}) when is_pid(Pid) ->
     {Req, Errors};

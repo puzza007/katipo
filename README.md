@@ -159,6 +159,9 @@ another, and fails fast with `overload` when every worker is full.
 | `verbose`               | `boolean()`                         | `false`     | [docs](https://curl.se/libcurl/c/CURLOPT_VERBOSE.html)                         |
 | `reply_to`              | `pid()`                             | `self()`    | Async only (`async_*`): process that receives the response message. Accepted but ignored on synchronous requests. |
 
+Integer options take at most 2147483647 (2^31-1); larger values are
+rejected with `bad_opts`.
+
 Some options depend on how libcurl was built. Check at runtime with
 `katipo:http3_available/0`, `doh_url_available/0`,
 `tcp_fastopen_available/0`, `unix_socket_path_available/0` and

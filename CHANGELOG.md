@@ -31,6 +31,12 @@ body sent without a `content-type` header no longer goes out as
   or `patch` relied on that default.
 
 ### Fixed
+- An integer option of 2^31 or more (`connecttimeout_ms`, `timeout_ms`,
+  `maxredirs`, `dns_cache_timeout`, `ca_cache_timeout`,
+  `stream_window`) passed validation but reached the port as a bignum,
+  which it rejected with an opaque `bad_opts` "Couldn't read req". Such
+  values are now rejected up front with a `bad_opts` naming the option;
+  2^31-1 ms is still over 24 days.
 - A request body given with `get`, `delete` or `options` was silently
   dropped: only `post`, `put` and `patch` sent one. Every method but
   `head` now sends its body; an empty body still sends nothing, so
