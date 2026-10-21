@@ -2,9 +2,18 @@
 
 %% Property tests, end to end through the C port against a local scripted
 %% server (katipo_prop_server), so the C encoder and decoder are under
-%% test rather than models of them: response bodies (the body frame)
-%% arrive byte-for-byte, buffered and streamed, and a kept body references
-%% at most twice its own size.
+%% test rather than models of them:
+%%
+%%   * response bodies (the body frame) arrive byte-for-byte, buffered and
+%%     streamed, and a kept body references at most twice its own size;
+%%   * requests -- method, headers, and binary, iolist or form bodies --
+%%     arrive at the server exactly as given;
+%%   * response headers are parsed as RFC 9110 says (names as sent, values
+%%     with surrounding OWS trimmed and nothing else changed), and after
+%%     1xx responses and followed redirects only the final response's
+%%     headers are returned;
+%%   * span URL sanitising never leaks userinfo, query or fragment, and
+%%     never crashes on arbitrary input.
 %%
 %% Generators are weighted toward edges, and generators_cover_edges checks
 %% by sampling that they actually reach them.
@@ -20,11 +29,21 @@
 %% Binaries this small live on the heap, where referenced_byte_size/1
 %% counts something other than the bytes a sub-binary pins.
 -define(HEAP_BIN_LIMIT, 64).
+%% curl sends Expect: 100-continue for request bodies over 1 MiB.
+-define(EXPECT_THRESHOLD, 1048576).
+%% The marker every generated secret starts with. Hosts and paths have no
+%% upper case outside percent-encodings, whose hex digits (0-9, A-F) cannot
+%% spell it, so it cannot appear in them by chance.
+-define(SECRET, "S3CR3T").
 
 all() ->
     [generators_cover_edges,
      buffered_body_round_trips,
-     streamed_body_round_trips].
+     streamed_body_round_trips,
+     request_round_trips,
+     response_headers_parsed,
+     span_url_sanitised,
+     span_url_never_crashes].
 
 init_per_suite(Config) ->
     {ok, _} = application:ensure_all_started(katipo),
@@ -143,6 +162,402 @@ filler_value() ->
     ?LET(Len, range(1, 120), list_to_binary(lists:duplicate(Len, $v))).
 
 %% =====================================================================
+%% Requests
+%% =====================================================================
+
+request_round_trips(Config) ->
+    Port = ?config(port, Config),
+    run(?FORALL({Method, Headers, Body}, {method(), req_headers(), req_body()},
+                request_ok(Port, Method, Headers, Body))).
+
+%% The request must reach the server as the model says: the method, every
+%% sent header in order, and the body and its length.
+request_ok(Port, Method, Headers, Body) ->
+    Key = key(),
+    Url = katipo_prop_server:script(Port, Key, echo),
+    {ok, #{status := 200}} =
+        katipo:req(?POOL, #{url => Url, method => Method, headers => Headers,
+                            body => unwrap(Body), timeout_ms => 60000}),
+    Echo = {GotMethod, GotHeaders, GotBody} = katipo_prop_server:received(Key),
+    {ExpMethod, ExpBody, ExpLength} = expected_request(Method, Body),
+    ?WHENFAIL(ct:pal("sent ~p~n~P~n~P~ngot ~P",
+                     [Method, Headers, 30, Body, 30, Echo, 30]),
+              GotMethod =:= ExpMethod
+                  andalso in_order(Headers, GotHeaders)
+                  andalso GotBody =:= ExpBody
+                  andalso header(<<"content-length">>, GotHeaders) =:= ExpLength
+                  andalso (ExpBody =:= <<>> orelse form_ok(Body, GotBody))).
+
+%% katipo attaches a body to POST, PUT and PATCH only (set_method in
+%% c_src/katipo.c), always declaring it, if only as Content-Length: 0; the
+%% other methods send none.
+expected_request(Method, Body) when Method =:= post; Method =:= put;
+                                    Method =:= patch ->
+    Sent = sent_bytes(Body),
+    {method_name(Method), Sent, integer_to_binary(byte_size(Sent))};
+expected_request(Method, _Body) ->
+    {method_name(Method), <<>>, undefined}.
+
+unwrap({form, KVs}) -> KVs;
+unwrap(IoData) -> IoData.
+
+sent_bytes({form, KVs}) -> iolist_to_binary(uri_string:compose_query(KVs));
+sent_bytes(IoData) -> iolist_to_binary(IoData).
+
+%% The form body must decode back to the pairs it was built from, so a
+%% double-encoded or truncated query fails even if the bytes look plausible.
+%% Decoded here rather than with uri_string:dissect_query/1, which (OTP
+%% 27.3) rejects a value containing an encoded '#', e.g. <<"k=%26%23a">>,
+%% the very bytes compose_query/1 produced.
+form_ok({form, KVs}, Got) -> decode_form(Got) =:= KVs;
+form_ok(_, _) -> true.
+
+decode_form(<<>>) ->
+    [];
+decode_form(Query) ->
+    [case binary:split(Pair, <<"=">>) of
+         [K] -> {form_decode(K), true};
+         [K, V] -> {form_decode(K), form_decode(V)}
+     end || Pair <- binary:split(Query, <<"&">>, [global])].
+
+form_decode(B) ->
+    pct_decode(B, <<>>).
+
+pct_decode(<<"%", Hex:2/binary, Rest/binary>>, Acc) ->
+    pct_decode(Rest, <<Acc/binary, (binary_to_integer(Hex, 16))>>);
+pct_decode(<<"+", Rest/binary>>, Acc) ->
+    pct_decode(Rest, <<Acc/binary, " ">>);
+pct_decode(<<C, Rest/binary>>, Acc) ->
+    pct_decode(Rest, <<Acc/binary, C>>);
+pct_decode(<<>>, Acc) ->
+    Acc.
+
+method_name(M) -> string:uppercase(atom_to_binary(M)).
+
+%% Each sent header arrives, unchanged and in order, among curl's own.
+in_order([], _) -> true;
+in_order(_, []) -> false;
+in_order([H | Hs], [H | Gs]) -> in_order(Hs, Gs);
+in_order(Hs, [_ | Gs]) -> in_order(Hs, Gs).
+
+header(Name, Headers) ->
+    katipo_prop_server:header(Name, Headers).
+
+method() ->
+    frequency([{3, post}, {2, put}, {2, patch},
+               {1, get}, {1, delete}, {1, options}, {1, head}]).
+
+req_headers() ->
+    ?LET(N, frequency([{1, exactly(0)}, {4, range(1, 8)}, {1, range(9, 40)}]),
+         vector(N, {header_name(), req_value()})).
+
+%% Prefixed so a generated name never collides with a header curl manages
+%% (Host, Content-Length, Expect...), which it would replace or drop.
+header_name() ->
+    ?LET({Prefix, Rest}, {oneof(["x-", "X-"]), non_empty(list(token_char()))},
+         list_to_binary([Prefix | lists:sublist(Rest, 60)])).
+
+%% RFC 9110 tchar.
+token_char() ->
+    frequency([{6, range($a, $z)}, {3, range($A, $Z)}, {2, range($0, $9)},
+               {2, elements("!#$%&'*+-.^_`|~")}]).
+
+%% A non-empty value with no surrounding whitespace (curl would send it as
+%% is, but leading or trailing OWS is the receiver's to trim, so it would
+%% not round-trip as bytes): visible ASCII, obs-text, and inner SP, HTAB
+%% and colons.
+req_value() ->
+    ?LET({First, Mid, Last}, {field_vchar(), field_inner(), field_vchar()},
+         case Mid of
+             none -> <<First>>;
+             _ -> list_to_binary([First, Mid, Last])
+         end).
+
+%% Long values repeat a short random run rather than drawing every byte,
+%% which PropEr does one at a time.
+field_inner() ->
+    frequency([{1, exactly(none)},
+               {5, vector_of(range(0, 10), inner_char())},
+               {3, vector_of(range(10, 200), inner_char())},
+               {1, ?LET({Len, Run}, {range(200, 4000), non_empty(list(inner_char()))},
+                        lists:sublist(lists:append(
+                                        lists:duplicate(Len div length(Run) + 1, Run)),
+                                      Len))}]).
+
+vector_of(LenGen, ElemGen) ->
+    ?LET(N, LenGen, vector(N, ElemGen)).
+
+field_vchar() ->
+    frequency([{6, range($!, $~)}, {1, range(16#80, 16#FF)}]).
+
+inner_char() ->
+    frequency([{12, field_vchar()}, {1, $\s}, {1, $\t}, {1, $:}]).
+
+req_body() ->
+    frequency([{4, ?LET({Len, Seed}, {req_body_len(), non_empty(binary())},
+                        fill(Len, Seed, <<>>))},
+               {3, iodata_body()},
+               {2, {form, form_pairs()}}]).
+
+req_body_len() ->
+    frequency([{1, exactly(0)},
+               {3, range(1, 200)},
+               {2, range(200, 70000)},
+               {1, range(?EXPECT_THRESHOLD - 16, ?EXPECT_THRESHOLD + 16)},
+               {1, range(?EXPECT_THRESHOLD, 3 * ?EXPECT_THRESHOLD)}]).
+
+%% Nested iolists: bytes, binaries (empty ones too), nesting up to four
+%% deep and binary tails, which ei_decode_iodata must flatten exactly as
+%% iolist_to_binary does.
+iodata_body() ->
+    ?LET(Depth, frequency([{1, exactly(0)}, {4, range(1, 4)}]), iolist(Depth)).
+
+iolist(Depth) ->
+    oneof([vector_of(range(0, 6), io_elem(Depth)),
+           ?LET({L, Tail}, {vector_of(range(1, 6), io_elem(Depth)), io_binary()},
+                L ++ Tail)]).
+
+io_elem(0) ->
+    frequency([{3, range(0, 255)}, {3, io_binary()}]);
+io_elem(Depth) ->
+    frequency([{3, range(0, 255)}, {3, io_binary()},
+               {3, ?LAZY(iolist(Depth - 1))}]).
+
+io_binary() ->
+    frequency([{1, exactly(<<>>)},
+               {4, binary()},
+               {1, ?LET({Len, Seed}, {range(1000, 20000), non_empty(binary())},
+                        fill(Len, Seed, <<>>))}]).
+
+%% uri_string:compose_query/1 pairs: Unicode keys and values, including
+%% the characters form encoding has to escape, and bare keys (true).
+form_pairs() ->
+    non_empty(list({form_text(1), oneof([form_text(0), exactly(true)])})).
+
+form_text(Min) ->
+    ?LET(Cs, list(form_char()),
+         unicode:characters_to_binary(lists:duplicate(max(0, Min - length(Cs)), $k) ++ Cs)).
+
+form_char() ->
+    frequency([{6, range($a, $z)},
+               {3, elements(" &=+%?#/;:@!$'()*,[]")},
+               {2, range(16#A0, 16#2FF)},
+               {1, elements([16#4E2D, 16#6587, 16#1F600, 16#10FFFF])}]).
+
+%% =====================================================================
+%% Response headers
+%% =====================================================================
+
+response_headers_parsed(Config) ->
+    Port = ?config(port, Config),
+    run(?FORALL(Hops, response_chain(),
+                response_chain_ok(Port, Hops))).
+
+%% Hops: zero or more redirects, then the final response; any of them may
+%% be preceded by a 103 Early Hints response with headers of its own. Only
+%% the final response's headers may come back.
+response_chain_ok(Port, Hops) ->
+    Keys = [key() || _ <- Hops],
+    Url = katipo_prop_server:url(Port, hd(Keys)),
+    Next = tl(Keys) ++ [undefined],
+    _ = [katipo_prop_server:script(Port, K, {raw, hop_bytes(Hop, N)})
+         || {K, Hop, N} <- lists:zip3(Keys, Hops, Next)],
+    {_Hints, {Status, _Reason}, Final} = lists:last(Hops),
+    Expected = [{Name, Value} || {Name, _Ows1, Value, _Ows2} <- Final]
+        ++ [{<<"content-length">>, <<"2">>}],
+    {ok, #{status := GotStatus, headers := Got, body := <<"ok">>}} =
+        katipo:get(?POOL, Url, #{followlocation => true, maxredirs => 10}),
+    ?WHENFAIL(ct:pal("expected ~p~ngot ~p", [Expected, Got]),
+              GotStatus =:= Status andalso Got =:= Expected).
+
+hop_bytes({Hints, StatusLine, Headers}, Next) ->
+    iolist_to_binary(
+      [case Hints of
+           none -> [];
+           _ -> [<<"HTTP/1.1 103 Early Hints\r\n">>, header_lines(Hints), <<"\r\n">>]
+       end,
+       status_line(StatusLine),
+       header_lines(Headers),
+       case Next of
+           undefined -> <<"content-length: 2\r\n\r\nok">>;
+           _ -> [<<"location: /">>, Next, <<"\r\ncontent-length: 0\r\n\r\n">>]
+       end]).
+
+status_line({Status, Reason}) ->
+    [<<"HTTP/1.1 ">>, integer_to_binary(Status), Reason, <<"\r\n">>].
+
+header_lines(Headers) ->
+    [[Name, <<":">>, Ows1, Value, Ows2, <<"\r\n">>]
+     || {Name, Ows1, Value, Ows2} <- Headers].
+
+response_chain() ->
+    ?LET({Redirects, Final},
+         {vector_of(frequency([{3, exactly(0)}, {2, range(1, 4)}]), redirect_hop()),
+          final_hop()},
+         Redirects ++ [Final]).
+
+redirect_hop() ->
+    {hints(), {elements([301, 302, 303, 307, 308]), reason()}, resp_headers()}.
+
+final_hop() ->
+    {hints(), {elements([200, 203]), reason()}, resp_headers()}.
+
+hints() ->
+    frequency([{3, exactly(none)}, {1, non_empty(resp_headers())}]).
+
+%% With and without a reason phrase; curl must not care.
+reason() ->
+    elements([<<" OK">>, <<" ">>, <<>>, <<" Some Reason">>]).
+
+resp_headers() ->
+    ?LET(N, frequency([{1, exactly(0)}, {4, range(1, 8)}, {1, range(9, 40)}]),
+         vector(N, resp_header())).
+
+%% {Name, OWS, Value, OWS}: the value as it should be parsed, between
+%% optional whitespace that must be trimmed.
+resp_header() ->
+    {resp_header_name(), ows(), resp_value(), ows()}.
+
+%% Names that start like a status line probe header_cb's check for a new
+%% response, which must only fire on "HTTP/" or "HTTP " plus a digit.
+resp_header_name() ->
+    frequency([{8, header_name()},
+               {1, elements([<<"HTTP">>, <<"HTTP2">>, <<"Http-Version">>,
+                             <<"HTTP-1">>, <<"http">>])}]).
+
+ows() ->
+    frequency([{3, exactly(<<>>)},
+               {2, ?LET(Cs, vector_of(range(1, 3), elements([$\s, $\t])),
+                        list_to_binary(Cs))}]).
+
+resp_value() ->
+    frequency([{1, exactly(<<>>)}, {8, req_value()}]).
+
+%% =====================================================================
+%% Span URL sanitising
+%% =====================================================================
+
+span_url_sanitised(_Config) ->
+    run(?FORALL(Parts, url_parts(),
+                begin
+                    Url = compose(Parts),
+                    {Sanitized, Host} = katipo_span:parse_url_for_span(Url),
+                    Clean = compose(Parts#{userinfo := none, query := none,
+                                           fragment := none}),
+                    ?WHENFAIL(ct:pal("~p~n-> ~p", [Url, Sanitized]),
+                              Sanitized =:= Clean
+                                  andalso Host =:= expected_host(Parts)
+                                  andalso nomatch =:= binary:match(Sanitized,
+                                                                   <<?SECRET>>))
+                end)).
+
+%% Whatever the input, a pair of binaries comes back, and a non-empty URL
+%% never carries a query or fragment.
+span_url_never_crashes(_Config) ->
+    run(?FORALL(Url, any_url(),
+                case katipo_span:parse_url_for_span(Url) of
+                    {<<>>, <<>>} ->
+                        true;
+                    {S, H} when is_binary(S), is_binary(H) ->
+                        nomatch =:= binary:match(S, [<<"?">>, <<"#">>])
+                end)).
+
+any_url() ->
+    frequency([{2, binary()},
+               {2, ?LET(Cs, list(range(0, 255)), list_to_binary(Cs))},
+               {4, ?LET({Parts, Edits}, {url_parts(), list({nat(), range(0, 255)})},
+                        mutate(compose(Parts), Edits))}]).
+
+%% Overwrite bytes of a well-formed URL, so the input stays close to
+%% something uri_string parses.
+mutate(Url, Edits) ->
+    lists:foldl(fun({Pos, Byte}, U) when byte_size(U) > 0 ->
+                        P = Pos rem byte_size(U),
+                        <<A:P/binary, _, B/binary>> = U,
+                        <<A/binary, Byte, B/binary>>;
+                   (_, U) ->
+                        U
+                end, Url, Edits).
+
+url_parts() ->
+    ?LET({Scheme, Userinfo, Host, Port, Path, Query, Fragment},
+         {elements([<<"http">>, <<"https">>]),
+          frequency([{1, exactly(none)}, {3, userinfo()}]),
+          host(),
+          frequency([{2, exactly(none)}, {1, range(1, 65535)}]),
+          path(),
+          frequency([{1, exactly(none)}, {3, secret_text()}]),
+          frequency([{2, exactly(none)}, {1, secret_text()}])},
+         #{scheme => Scheme, userinfo => Userinfo, host => Host, port => Port,
+           path => Path, query => Query, fragment => Fragment}).
+
+compose(#{scheme := Scheme, userinfo := Userinfo, host := Host, port := Port,
+          path := Path, query := Query, fragment := Fragment}) ->
+    iolist_to_binary(
+      [Scheme, <<"://">>,
+       part(Userinfo, fun(U) -> [U, $@] end),
+       Host,
+       part(Port, fun(P) -> [$:, integer_to_binary(P)] end),
+       Path,
+       part(Query, fun(Q) -> [$?, Q] end),
+       part(Fragment, fun(F) -> [$#, F] end)]).
+
+part(none, _) -> [];
+part(V, F) -> F(V).
+
+expected_host(#{host := <<"[", Rest/binary>>}) ->
+    binary:part(Rest, 0, byte_size(Rest) - 1);
+expected_host(#{host := Host}) ->
+    Host.
+
+%% user, user:password or :password, with sub-delims and percent-encoding.
+userinfo() ->
+    ?LET({User, Password}, {secret_text(), oneof([none, secret_text()])},
+         case Password of
+             none -> User;
+             _ -> <<User/binary, ":", Password/binary>>
+         end).
+
+secret_text() ->
+    ?LET(Cs, list(oneof([unreserved(), sub_delim(), pct_encoded()])),
+         iolist_to_binary([?SECRET | Cs])).
+
+host() ->
+    ensure_binary(oneof([?LET(Labels, non_empty(list(label())), lists:join($., Labels)),
+           ?LET(Os, vector(4, range(0, 255)),
+                lists:join($., [integer_to_binary(O) || O <- Os])),
+           elements([<<"[::1]">>, <<"[2001:db8::7]">>, <<"[fe80::1:2:3:4]">>]),
+           exactly(<<"localhost">>)])).
+
+label() ->
+    ?LET(Cs, non_empty(list(frequency([{6, range($a, $z)}, {2, range($0, $9)},
+                                       {1, $-}]))),
+         list_to_binary(Cs)).
+
+%% Segments of lower-case unreserved characters, sub-delims, ':' and '@'
+%% (all legal in a path) and percent-encodings.
+path() ->
+    frequency([{1, exactly(<<>>)},
+               {4, ?LET(Segs, list(segment()),
+                        iolist_to_binary([[$/, S] || S <- Segs]))}]).
+
+segment() ->
+    ?LET(Cs, list(frequency([{6, range($a, $z)}, {2, range($0, $9)},
+                             {1, elements("-._~!$&'()*+,;=:@")},
+                             {1, pct_encoded()}])),
+         iolist_to_binary(Cs)).
+
+unreserved() ->
+    frequency([{4, range($a, $z)}, {4, range($A, $Z)}, {2, range($0, $9)},
+               {1, elements("-._~")}]).
+
+sub_delim() ->
+    elements("!$&'()*+,;=").
+
+pct_encoded() ->
+    ?LET(B, range(0, 255), [$% | binary_to_list(binary:encode_hex(<<B>>))]).
+
+%% =====================================================================
 %% Generator coverage
 %% =====================================================================
 
@@ -164,6 +579,56 @@ generators_cover_edges(_Config) ->
                    fun(<<Lead, _/binary>>) -> Lead; (_) -> none end,
                    [{starts_like_a_term, fun(Lead) -> Lead =:= 131 end,
                      0.15}]),
+    check_coverage(req_body, N, req_body(), fun classify_req_body/1,
+                   [{empty_binary, fun(C) -> C =:= {binary, 0} end, 0.02},
+                    {binary, fun({binary, _}) -> true; (_) -> false end, 0.3},
+                    {around_expect_threshold,
+                     fun({binary, S}) -> abs(S - ?EXPECT_THRESHOLD) =< 16;
+                        (_) -> false end, 0.03},
+                    {over_expect_threshold,
+                     fun({binary, S}) -> S > ?EXPECT_THRESHOLD; (_) -> false end, 0.05},
+                    {nested_iolist, fun({iolist, _, Nested}) -> Nested; (_) -> false end, 0.1},
+                    {improper_iolist, fun({iolist, Proper, _}) -> not Proper; (_) -> false end, 0.05},
+                    {form, fun(C) -> C =:= form end, 0.15}]),
+    check_coverage(form_pairs, N, form_pairs(), fun(KVs) -> KVs end,
+                   [{bare_key, fun(KVs) -> lists:keymember(true, 2, KVs) end, 0.2},
+                    {non_latin1,
+                     fun(KVs) -> lists:any(fun({K, V}) -> beyond_latin1(K) orelse
+                                                              beyond_latin1(V) end, KVs) end,
+                     0.2},
+                    {escapes,
+                     fun(KVs) -> lists:any(fun({K, _}) -> nomatch =/= binary:match(K, [<<"&">>, <<"=">>, <<"+">>, <<"%">>]) end, KVs) end,
+                     0.2}]),
+    check_coverage(req_headers, N, req_headers(), fun(Hs) -> Hs end,
+                   [{none, fun(Hs) -> Hs =:= [] end, 0.08},
+                    {many, fun(Hs) -> length(Hs) > 8 end, 0.08},
+                    {obs_text, fun(Hs) -> any_value(fun has_obs_text/1, Hs) end, 0.3},
+                    {inner_whitespace, fun(Hs) -> any_value(fun has_inner_ws/1, Hs) end, 0.3},
+                    {colon_in_value, fun(Hs) -> any_value(fun(V) -> nomatch =/= binary:match(V, <<":">>) end, Hs) end, 0.2},
+                    {long_value, fun(Hs) -> any_value(fun(V) -> byte_size(V) > 200 end, Hs) end, 0.08}]),
+    check_coverage(method, N, method(), fun(M) -> M end,
+                   [{M, fun(X) -> X =:= M end, 0.05}
+                    || M <- [get, post, put, patch, delete, options, head]]),
+    check_coverage(response_chain, N, response_chain(), fun(Hops) -> Hops end,
+                   [{direct, fun(Hops) -> length(Hops) =:= 1 end, 0.4},
+                    {redirected, fun(Hops) -> length(Hops) > 1 end, 0.25},
+                    {early_hints, fun(Hops) -> lists:any(fun({H, _, _}) -> H =/= none end, Hops) end, 0.2},
+                    {no_reason_phrase, fun(Hops) -> lists:any(fun({_, {_, R}, _}) -> R =:= <<>> end, Hops) end, 0.2}]),
+    check_coverage(resp_headers, N, resp_headers(), fun(Hs) -> Hs end,
+                   [{ows_around, fun(Hs) -> lists:any(fun({_, O1, _, O2}) -> O1 =/= <<>> andalso O2 =/= <<>> end, Hs) end, 0.3},
+                    {tab_in_ows, fun(Hs) -> lists:any(fun({_, O1, _, O2}) -> nomatch =/= binary:match(<<O1/binary, O2/binary>>, <<"\t">>) end, Hs) end, 0.3},
+                    {empty_value, fun(Hs) -> lists:any(fun({_, _, V, _}) -> V =:= <<>> end, Hs) end, 0.2},
+                    {status_like_name, fun(Hs) -> lists:any(fun({<<H, T, T2, P, _/binary>>, _, _, _}) -> string:uppercase([H, T, T2, P]) =:= "HTTP"; (_) -> false end, Hs) end, 0.2},
+                    {obs_text, fun(Hs) -> lists:any(fun({_, _, V, _}) -> has_obs_text(V) end, Hs) end, 0.3}]),
+    check_coverage(url_parts, N, url_parts(), fun(P) -> P end,
+                   [{userinfo, fun(#{userinfo := U}) -> U =/= none end, 0.5},
+                    {password, fun(#{userinfo := U}) -> is_binary(U) andalso nomatch =/= binary:match(U, <<":">>) end, 0.2},
+                    {query, fun(#{query := Q}) -> Q =/= none end, 0.5},
+                    {fragment, fun(#{fragment := F}) -> F =/= none end, 0.2},
+                    {bare, fun(#{userinfo := U, query := Q, fragment := F}) -> {U, Q, F} =:= {none, none, none} end, 0.02},
+                    {ipv6, fun(#{host := <<"[", _/binary>>}) -> true; (_) -> false end, 0.1},
+                    {port, fun(#{port := P}) -> P =/= none end, 0.2},
+                    {pct_in_path, fun(#{path := P}) -> nomatch =/= binary:match(P, <<"%">>) end, 0.15}]),
     ok.
 
 check_coverage(Name, N, Gen, Classify, Classes) ->
@@ -183,6 +648,34 @@ check_coverage(Name, N, Gen, Classify, Classes) ->
 sample(Gen) ->
     {ok, V} = proper_gen:pick(Gen, rand:uniform(42)),
     V.
+
+classify_req_body({form, _}) -> form;
+classify_req_body(B) when is_binary(B) -> {binary, byte_size(B)};
+classify_req_body(L) ->
+    {iolist, is_proper_list(L), has_sublist(L)}.
+
+is_proper_list([]) -> true;
+is_proper_list([_ | T]) -> is_proper_list(T);
+is_proper_list(_) -> false.
+
+has_sublist([H | _]) when is_list(H) -> true;
+has_sublist([_ | T]) -> has_sublist(T);
+has_sublist(_) -> false.
+
+any_value(Pred, Hs) ->
+    lists:any(fun({_, V}) -> Pred(V) end, Hs).
+
+has_obs_text(V) ->
+    lists:any(fun(B) -> B >= 16#80 end, binary_to_list(V)).
+
+has_inner_ws(V) ->
+    nomatch =/= binary:match(V, [<<" ">>, <<"\t">>]).
+
+beyond_latin1(true) -> false;
+beyond_latin1(B) -> lists:any(fun(C) -> C > 16#FF end, unicode:characters_to_list(B)).
+
+ensure_binary(Gen) ->
+    ?LET(V, Gen, iolist_to_binary(V)).
 
 key() ->
     integer_to_binary(erlang:unique_integer([positive])).
