@@ -6,7 +6,9 @@
 %%                 can chain 1xx and redirect responses;
 %%   echo          an empty 200, after recording the request as received,
 %%                 {Method, Headers, Body}, for received/1 to return (in the
-%%                 table rather than the response, so HEAD works too).
+%%                 table rather than the response, so HEAD works too);
+%%   {redirect, Status, NextKey}
+%%                 a bodyless redirect to NextKey's URL.
 %% Request headers are parsed from the raw bytes, not with {packet, http},
 %% so names and values arrive exactly as curl sent them. Not linked to its
 %% starter, so it outlives init_per_suite's process; stop/1 ends it, its
@@ -81,6 +83,9 @@ conn(S, Buf) ->
 
 respond({raw, Bytes}, _Key, _Method, _Headers, _Body) ->
     Bytes;
+respond({redirect, Status, Next}, _Key, _Method, _Headers, _Body) ->
+    [<<"HTTP/1.1 ">>, integer_to_binary(Status), <<" Redirect\r\nlocation: /">>, Next,
+     <<"\r\ncontent-length: 0\r\n\r\n">>];
 respond(echo, Key, Method, Headers, Body) ->
     true = ets:insert(?MODULE, {{received, Key}, {Method, Headers, Body}}),
     <<"HTTP/1.1 200 OK\r\ncontent-length: 0\r\n\r\n">>.

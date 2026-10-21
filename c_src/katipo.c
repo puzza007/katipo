@@ -977,6 +977,13 @@ static void set_method(long method, ConnInfo *conn) {
   }
   curl_easy_setopt(conn->easy, CURLOPT_POSTFIELDS, conn->post_data);
   curl_easy_setopt(conn->easy, CURLOPT_POSTFIELDSIZE, conn->post_data_size);
+  /* curl handles any POSTFIELDS request as a POST, and on a followed 301,
+   * 302 or 303 it drops a POST's body. For POST that is the usual switch to
+   * GET; for any other method the CUSTOMREQUEST name survives the redirect,
+   * so the method was re-sent without its body. Re-send both. */
+  if (method != KATIPO_POST) {
+    curl_easy_setopt(conn->easy, CURLOPT_POSTREDIR, (long)CURL_REDIR_POST_ALL);
+  }
 }
 
 static void free_eopts(EasyOpts *eopts);
