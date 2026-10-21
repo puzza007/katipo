@@ -1,0 +1,9 @@
+out/
+corpus/
+findings/
+*.profraw
+*.profdata
+crash-*
+leak-*
+timeout-*
+oom-*
