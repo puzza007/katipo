@@ -13,7 +13,7 @@
 %%     with surrounding OWS trimmed, obs-fold continuations joined with a
 %%     single space, and nothing else changed), and after
 %%     1xx responses and followed redirects only the final response's
-%%     headers are returned;
+%%     headers are returned, never its trailers or another response's;
 %%   * span URL sanitising never leaks userinfo, query or fragment, and
 %%     never crashes on arbitrary input.
 %%
@@ -78,7 +78,7 @@ buffered_body_round_trips(Config) ->
                     Url = raw_response(Port, Body, Headers, Framing),
                     {ok, #{status := 200, headers := Got, body := B}} =
                         katipo:get(?POOL, Url),
-                    B =:= Body andalso has_headers(Headers, Got)
+                    B =:= Body andalso own_headers(Got) =:= Headers
                         andalso bounded(B)
                 end)).
 
@@ -90,7 +90,7 @@ streamed_body_round_trips(Config) ->
                     {ok, Ref} = katipo:async_get(?POOL, Url, #{stream => true}),
                     {200, Got, Chunks} = collect(Ref),
                     iolist_to_binary(Chunks) =:= Body
-                        andalso has_headers(Headers, Got)
+                        andalso own_headers(Got) =:= Headers
                         andalso lists:all(fun bounded/1, Chunks)
                 end)).
 
@@ -104,9 +104,10 @@ raw_response(Port, Body, Headers, Framing) ->
             content_length ->
                 {raw, [Head, <<"content-length: ">>, integer_to_binary(byte_size(Body)),
                        <<"\r\n\r\n">>, Body]};
-            {chunked, Sizes, Case, Ext} ->
+            {chunked, Sizes, Case, Ext, Trailers} ->
                 {raw, [Head, <<"transfer-encoding: chunked\r\n\r\n">>,
-                       chunks(Body, Sizes, Case, Ext), <<"0\r\n\r\n">>]};
+                       chunks(Body, Sizes, Case, Ext), <<"0\r\n">>,
+                       header_lines(Trailers), <<"\r\n">>]};
             close ->
                 {raw_close, [Head, <<"connection: close\r\n\r\n">>, Body]}
         end,
@@ -134,8 +135,13 @@ bounded(B) when byte_size(B) =< ?HEAP_BIN_LIMIT ->
 bounded(B) ->
     binary:referenced_byte_size(B) =< 2 * byte_size(B).
 
-has_headers(Sent, Got) ->
-    lists:all(fun(H) -> lists:member(H, Got) end, Sent).
+%% The headers a response came back with, less the framing ones the test
+%% adds: exactly the generated ones, so a trailer that leaks in fails.
+own_headers(Got) ->
+    [H || H = {K, _} <- Got,
+          not lists:member(string:lowercase(K), [<<"content-length">>,
+                                                 <<"transfer-encoding">>,
+                                                 <<"connection">>])].
 
 collect(Ref) ->
     receive
@@ -155,13 +161,20 @@ collect_chunks(Ref, Acc) ->
     end.
 
 %% Content-Length most often; chunked with random chunk sizes (from one
-%% byte to past curl's 16 KB buffer), hex case and chunk extensions; or
-%% delimited by the connection closing.
+%% byte to past curl's 16 KB buffer), hex case, chunk extensions and
+%% sometimes trailers; or delimited by the connection closing.
 framing() ->
     frequency([{3, exactly(content_length)},
                {2, {chunked, non_empty(list(chunk_size())), elements([upper, lower]),
-                    elements([<<>>, <<";ext=1">>, <<"; name=\"q\"">>])}},
+                    elements([<<>>, <<";ext=1">>, <<"; name=\"q\"">>]),
+                    trailers()}},
                {1, exactly(close)}]).
+
+%% Trailer fields after a chunked body: none, or some with the same shapes
+%% as response headers (but never folded).
+trailers() ->
+    frequency([{2, exactly([])},
+               {1, non_empty(list({resp_header_name(), ows(), req_value(), ows()}))}]).
 
 %% Large sizes are built from 4 KB steps: PropEr draws from a wide range
 %% mostly near its low end, which would leave curl's 16 KB buffer untested.
@@ -480,15 +493,22 @@ response_chain_ok(Port, Hops) ->
     Next = tl(Keys) ++ [undefined],
     _ = [katipo_prop_server:script(Port, K, {raw, hop_bytes(Hop, N)})
          || {K, Hop, N} <- lists:zip3(Keys, Hops, Next)],
-    {_Hints, {Status, _Reason}, Final} = lists:last(Hops),
+    {_Hints, {Status, _Reason}, Final, Trailers} = lists:last(Hops),
+    Framing = case Trailers of
+                  none -> {<<"content-length">>, <<"2">>};
+                  _ -> {<<"transfer-encoding">>, <<"chunked">>}
+              end,
     Expected = [{Name, value_of(Value)} || {Name, _Ows1, Value, _Ows2} <- Final]
-        ++ [{<<"content-length">>, <<"2">>}],
+        ++ [Framing],
     {ok, #{status := GotStatus, headers := Got, body := <<"ok">>}} =
         katipo:get(?POOL, Url, #{followlocation => true, maxredirs => 10}),
     ?WHENFAIL(ct:pal("expected ~p~ngot ~p", [Expected, Got]),
               GotStatus =:= Status andalso Got =:= Expected).
 
-hop_bytes({Hints, StatusLine, Headers}, Next) ->
+%% A hop with trailers sends its body (the final one's "ok", a redirect's
+%% nothing) chunked, with the trailers after it.
+hop_bytes({Hints, StatusLine, Headers, Trailers}, Next) ->
+    Body = case Next of undefined -> <<"ok">>; _ -> <<>> end,
     iolist_to_binary(
       [case Hints of
            none -> [];
@@ -497,8 +517,17 @@ hop_bytes({Hints, StatusLine, Headers}, Next) ->
        status_line(StatusLine),
        header_lines(Headers),
        case Next of
-           undefined -> <<"content-length: 2\r\n\r\nok">>;
-           _ -> [<<"location: /">>, Next, <<"\r\ncontent-length: 0\r\n\r\n">>]
+           undefined -> [];
+           _ -> [<<"location: /">>, Next, <<"\r\n">>]
+       end,
+       case Trailers of
+           none ->
+               [<<"content-length: ">>, integer_to_binary(byte_size(Body)),
+                <<"\r\n\r\n">>, Body];
+           _ ->
+               [<<"transfer-encoding: chunked\r\n\r\n">>,
+                chunks(Body, [1], upper, <<>>), <<"0\r\n">>,
+                header_lines(Trailers), <<"\r\n">>]
        end]).
 
 status_line({Status, Reason}) ->
@@ -530,10 +559,15 @@ response_chain() ->
          Redirects ++ [Final]).
 
 redirect_hop() ->
-    {hints(), {elements([301, 302, 303, 307, 308]), reason()}, resp_headers()}.
+    {hints(), {elements([301, 302, 303, 307, 308]), reason()}, resp_headers(),
+     hop_trailers()}.
 
 final_hop() ->
-    {hints(), {elements([200, 203]), reason()}, resp_headers()}.
+    {hints(), {elements([200, 203]), reason()}, resp_headers(), hop_trailers()}.
+
+%% none: a Content-Length body; a list: a chunked body with these trailers.
+hop_trailers() ->
+    frequency([{2, exactly(none)}, {1, trailers()}]).
 
 hints() ->
     frequency([{3, exactly(none)}, {1, non_empty(resp_headers())}]).
@@ -720,10 +754,11 @@ generators_cover_edges(_Config) ->
                     {over_16k, fun(S) -> S > 16388 end, 0.03}]),
     check_coverage(framing, N, framing(), fun(F) -> F end,
                    [{content_length, fun(F) -> F =:= content_length end, 0.3},
-                    {chunked, fun({chunked, _, _, _}) -> true; (_) -> false end, 0.2},
-                    {one_byte_chunks, fun({chunked, Sizes, _, _}) -> lists:member(1, Sizes); (_) -> false end, 0.02},
-                    {chunk_over_16k, fun({chunked, Sizes, _, _}) -> lists:any(fun(S) -> S > 16384 end, Sizes); (_) -> false end, 0.05},
-                    {chunk_extension, fun({chunked, _, _, Ext}) -> Ext =/= <<>>; (_) -> false end, 0.1},
+                    {chunked, fun({chunked, _, _, _, _}) -> true; (_) -> false end, 0.2},
+                    {one_byte_chunks, fun({chunked, Sizes, _, _, _}) -> lists:member(1, Sizes); (_) -> false end, 0.02},
+                    {chunk_over_16k, fun({chunked, Sizes, _, _, _}) -> lists:any(fun(S) -> S > 16384 end, Sizes); (_) -> false end, 0.05},
+                    {chunk_extension, fun({chunked, _, _, Ext, _}) -> Ext =/= <<>>; (_) -> false end, 0.1},
+                    {trailers, fun({chunked, _, _, _, T}) -> T =/= []; (_) -> false end, 0.08},
                     {close, fun(F) -> F =:= close end, 0.1}]),
     check_coverage(resp_body_lead, N, resp_body(),
                    fun(<<Lead, _/binary>>) -> Lead; (_) -> none end,
@@ -770,8 +805,10 @@ generators_cover_edges(_Config) ->
     check_coverage(response_chain, N, response_chain(), fun(Hops) -> Hops end,
                    [{direct, fun(Hops) -> length(Hops) =:= 1 end, 0.4},
                     {redirected, fun(Hops) -> length(Hops) > 1 end, 0.25},
-                    {early_hints, fun(Hops) -> lists:any(fun({H, _, _}) -> H =/= none end, Hops) end, 0.2},
-                    {no_reason_phrase, fun(Hops) -> lists:any(fun({_, {_, R}, _}) -> R =:= <<>> end, Hops) end, 0.2}]),
+                    {early_hints, fun(Hops) -> lists:any(fun({H, _, _, _}) -> H =/= none end, Hops) end, 0.2},
+                    {no_reason_phrase, fun(Hops) -> lists:any(fun({_, {_, R}, _, _}) -> R =:= <<>> end, Hops) end, 0.2},
+                    {final_trailers, fun(Hops) -> element(4, lists:last(Hops)) =/= none andalso element(4, lists:last(Hops)) =/= [] end, 0.1},
+                    {redirect_trailers, fun(Hops) -> lists:any(fun({_, _, _, T}) -> is_list(T) andalso T =/= [] end, lists:droplast(Hops)) end, 0.05}]),
     check_coverage(resp_headers, N, resp_headers(), fun(Hs) -> Hs end,
                    [{ows_around, fun(Hs) -> lists:any(fun({_, O1, _, O2}) -> O1 =/= <<>> andalso O2 =/= <<>> end, Hs) end, 0.3},
                     {tab_in_ows, fun(Hs) -> lists:any(fun({_, O1, _, O2}) -> nomatch =/= binary:match(<<O1/binary, O2/binary>>, <<"\t">>) end, Hs) end, 0.3},
