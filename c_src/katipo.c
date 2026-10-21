@@ -1476,11 +1476,11 @@ static void free_eopts(EasyOpts *eopts) {
   free(eopts->curlopt_userpwd);
 }
 
-static void erl_input(struct bufferevent *ev, void *arg) {
-  (void)ev; /* reads global->from_erlang, not this handle */
-  u_int32_t len;
-  size_t data_read;
-  char *buf;
+/* Decode and act on one complete frame from Erlang: a request, or a
+ * cancel or flow command. buf holds the term, version byte first; the
+ * caller frees it. Split out of erl_input so the decoding can be fuzzed
+ * without the pipe (see fuzz/). */
+static void handle_frame(GlobalInfo *global, char *buf) {
   int index;
   int version;
   int arity;
@@ -1488,6 +1488,140 @@ static void erl_input(struct bufferevent *ev, void *arg) {
   int size;
   long sizel;
   long method;
+
+  /* Per-request state — initialized here so goto cleanup can free safely */
+  erlang_pid *pid = NULL;
+  erlang_ref *ref = NULL;
+  int have_identity = 0;
+  char *url = NULL;
+  struct curl_slist *req_headers = NULL;
+  struct curl_slist *req_cookies = NULL;
+  char *post_data = NULL;
+  int post_data_size = 0;
+  EasyOpts eopts = {0};
+
+  index = 0;
+  pid = malloc(sizeof(*pid));
+  ref = malloc(sizeof(*ref));
+  if (pid == NULL || ref == NULL) {
+    goto cleanup;
+  }
+
+  if (ei_decode_version(buf, &index, &version) ||
+      ei_decode_tuple_header(buf, &index, &arity) ||
+      ei_decode_pid(buf, &index, pid) ||
+      ei_decode_ref(buf, &index, ref)) {
+    goto cleanup;
+  }
+
+  /* Cancel command: {Pid, Ref, cancel} (arity 3). Abort the matching
+   * in-flight transfer if we still have it; no response is sent.
+   * Commands are discriminated by arity plus their tag atom (requests
+   * are 8-tuples); malformed commands are dropped silently -- replying
+   * would be delivered as a terminal message for a healthy request. */
+  if (arity == 3) {
+    char cancel_atom[MAXATOMLEN];
+    if (ei_decode_atom(buf, &index, cancel_atom) ||
+        strcmp(cancel_atom, "cancel") != 0) {
+      fprintf(stderr, "ERROR: Couldn't decode cancel command\n");
+    } else {
+      cancel_conn(global, pid, ref);
+    }
+    free(pid);
+    free(ref);
+    return;
+  }
+
+  /* Flow command: {Pid, Ref, flow, N} (arity 4). Grant N more chunk
+   * credits to the matching streaming transfer. */
+
+  if (arity == 4) {
+    char flow_atom[MAXATOMLEN];
+    long flow_n;
+    if (ei_decode_atom(buf, &index, flow_atom) ||
+        strcmp(flow_atom, "flow") != 0 ||
+        ei_decode_long(buf, &index, &flow_n)) {
+      fprintf(stderr, "ERROR: Couldn't decode flow command\n");
+    } else {
+      flow_conn(global, pid, ref, flow_n);
+    }
+    free(pid);
+    free(ref);
+    return;
+  }
+
+  if (ei_decode_long(buf, &index, &method) ||
+      ei_get_type(buf, &index, &erl_type, &size)) {
+    goto cleanup;
+  }
+  /* Only now do we consider the identity usable for a parse-error reply:
+   * a request with an undecodable method is dropped silently (have_identity
+   * stays 0), matching the behaviour before cancellation was added. */
+  have_identity = 1;
+
+  url = (char *)malloc(size + 1);
+  if (url == NULL) {
+    goto cleanup;
+  }
+  if (ei_decode_binary(buf, &index, url, &sizel)) {
+    goto cleanup;
+  }
+  url[size] = '\0';
+
+  if (parse_slist(buf, &index, &req_headers) != 0) {
+    goto cleanup;
+  }
+
+  if (parse_slist(buf, &index, &req_cookies) != 0) {
+    goto cleanup;
+  }
+
+  if (parse_body(buf, &index, &post_data, &post_data_size) != 0) {
+    goto cleanup;
+  }
+
+  eopts = (EasyOpts){
+      .curlopt_connecttimeout_ms = 30000,
+      .curlopt_ssl_verifyhost = 2,
+      .curlopt_ssl_verifypeer = 1,
+      .curlopt_timeout_ms = 30000,
+      .curlopt_maxredirs = 9,
+      .curlopt_http_auth = -1,
+      .curlopt_dns_cache_timeout = 60,
+      .curlopt_ca_cache_timeout = 86400,
+      .curlopt_pipewait = 1,
+      .curlopt_stream_window = -1,
+  };
+
+  if (parse_eopts(buf, &index, &eopts) != 0) {
+    goto cleanup;
+  }
+
+  new_conn(method, url, req_headers, req_cookies, post_data,
+           post_data_size, eopts, pid, ref, global);
+
+  return;
+
+cleanup:
+  if (have_identity) {
+    send_parse_error_to_erlang(global, pid, ref, "Couldn't read req");
+  } else {
+    fprintf(stderr, "ERROR: Couldn't decode request identity (pid/ref)\n");
+  }
+  free(pid);
+  free(ref);
+  free(url);
+  free(post_data);
+  curl_slist_free_all(req_headers);
+  curl_slist_free_all(req_cookies);
+  free_eopts(&eopts);
+}
+
+static void erl_input(struct bufferevent *ev, void *arg) {
+  (void)ev; /* reads global->from_erlang, not this handle */
+  u_int32_t len;
+  size_t data_read;
+  char *buf;
 
   GlobalInfo *global = (GlobalInfo *)arg;
   struct evbuffer *input = bufferevent_get_input(global->from_erlang);
@@ -1513,7 +1647,8 @@ static void erl_input(struct bufferevent *ev, void *arg) {
      * can no longer trust subsequent length prefixes), so exit and let the
      * supervisor restart the port with a fresh pipe. Well-framed terms that
      * merely decode to the wrong shape are handled gracefully via the
-     * `goto cleanup` path below, which replies with an error and continues. */
+     * `goto cleanup` path in handle_frame, which replies with an error and
+     * continues. */
     {
       unsigned char first_byte;
       if (evbuffer_copyout(input, &first_byte, 1) != 1 || first_byte != 131) {
@@ -1530,135 +1665,7 @@ static void erl_input(struct bufferevent *ev, void *arg) {
       errx(2, "Wanted to read %u bytes data but got %zu", len, data_read);
     }
 
-    /* Per-request state — initialized here so goto cleanup can free safely */
-    erlang_pid *pid = NULL;
-    erlang_ref *ref = NULL;
-    int have_identity = 0;
-    char *url = NULL;
-    struct curl_slist *req_headers = NULL;
-    struct curl_slist *req_cookies = NULL;
-    char *post_data = NULL;
-    int post_data_size = 0;
-    EasyOpts eopts = {0};
-
-    index = 0;
-    pid = malloc(sizeof(*pid));
-    ref = malloc(sizeof(*ref));
-    if (pid == NULL || ref == NULL) {
-      goto cleanup;
-    }
-
-    if (ei_decode_version(buf, &index, &version) ||
-        ei_decode_tuple_header(buf, &index, &arity) ||
-        ei_decode_pid(buf, &index, pid) ||
-        ei_decode_ref(buf, &index, ref)) {
-      goto cleanup;
-    }
-
-    /* Cancel command: {Pid, Ref, cancel} (arity 3). Abort the matching
-     * in-flight transfer if we still have it; no response is sent.
-     * Commands are discriminated by arity plus their tag atom (requests
-     * are 8-tuples); malformed commands are dropped silently -- replying
-     * would be delivered as a terminal message for a healthy request. */
-    if (arity == 3) {
-      char cancel_atom[MAXATOMLEN];
-      if (ei_decode_atom(buf, &index, cancel_atom) ||
-          strcmp(cancel_atom, "cancel") != 0) {
-        fprintf(stderr, "ERROR: Couldn't decode cancel command\n");
-      } else {
-        cancel_conn(global, pid, ref);
-      }
-      free(pid);
-      free(ref);
-      free(buf);
-      continue;
-    }
-
-    /* Flow command: {Pid, Ref, flow, N} (arity 4). Grant N more chunk
-     * credits to the matching streaming transfer. */
-
-    if (arity == 4) {
-      char flow_atom[MAXATOMLEN];
-      long flow_n;
-      if (ei_decode_atom(buf, &index, flow_atom) ||
-          strcmp(flow_atom, "flow") != 0 ||
-          ei_decode_long(buf, &index, &flow_n)) {
-        fprintf(stderr, "ERROR: Couldn't decode flow command\n");
-      } else {
-        flow_conn(global, pid, ref, flow_n);
-      }
-      free(pid);
-      free(ref);
-      free(buf);
-      continue;
-    }
-
-    if (ei_decode_long(buf, &index, &method) ||
-        ei_get_type(buf, &index, &erl_type, &size)) {
-      goto cleanup;
-    }
-    /* Only now do we consider the identity usable for a parse-error reply:
-     * a request with an undecodable method is dropped silently (have_identity
-     * stays 0), matching the behaviour before cancellation was added. */
-    have_identity = 1;
-
-    url = (char *)malloc(size + 1);
-    if (url == NULL) {
-      goto cleanup;
-    }
-    if (ei_decode_binary(buf, &index, url, &sizel)) {
-      goto cleanup;
-    }
-    url[size] = '\0';
-
-    if (parse_slist(buf, &index, &req_headers) != 0) {
-      goto cleanup;
-    }
-
-    if (parse_slist(buf, &index, &req_cookies) != 0) {
-      goto cleanup;
-    }
-
-    if (parse_body(buf, &index, &post_data, &post_data_size) != 0) {
-      goto cleanup;
-    }
-
-    eopts = (EasyOpts){
-        .curlopt_connecttimeout_ms = 30000,
-        .curlopt_ssl_verifyhost = 2,
-        .curlopt_ssl_verifypeer = 1,
-        .curlopt_timeout_ms = 30000,
-        .curlopt_maxredirs = 9,
-        .curlopt_http_auth = -1,
-        .curlopt_dns_cache_timeout = 60,
-        .curlopt_ca_cache_timeout = 86400,
-        .curlopt_pipewait = 1,
-        .curlopt_stream_window = -1,
-    };
-
-    if (parse_eopts(buf, &index, &eopts) != 0) {
-      goto cleanup;
-    }
-
-    new_conn(method, url, req_headers, req_cookies, post_data,
-             post_data_size, eopts, pid, ref, arg);
-
-    free(buf);
-    continue;
-
-cleanup:
-    if (have_identity) {
-      send_parse_error_to_erlang(global, pid, ref, "Couldn't read req");
-    } else {
-      fprintf(stderr, "ERROR: Couldn't decode request identity (pid/ref)\n");
-    }
-    free(pid);
-    free(ref);
-    free(url);
-    free(post_data);
-    curl_slist_free_all(req_headers);
-    curl_slist_free_all(req_cookies);
-    free_eopts(&eopts);
+    handle_frame(global, buf);
     free(buf);
   }
 }
@@ -1689,12 +1696,53 @@ static void erlang_init(GlobalInfo *global) {
   bufferevent_enable(global->to_erlang, EV_WRITE);
 }
 
+/* Everything the port sets up before reading from Erlang: ei, the event
+ * base, the curl multi and share handles and the multi's callbacks. Split
+ * out of main so the fuzz targets start from the same state. */
+static void global_init(GlobalInfo *global) {
+  memset(global, 0, sizeof(*global));
+
+  if (ei_init() != 0) {
+    errx(2, "ei_init failed");
+  }
+
+  global->evbase = event_base_new();
+  if (!global->evbase) {
+    errx(2, "event_base_new failed");
+  }
+
+  if (curl_global_init(CURL_GLOBAL_ALL)) {
+    errx(2, "curl_global_init failed");
+  }
+  global->multi = curl_multi_init();
+  if (!global->multi) {
+    errx(2, "curl_multi_init failed");
+  }
+  global->shobject = curl_share_init();
+  if (!global->shobject) {
+    errx(2, "curl_share_init failed");
+  }
+  if (CURLSHE_OK != curl_share_setopt(global->shobject, CURLSHOPT_SHARE, CURL_LOCK_DATA_SSL_SESSION)) {
+    errx(2, "curl_share_setopt SSL_SESSION failed");
+  }
+  if (CURLSHE_OK != curl_share_setopt(global->shobject, CURLSHOPT_SHARE, CURL_LOCK_DATA_DNS)) {
+    errx(2, "curl_share_setopt DNS failed");
+  }
+  global->timer_event = evtimer_new(global->evbase, timer_cb, global);
+  global->to_get = 0;
+  global->ver = curl_version_info(CURLVERSION_NOW);
+
+  curl_multi_setopt(global->multi, CURLMOPT_SOCKETFUNCTION, sock_cb);
+  curl_multi_setopt(global->multi, CURLMOPT_SOCKETDATA, global);
+  curl_multi_setopt(global->multi, CURLMOPT_TIMERFUNCTION, multi_timer_cb);
+  curl_multi_setopt(global->multi, CURLMOPT_TIMERDATA, global);
+}
+
 int main(int argc, char **argv) {
   GlobalInfo global;
   int option_index = 0;
   int c;
   long pipelining = 0;
-  curl_version_info_data *ver;
 
   struct option long_options[] = {
     { "pipelining", required_argument, 0, 'p' },
@@ -1702,8 +1750,6 @@ int main(int argc, char **argv) {
     { "max-concurrent-streams", required_argument, 0, 's' },
     { 0, 0, 0, 0 }
   };
-
-  memset(&global, 0, sizeof(GlobalInfo));
 
   /* Cap RLIMIT_NOFILE to prevent ei_init() failure.
    * ei_init() calls sysconf(_SC_OPEN_MAX) and allocates a tracking structure
@@ -1717,41 +1763,7 @@ int main(int argc, char **argv) {
     }
   }
 
-  if (ei_init() != 0) {
-    errx(2, "ei_init failed");
-  }
-
-  global.evbase = event_base_new();
-  if (!global.evbase) {
-    errx(2, "event_base_new failed");
-  }
-
-  if (curl_global_init(CURL_GLOBAL_ALL)) {
-    errx(2, "curl_global_init failed");
-  }
-  global.multi = curl_multi_init();
-  if (!global.multi) {
-    errx(2, "curl_multi_init failed");
-  }
-  global.shobject = curl_share_init();
-  if (!global.shobject) {
-    errx(2, "curl_share_init failed");
-  }
-  if (CURLSHE_OK != curl_share_setopt(global.shobject, CURLSHOPT_SHARE, CURL_LOCK_DATA_SSL_SESSION)) {
-    errx(2, "curl_share_setopt SSL_SESSION failed");
-  }
-  if (CURLSHE_OK != curl_share_setopt(global.shobject, CURLSHOPT_SHARE, CURL_LOCK_DATA_DNS)) {
-    errx(2, "curl_share_setopt DNS failed");
-  }
-  global.timer_event = evtimer_new(global.evbase, timer_cb, &global);
-  global.to_get = 0;
-  ver = curl_version_info(CURLVERSION_NOW);
-  global.ver = ver;
-
-  curl_multi_setopt(global.multi, CURLMOPT_SOCKETFUNCTION, sock_cb);
-  curl_multi_setopt(global.multi, CURLMOPT_SOCKETDATA, &global);
-  curl_multi_setopt(global.multi, CURLMOPT_TIMERFUNCTION, multi_timer_cb);
-  curl_multi_setopt(global.multi, CURLMOPT_TIMERDATA, &global);
+  global_init(&global);
 
   while (1) {
     c = getopt_long(argc, argv, "p:c:s:", long_options, &option_index);
