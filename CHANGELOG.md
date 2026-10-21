@@ -5,6 +5,14 @@ All notable changes to this project are documented here. This project follows
 
 ## [Unreleased]
 
+## [2.1.0] — 2026-10-21
+
+Three fixes can change what an existing caller sees: a body passed to
+`get`, `delete` or `options` is now sent rather than dropped, a `head`
+request with a body now fails with `bad_opts`, and a `put` or `patch`
+body sent without a `content-type` header no longer goes out as
+`application/x-www-form-urlencoded`. Each is described below.
+
 ### Changed
 - Buffered response bodies and streamed chunks now follow their term in
   the port frame instead of travelling inside it, so the worker takes the
