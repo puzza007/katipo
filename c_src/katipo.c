@@ -90,6 +90,11 @@ typedef struct _ConnInfo {
   char error[CURL_ERROR_SIZE];
   size_t num_headers;
   ei_x_buff resp_headers; /* num_headers binaries, already encoded */
+  /* The current header block is an interim (1xx) response's, and the
+   * header block of a non-interim response has ended, so any header line
+   * before the next status line is a trailer. See header_cb. */
+  int interim;
+  int headers_ended;
   struct curl_slist *req_headers;
   struct curl_slist *req_cookies;
   long response_code;
@@ -448,6 +453,14 @@ static int is_status_line(const char *header, size_t len) {
   return len > 5 && memcmp(header, "HTTP", 4) == 0 &&
          (header[4] == '/' || header[4] == ' ') &&
          header[5] >= '0' && header[5] <= '9';
+}
+
+/* A status line whose code is 1xx: the first digit after the space that
+ * follows the protocol version. */
+static int is_interim_status_line(const char *header, size_t len) {
+  const char *space = memchr(header + 4, ' ', len - 4);
+
+  return space != NULL && space + 1 < header + len && space[1] == '1';
 }
 
 static void encode_metrics(ei_x_buff *result, ConnInfo *conn) {
@@ -920,12 +933,26 @@ static size_t header_cb(void *ptr, size_t size, size_t nmemb, void *data) {
     header_len--;
   }
   if (header_len == 0) {
-    return realsize; /* the blank line ending a header block */
+    /* The blank line ending a header block. */
+    if (!conn->interim) {
+      conn->headers_ended = 1;
+    }
+    return realsize;
   }
-  if (conn->num_headers > 0 && is_status_line(src, header_len)) {
-    /* A new response (after a redirect or 100-continue): start over. */
-    conn->resp_headers.index = 0;
-    conn->num_headers = 0;
+  if (is_status_line(src, header_len)) {
+    if (conn->num_headers > 0) {
+      /* A new response (after a redirect or 1xx): start over. */
+      conn->resp_headers.index = 0;
+      conn->num_headers = 0;
+    }
+    conn->interim = is_interim_status_line(src, header_len);
+    conn->headers_ended = 0;
+  } else if (conn->headers_ended) {
+    /* A trailer (chunked or HTTP/2 and 3). Streaming has already sent the
+     * headers by the time one arrives, so trailers are dropped in both
+     * modes rather than merged into the headers when buffered: RFC 9110
+     * 6.5.1 forbids merging them unless each field allows it. */
+    return realsize;
   }
   /* Returning short fails just this transfer, with CURLE_WRITE_ERROR. */
   if (header_len > INT_MAX ||

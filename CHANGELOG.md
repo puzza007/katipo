@@ -42,6 +42,10 @@ All notable changes to this project are documented here. This project follows
   value was returned as is. Folded values are now joined with a single
   space, and CR, LF and NUL in a value are replaced with a space, as RFC
   9110 allows; newer libcurl already unfolds, and rejects those bytes.
+- Trailers sent after a chunked (or HTTP/2 or HTTP/3) response body
+  were appended to a buffered response's `headers`, and to a streamed
+  one's when its body was empty, which RFC 9110 forbids. They are now
+  dropped in both modes, so `headers` is only the header section.
 
 ## [2.0.1] — 2026-10-19
 
