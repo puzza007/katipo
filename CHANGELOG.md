@@ -9,6 +9,13 @@ All notable changes to this project are documented here. This project follows
 - A `capath`, `cacert`, `sslcert` or `sslkey` string that is not valid
   text (such as a lone surrogate, or bytes that are not UTF-8) crashed the
   calling process with `try_clause` instead of returning `bad_opts`.
+- An integer option larger than 2147483647 (`timeout_ms`,
+  `connecttimeout_ms`, `maxredirs`, `dns_cache_timeout`,
+  `ca_cache_timeout` or `stream_window`) failed with an unhelpful
+  `"Couldn't read req"` from the C port, which reads only 32-bit integers.
+  It now fails with `bad_opts` naming the option, and the option types
+  give the bounds: `1..2147483647`, or from `-1` for `maxredirs`,
+  `dns_cache_timeout` and `ca_cache_timeout`.
 
 ## [2.1.0] — 2026-10-21
 
