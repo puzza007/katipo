@@ -9,6 +9,12 @@ All notable changes to this project are documented here. This project follows
 - `unix_socket_path` accepts a string as well as a binary, like the other
   path options, and like them fails with `bad_opts` for a path holding a
   NUL byte.
+- Exported types for what callers receive: `error()` for the error map,
+  `response_map()` for a successful response, and `async_message()` for
+  every message an async request can deliver, buffered or streamed.
+  `check_opts/1` now takes bare options as well as a full request, and it
+  and `katipo_pool:start/3` return `{error, error()}` rather than
+  `{error, map()}`.
 
 ### Fixed
 - With libcurl 8.10.0 to 8.11.0, a request's timeout could fire late,

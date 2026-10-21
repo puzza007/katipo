@@ -39,7 +39,9 @@ by the `reply_to` option):
 ```
 
 Use `await/1,2` to block until the response arrives, or `cancel/2` to abort an
-in-flight request (no response is then delivered).
+in-flight request (no response is then delivered). `t:async_message/0` lists
+every message an async request can deliver, so a receive clause can be typed
+against it.
 
 If the pool worker handling an in-flight async request dies (e.g. its port
 crashes), a `{katipo_error, Ref, #{code => worker_died}}` message is delivered
@@ -547,6 +549,6 @@ are checked under the async API's rules (the superset): `stream => true`
 passes here but is additionally rejected by `req/2` and the synchronous
 wrappers.
 """.
--spec check_opts(request()) -> ok | {error, map()}.
+-spec check_opts(request() | opts()) -> ok | {error, error()}.
 check_opts(Opts) when is_map(Opts) ->
     katipo_req:check_opts(Opts).
