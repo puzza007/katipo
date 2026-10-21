@@ -11,7 +11,7 @@ connections per worker.
 ## Install
 
 ```erlang
-{deps, [{katipo, "2.0.1"}]}.
+{deps, [{katipo, "2.1.0"}]}.
 ```
 
 Building needs a C compiler, `make`, and the libcurl and libevent headers:
