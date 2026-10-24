@@ -27,6 +27,8 @@ All notable changes to this project are documented here. This project follows
   iodata, though a response's are always binaries. Responses now use
   `resp_headers()`, and `headers()` stays the request header type, now
   also allowing the iodata names katipo accepts.
+- `metrics()` was any proplist rather than libcurl's seven timings,
+  each a float.
 
 ## [2.1.0] — 2026-10-21
 

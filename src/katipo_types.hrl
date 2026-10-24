@@ -236,7 +236,13 @@
                     stream => boolean(),
                     stream_window => 1..?MAX_INT_OPT | infinity}.
 -export_type([opts/0]).
--type metrics() :: proplists:proplist().
+%% libcurl's timings for the request, in seconds. Empty when libcurl
+%% reported none: the request failed validation, timed out or lost its
+%% worker on the Erlang side, or never reached a transfer.
+-type metric() :: total_time | namelookup_time | connect_time |
+                  appconnect_time | pretransfer_time | redirect_time |
+                  starttransfer_time.
+-type metrics() :: [{metric(), float()}].
 -type response() :: {ok, #{status := status(),
                            headers := resp_headers(),
                            cookiejar := cookiejar(),
@@ -286,6 +292,7 @@
 -export_type([resp_headers/0]).
 -export_type([capath/0]).
 -export_type([cacert/0]).
+-export_type([metric/0]).
 -export_type([cookiejar/0]).
 -export_type([req_body/0]).
 -export_type([body/0]).
