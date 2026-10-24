@@ -223,6 +223,7 @@ groups() ->
        request_header_non_utf8_name,
        request_header_invalid,
        path_opts_not_text,
+       int_opts_out_of_range,
        body_frame_shares_large_body,
        body_frame_copies_small_body,
        body_frame_chunk]},
@@ -1264,6 +1265,29 @@ path_opts_bad_list(_) ->
     {error, #{code := bad_opts}} =
         katipo:get(?POOL, <<"https://localhost/">>,
                    #{sslkey => InvalidList}).
+
+%% Integer options the C port cannot read (above a signed 32-bit int) are
+%% rejected in Erlang, naming the option, rather than by the port with a
+%% generic "Couldn't read req"; the largest it can read still goes through.
+int_opts_out_of_range(_) ->
+    Max = 2147483647,
+    Opts = [connecttimeout_ms, timeout_ms, maxredirs, dns_cache_timeout,
+            ca_cache_timeout],
+    [{error, #{code := bad_opts, message := Message}} =
+         katipo:check_opts(#{Opt => Max + 1})
+     || Opt <- Opts,
+        Message <- [iolist_to_binary(io_lib:format("~p", [[{Opt, Max + 1}]]))]],
+    {error, #{code := bad_opts}} =
+        katipo:check_opts(#{stream => true, stream_window => Max + 1}),
+    [ok = katipo:check_opts(#{Opt => Max}) || Opt <- Opts],
+    %% A grant is clamped, not rejected: it means "plenty".
+    ok = katipo:update_flow(?POOL, make_ref(), Max),
+    ok = katipo:update_flow(?POOL, make_ref(), 1 bsl 64),
+    {error, #{code := Code}} =
+        katipo:get(?POOL, <<"http://127.0.0.1:1/">>,
+                   #{dns_cache_timeout => Max, connecttimeout_ms => 1000}),
+    true = Code =/= bad_opts,
+    ok.
 
 %% Strings that are not valid text: unicode:characters_to_binary/1 returns
 %% {error, _, _} or {incomplete, _, _} for these rather than raising, which

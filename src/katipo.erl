@@ -378,12 +378,14 @@ unbounded-window request is a harmless no-op. Granting in batches (e.g.
 half the window at a time) amortizes the per-grant messaging, but never
 wait for more than `stream_window` chunks before granting: the transfer
 is paused once the window is spent, so those chunks never arrive and the
-request stalls until its timeout.
+request stalls until its timeout. A grant above 2147483647 counts as
+2147483647, which is as good as unbounded.
 """.
 -spec update_flow(katipo_pool:name(), reference(), pos_integer()) -> ok.
 update_flow(_PoolName, Ref, N) when is_reference(Ref) andalso
                                     is_integer(N) andalso N > 0 ->
-    Ref ! {flow, Ref, N},
+    %% The port reads a grant as a C long, which may be 32 bits.
+    Ref ! {flow, Ref, min(N, ?MAX_INT_OPT)},
     ok.
 
 -doc #{equiv => await/2}.

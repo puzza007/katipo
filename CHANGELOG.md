@@ -29,6 +29,17 @@ All notable changes to this project are documented here. This project follows
 - A path option (`capath`, `cacert`, `sslcert` or `sslkey`) containing a
   NUL byte now fails with `bad_opts`; before, curl quietly used only the
   part before it.
+- An integer option larger than 2147483647 (`timeout_ms`,
+  `connecttimeout_ms`, `maxredirs`, `dns_cache_timeout`,
+  `ca_cache_timeout` or `stream_window`) failed with an unhelpful
+  `"Couldn't read req"` from the C port, which reads only 32-bit integers.
+  It now fails with `bad_opts` naming the option, and the option types
+  give the bounds: `1..2147483647`, or from `-1` for `maxredirs`,
+  `dns_cache_timeout` and `ca_cache_timeout`.
+  `update_flow/3` clamps a grant above that to 2147483647 instead, since
+  on a 32-bit build the port dropped a larger one and left the stream
+  paused until it timed out, and repeated grants no longer overflow the
+  port's count.
 
 ## [2.1.0] — 2026-10-21
 
