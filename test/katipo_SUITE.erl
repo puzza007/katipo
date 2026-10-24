@@ -1488,9 +1488,10 @@ streaming_connect_error(_Config) ->
                                           timeout_ms => 2000}),
     receive
         {katipo_error, Ref, #{code := operation_timedout}} -> ok;
+        {katipo_error, Ref, Error} -> ct:fail({unexpected_error, Error});
         {katipo_headers, Ref, Headers} -> ct:fail({unexpected_headers, Headers})
     after 10000 ->
-            ct:fail(no_error)
+            ct:fail({no_error, mailbox()})
     end.
 
 %% Streaming has no meaning for the synchronous API.
@@ -1528,7 +1529,7 @@ streaming_worker_death(Config) ->
     receive
         {katipo_error, Ref, #{code := worker_died}} -> ok
     after 5000 ->
-            ct:fail(no_worker_died)
+            ct:fail({no_worker_died, mailbox()})
     end,
     ok = katipo_pool:stop(PoolName).
 
@@ -1663,16 +1664,20 @@ assert_cancelled_stream_silent(Ref) ->
 
 expect_stream_headers(Ref) ->
     receive
-        {katipo_headers, Ref, #{status := 200}} -> ok
+        {katipo_headers, Ref, #{status := 200}} -> ok;
+        {katipo_headers, Ref, #{status := Status}} ->
+            ct:fail({unexpected_status, Status});
+        {katipo_error, Ref, Error} ->
+            ct:fail({stream_error, Error})
     after 5000 ->
-            ct:fail(no_stream_headers)
+            ct:fail({no_stream_headers, mailbox()})
     end.
 
 expect_first_chunk(Ref) ->
     receive
         {katipo_chunk, Ref, Chunk} -> Chunk
     after 5000 ->
-            ct:fail(no_first_chunk)
+            ct:fail({no_first_chunk, mailbox()})
     end.
 
 %% Collect one full stream: headers, any chunks, then done. Errors and
@@ -1682,7 +1687,7 @@ collect_stream(Ref) ->
         {katipo_headers, Ref, #{status := Status, headers := Headers}} ->
             collect_chunks(Ref, Status, Headers, fun() -> ok end, [])
     after 10000 ->
-            ct:fail(no_stream_headers)
+            ct:fail({no_stream_headers, mailbox()})
     end.
 
 %% Grant runs before every receive: fun() -> ok end for unbounded streams,
@@ -1697,7 +1702,7 @@ collect_chunks(Ref, Status, Headers, Grant, Acc) ->
         {katipo_error, Ref, Error} ->
             ct:fail({stream_error, Error})
     after 10000 ->
-            ct:fail(stream_stalled)
+            ct:fail({stream_stalled, mailbox()})
     end.
 
 %% Require complete silence for the cancelled stream: no headers, chunks,
@@ -1716,20 +1721,45 @@ assert_stream_stopped(Ref, Timeout) ->
             ok
     end.
 
-%% Drain headers/chunks until the expected terminal error arrives.
+%% Drain headers/chunks until the expected terminal error arrives within
+%% Timeout ms. A failure lists what arrived for Ref, with the ms since the
+%% wait began, and tells an error that came late from one that never came.
 expect_stream_error(Ref, Code, Timeout) ->
+    Start = erlang:monotonic_time(millisecond),
+    expect_stream_error(Ref, Code, Start, Start + Timeout, []).
+
+expect_stream_error(Ref, Code, Start, Deadline, Seen) ->
+    Now = erlang:monotonic_time(millisecond),
     receive
-        {katipo_headers, Ref, _} ->
-            expect_stream_error(Ref, Code, Timeout);
-        {katipo_chunk, Ref, _} ->
-            expect_stream_error(Ref, Code, Timeout);
+        {katipo_headers, Ref, #{status := Status}} ->
+            expect_stream_error(Ref, Code, Start, Deadline,
+                                [{since(Start), headers, Status} | Seen]);
+        {katipo_chunk, Ref, Chunk} ->
+            expect_stream_error(Ref, Code, Start, Deadline,
+                                [{since(Start), chunk, byte_size(Chunk)} | Seen]);
         {katipo_error, Ref, #{code := Code}} ->
             ok;
+        {katipo_error, Ref, Error} ->
+            ct:fail({unexpected_error, Code, Error, lists:reverse(Seen)});
         {katipo_done, Ref, Done} ->
-            ct:fail({unexpected_done, Done})
-    after Timeout ->
-            ct:fail(no_stream_error)
+            ct:fail({unexpected_done, Done, lists:reverse(Seen)})
+    after max(0, Deadline - Now) ->
+            receive
+                {katipo_error, Ref, #{code := Code}} ->
+                    ct:fail({late_stream_error, Code, since(Start), lists:reverse(Seen)})
+            after 2000 ->
+                    ct:fail({no_stream_error, Code, lists:reverse(Seen), mailbox()})
+            end
     end.
+
+%% Read when a message is taken, not before the receive waits for it.
+since(Start) ->
+    erlang:monotonic_time(millisecond) - Start.
+
+%% Whatever is waiting in the test process's mailbox, to show in a failure.
+mailbox() ->
+    {messages, Msgs} = process_info(self(), messages),
+    Msgs.
 
 %% OpenTelemetry integration tests
 
