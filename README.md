@@ -133,8 +133,8 @@ another, and fails fast with `overload` when every worker is full.
 | `followlocation`        | `boolean()`                         | `false`     | [docs](https://curl.se/libcurl/c/CURLOPT_FOLLOWLOCATION.html)                  |
 | `ssl_verifyhost`        | `boolean()`                         | `true`      | [docs](https://curl.se/libcurl/c/CURLOPT_SSL_VERIFYHOST.html)                  |
 | `ssl_verifypeer`        | `boolean()`                         | `true`      | [docs](https://curl.se/libcurl/c/CURLOPT_SSL_VERIFYPEER.html)                  |
-| `capath`                | `binary()`                          | `undefined` | [docs](https://curl.se/libcurl/c/CURLOPT_CAPATH.html)                          |
-| `cacert`                | `binary()`                          | `undefined` | [docs](https://curl.se/libcurl/c/CURLOPT_CAINFO.html)                          |
+| `capath`                | `binary()` \| `string()`            | `undefined` | [docs](https://curl.se/libcurl/c/CURLOPT_CAPATH.html)                          |
+| `cacert`                | `binary()` \| `string()`            | `undefined` | [docs](https://curl.se/libcurl/c/CURLOPT_CAINFO.html)                          |
 | `ca_cache_timeout`      | `-1..2147483647`                    | 86400       | [docs](https://curl.se/libcurl/c/CURLOPT_CA_CACHE_TIMEOUT.html) curl >= 7.87.0 (0=disable, -1=forever) |
 | `timeout_ms`            | `1..2147483647`                     | 30000       | [docs](https://curl.se/libcurl/c/CURLOPT_TIMEOUT_MS.html)                      |
 | `dns_cache_timeout`     | `-1..2147483647`                    | 60          | [docs](https://curl.se/libcurl/c/CURLOPT_DNS_CACHE_TIMEOUT.html) (0=disable, -1=forever) |
@@ -147,8 +147,8 @@ another, and fails fast with `overload` when every worker is full.
 | `doh_url`               | `binary()`                          | `undefined` | [docs](https://curl.se/libcurl/c/CURLOPT_DOH_URL.html) curl >= 7.62.0          |
 | `http_version`          | `curl_http_version_none` <br> `curl_http_version_1_0` <br> `curl_http_version_1_1` <br> `curl_http_version_2_0` <br> `curl_http_version_2tls` <br> `curl_http_version_2_prior_knowledge` <br> `curl_http_version_3` | `curl_http_version_none` | [docs](https://curl.se/libcurl/c/CURLOPT_HTTP_VERSION.html) HTTP/3 requires curl >= 7.66.0 |
 | `sslversion`            | `sslversion_default` <br> `sslversion_tlsv1` <br> `sslversion_tlsv1_0` <br> `sslversion_tlsv1_1` <br> `sslversion_tlsv1_2` <br> `sslversion_tlsv1_3` | `sslversion_default` | [docs](https://curl.se/libcurl/c/CURLOPT_SSLVERSION.html) |
-| `sslcert`               | `binary()`                          | `undefined` | [docs](https://curl.se/libcurl/c/CURLOPT_SSLCERT.html)                         |
-| `sslkey`                | `binary()`                          | `undefined` | [docs](https://curl.se/libcurl/c/CURLOPT_SSLKEY.html)                          |
+| `sslcert`               | `binary()` \| `string()`            | `undefined` | [docs](https://curl.se/libcurl/c/CURLOPT_SSLCERT.html)                         |
+| `sslkey`                | `binary()` \| `string()`            | `undefined` | [docs](https://curl.se/libcurl/c/CURLOPT_SSLKEY.html)                          |
 | `sslkey_blob`           | `binary()` (DER format)             | `undefined` | [docs](https://curl.se/libcurl/c/CURLOPT_SSLKEY_BLOB.html) curl >= 7.71.0      |
 | `keypasswd`             | `binary()`                          | `undefined` | [docs](https://curl.se/libcurl/c/CURLOPT_KEYPASSWD.html)                       |
 | `http_auth`             | `basic` <br> `digest` <br> `ntlm` <br> `negotiate` | `undefined` | [docs](https://curl.se/libcurl/c/CURLOPT_HTTPAUTH.html)                        |

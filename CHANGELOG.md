@@ -29,6 +29,8 @@ All notable changes to this project are documented here. This project follows
 - A path option (`capath`, `cacert`, `sslcert` or `sslkey`) containing a
   NUL byte now fails with `bad_opts`; before, curl quietly used only the
   part before it.
+- The `capath`, `cacert`, `sslcert` and `sslkey` types said binary,
+  though katipo accepts strings too.
 - An integer option larger than 2147483647 (`timeout_ms`,
   `connecttimeout_ms`, `maxredirs`, `dns_cache_timeout`,
   `ca_cache_timeout` or `stream_window`) failed with an unhelpful
