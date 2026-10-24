@@ -111,6 +111,45 @@ be partial, and bodies may be empty.
 | `KatipoBodyHandoffShared.cfg` | sabotage: the output references the body without taking it over | **fails** as expected: `free_conn` frees the body before libevent writes it |
 | `KatipoBodyHandoffSplit.cfg` | sabotage: the frame is appended across callbacks | **fails** as expected: another transfer's frame lands inside it |
 
+### libcurl's timer in the C port
+
+`KatipoTimer.tla`: the C port's `multi_timer_cb`, `timer_cb` and
+`event_cb` driving libcurl's `Curl_update_timer`. libcurl asks for its timer
+with a delay counted from now; `evtimer_add` counts it from the time
+libevent cached when the loop iteration began, so a timer set late in a long
+callback (many transfers finishing at once) fires early. libcurl only asks
+again when its next deadline changes. libcurl <= 8.9.1 and >= 8.11.1 forget
+the deadline they reported whenever they are run for a timeout, which makes
+an early fire harmless; 8.10.0 to 8.11.0 do not, so the early fire left no
+timer pending and a timeout waited for unrelated socket activity. That was
+the intermittent `async.streaming_timeout` failure in the HTTP/3 CI job,
+which builds libcurl 8.11.0. Timers also fire early for a second reason:
+libevent and libcurl read different clocks (on Linux libevent defaults to
+`CLOCK_MONOTONIC_COARSE`, libcurl uses `CLOCK_MONOTONIC_RAW`), which
+`ClockLag` models. Refreshing libevent's cached time removes the first cause
+but not the second, so the re-arm in `timer_cb` is what keeps the timer
+armed. Socket activity and new requests are unfair environment actions, so
+no result leans on them.
+
+| config | question | result |
+|---|---|---|
+| `KatipoTimerOld811.cfg` | the port before the fix, libcurl 8.10.0-8.11.0 | **fails**: `AddDeadline → TimerFire` leaves a deadline with no timer |
+| `KatipoTimerOld811Liveness.cfg` | the same, liveness only | **fails**: the deadline is never run |
+| `KatipoTimerOld.cfg` | the port before the fix, other libcurl versions | pass |
+| `KatipoTimerFixed.cfg` | the fix, libcurl 8.10.0-8.11.0: timer armed, deadlines on time, never set early, all run | pass |
+| `KatipoTimerFixedReset.cfg` | the fix, other libcurl versions | pass |
+| `KatipoTimerRefreshOnly.cfg` | only the cached-time refresh, Linux's coarse clock | **fails**: the timer fires a tick early and nothing re-arms it |
+| `KatipoTimerRefreshOnlyOneClock.cfg` | only the refresh, both libraries on one clock | pass |
+| `KatipoTimerRearmOnly.cfg` | only the re-arm in `timer_cb` | pass: enough alone, though timers still fire early |
+
+Every config but the two `Old811` ones (no clock lag, to replay the CI
+failure) has `ClockLag = 1`. With `-inv WitnessNoEarly`, TLC finds early
+fires in every lagged config, the fixed port included, and none in
+`RefreshOnlyOneClock`; with `Rearm = FALSE`, `KatipoTimerFixed.cfg` fails
+`TimerArmed`, so its pass rests on the re-arm. `WitnessTwo` shows two
+deadlines pending at once. Every action fires (`-coverage 1`), and the
+verdicts are the same at `MaxTime = 11`, `MaxSkew = 3`, `MaxXfers = 3`.
+
 ## Lean proofs (`lean/`)
 
 Core Lean 4 only (no Mathlib), toolchain pinned in `lean/lean-toolchain`.
@@ -237,6 +276,27 @@ Of these, `cancel_timer` and `unalias` are still needed for resources: a
 timer left running per completed request, and an alias-table entry
 leaked for every async request.
 
+### libcurl's timer: any clock, callback length and number of deadlines
+
+`Timer/Model.lean` transcribes `KatipoTimer.tla` without its bounds: an
+unbounded clock, any number of deadlines at any delay, and callbacks of any
+length up to `P.skew`, with libevent's clock up to `P.lag` ahead. `Safe P`
+means the re-arm in `timer_cb` or libcurl's own reset is present, or the
+cached-time refresh is and both libraries read one clock (`P.lag = 0`).
+
+| theorem | says |
+|---|---|
+| `timer_armed` | with `Safe P`, a timer is pending whenever libcurl has a deadline |
+| `timely` | with `Safe P`, no deadline is overdue by more than one callback |
+| `not_early` | with the refresh, the pending timer is never set before libcurl's next deadline (it can fire up to `P.lag` before it) |
+| `old_811_late` | the port before the fix with libcurl 8.10.0-8.11.0: a deadline with no timer, overdue by any amount (explicit trace) |
+| `refresh_only_late` | the refresh alone, libcurl 8.10.0-8.11.0, `P.lag = 1`: the same (explicit trace) |
+
+The invariant (`Inv`) is mirrored as `LeanInv` in `KatipoTimer.tla`, and
+every config the proof covers lists it, so `check-configs.sh` checks it.
+Counting the refresh as safe with a lagging clock breaks the proof at the
+case where the timer fires before the deadline was due.
+
 ## Trace validation
 
 ```sh
@@ -301,6 +361,15 @@ as separate attempts.
 - The fairness assumptions of `eventual_outcome`: the BEAM schedules a
   runnable worker, and `erlang:start_timer` fires.
 - `ReplyWithinSlack`: the 250 ms slack is a timing argument, not a proof.
+- libcurl's timer contract, read from `lib/multi.c` at curl-8_5_0,
+  curl-8_11_0 and curl-8_12_0: `Curl_update_timer` calls the timer callback
+  only when the next deadline changes, and the timeout path clears the last
+  reported deadline in every version except 8.10.0 to 8.11.0. libevent's
+  `evtimer_add` counting from the time cached at the start of the loop
+  iteration is from its documentation (`event_base_update_cache_time`).
+  The clocks (libevent 2.1 `evutil_time.c`, curl `lib/timeval.c`) are read
+  from source; the model assumes their difference is bounded by `ClockLag`
+  ticks.
 
 If you change the worker dispatch/delivery logic or the C flow-control path,
 update the matching spec and Lean transcription and re-run everything above.

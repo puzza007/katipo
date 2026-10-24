@@ -2,6 +2,7 @@ import KatipoProofs.Flow.Statements
 import KatipoProofs.Flow.Executable
 import KatipoProofs.Admission.Statements
 import KatipoProofs.Admission.Trace
+import KatipoProofs.Timer.Statements
 
 /-!
 # Axiom pins
@@ -93,3 +94,18 @@ open KatipoProofs
 
 /-- info: 'KatipoProofs.Admission.Statements.no_post_check_double_delivery' depends on axioms: [propext, Quot.sound] -/
 #guard_msgs (whitespace := lax) in #print axioms Admission.Statements.no_post_check_double_delivery
+
+/-- info: 'KatipoProofs.Timer.Statements.timer_armed' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms Timer.Statements.timer_armed
+
+/-- info: 'KatipoProofs.Timer.Statements.timely' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms Timer.Statements.timely
+
+/-- info: 'KatipoProofs.Timer.Statements.not_early' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms Timer.Statements.not_early
+
+/-- info: 'KatipoProofs.Timer.Statements.old_811_late' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms Timer.Statements.old_811_late
+
+/-- info: 'KatipoProofs.Timer.Statements.refresh_only_late' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms Timer.Statements.refresh_only_late
