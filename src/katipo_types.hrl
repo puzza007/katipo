@@ -130,8 +130,16 @@
 
 -type error_msg() :: binary().
 -type status() :: pos_integer().
--type header() :: {binary(), iodata()}.
+-doc "A request header. Name and value may be any iodata.".
+-type header() :: {iodata(), iodata()}.
 -type headers() :: [header()].
+-doc """
+A response header, as libcurl received it except that the value's
+surrounding whitespace is trimmed, a folded value's lines are joined with
+one space, and a CR, LF or NUL inside it is replaced with a space.
+""".
+-type resp_header() :: {binary(), binary()}.
+-type resp_headers() :: [resp_header()].
 -opaque cookiejar() :: [binary()].
 -type qs_vals() :: [{unicode:chardata(), unicode:chardata() | true}].
 -type req_body() :: iodata() | qs_vals().
@@ -235,7 +243,7 @@
 -export_type([opts/0]).
 -type metrics() :: proplists:proplist().
 -type response() :: {ok, #{status := status(),
-                           headers := headers(),
+                           headers := resp_headers(),
                            cookiejar := cookiejar(),
                            body := body()}} |
                     {error, #{code := error_code(),
@@ -279,6 +287,8 @@
 -export_type([status/0]).
 -export_type([header/0]).
 -export_type([headers/0]).
+-export_type([resp_header/0]).
+-export_type([resp_headers/0]).
 -export_type([capath/0]).
 -export_type([cacert/0]).
 -export_type([cookiejar/0]).
