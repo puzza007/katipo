@@ -5,6 +5,7 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     name: Erlang/OTP ${{matrix.otp}} / rebar3 ${{matrix.rebar3}}
     strategy:
       fail-fast: false
@@ -80,6 +81,26 @@ jobs:
       - name: Run lint
         run: rebar3 lint
 
+      # CI keeps nothing else from a failed or hung run, and an intermittent
+      # failure cannot be rerun locally to see what the test and the test
+      # servers saw.
+      - &save-server-logs
+        name: Save the test servers' logs
+        if: failure() || cancelled()
+        run: |
+          mkdir -p _build/test/logs
+          (cd test/http3-httpbin && docker compose logs --no-color --timestamps) \
+            > _build/test/logs/test-servers.log 2>&1 || true
+
+      - &upload-ct-logs
+        name: Upload Common Test logs
+        if: failure() || cancelled()
+        uses: actions/upload-artifact@v7
+        with:
+          name: ct-logs-${{ github.job }}-${{ strategy.job-index }}
+          path: _build/test/logs
+          retention-days: 14
+
       - name: Stop httpbin server
         if: always()
         run: |
@@ -88,6 +109,7 @@ jobs:
 
   test-asan:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     name: AddressSanitizer
     strategy:
       matrix:
@@ -154,6 +176,10 @@ jobs:
           fi
           echo "AddressSanitizer clean."
 
+      - *save-server-logs
+
+      - *upload-ct-logs
+
       - name: Stop httpbin server
         if: always()
         run: |
@@ -162,6 +188,8 @@ jobs:
 
   test-http3:
     runs-on: ubuntu-latest
+    # Building curl with HTTP/3 support on a cache miss takes most of this.
+    timeout-minutes: 45
     name: HTTP/3 Tests
 
     steps:
@@ -268,6 +296,10 @@ jobs:
 
           # Build and run tests
           rebar3 ct
+
+      - *save-server-logs
+
+      - *upload-ct-logs
 
       - name: Stop HTTP/3 server
         if: always()
