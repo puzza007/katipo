@@ -49,6 +49,12 @@ All notable changes to this project are documented here. This project follows
   port's count.
 - `request()` required `method`, though katipo defaults it to `get`,
   so a spec relying on the default failed to type-check.
+- `error_code()` lacked `unknown_error`, returned for a curl code katipo
+  has no name for, and named only one of `ssl_cacert` and
+  `peer_failed_verification`, chosen from the curl version the Erlang
+  build saw, which could differ from the one the C port was built with
+  (on libcurl older than 7.62 it named `ssl_cert` instead). It now lists
+  both.
 
 ## [2.1.0] — 2026-10-21
 
