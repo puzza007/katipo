@@ -152,13 +152,13 @@ another, and fails fast with `overload` when every worker is full.
 | `sslkey_blob`           | `binary()` (DER format)             | `undefined` | [docs](https://curl.se/libcurl/c/CURLOPT_SSLKEY_BLOB.html) curl >= 7.71.0      |
 | `keypasswd`             | `binary()`                          | `undefined` | [docs](https://curl.se/libcurl/c/CURLOPT_KEYPASSWD.html)                       |
 | `http_auth`             | `basic` <br> `digest` <br> `ntlm` <br> `negotiate` | `undefined` | [docs](https://curl.se/libcurl/c/CURLOPT_HTTPAUTH.html)                        |
-| `stream`                | `boolean()`                         | `false`     | async only; deliver the body incrementally (see Streaming responses)                |
-| `stream_window`         | `1..2147483647` \| `infinity`       | `infinity`  | chunk credits before the transfer pauses awaiting `update_flow/3`                   |
+| `stream`                | `boolean()`                         | `false`     | async only (sync takes only `false`); deliver the body incrementally (see Streaming responses) |
+| `stream_window`         | `1..2147483647` \| `infinity`       | `infinity`  | async only (sync takes only `infinity`); chunk credits before the transfer pauses awaiting `update_flow/3` |
 | `username`              | `binary()`                          | `undefined` | [docs](https://curl.se/libcurl/c/CURLOPT_USERNAME.html)                        |
 | `password`              | `binary()`                          | `undefined` | [docs](https://curl.se/libcurl/c/CURLOPT_PASSWORD.html)                        |
 | `userpwd`               | `binary()`                          | `undefined` | [docs](https://curl.se/libcurl/c/CURLOPT_USERPWD.html)                         |
 | `verbose`               | `boolean()`                         | `false`     | [docs](https://curl.se/libcurl/c/CURLOPT_VERBOSE.html)                         |
-| `reply_to`              | `pid()`                             | `self()`    | Async only (`async_*`): process that receives the response message. Accepted but ignored on synchronous requests. |
+| `reply_to`              | `pid()`                             | `self()`    | async only (sync takes only the caller); process that receives the response message |
 
 Some options depend on how libcurl was built. Check at runtime with
 `katipo:http3_available/0`, `doh_url_available/0`,

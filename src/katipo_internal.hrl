@@ -91,6 +91,10 @@
 
 -define(DEFAULT_REQ_TIMEOUT, 30000).
 
+%% The keys of ?KATIPO_ASYNC_OPTS_FIELDS (katipo_types.hrl): the options
+%% only the async API acts on. Keep the two in step.
+-define(KATIPO_ASYNC_OPTS, [reply_to, stream, stream_window]).
+
 %% The largest integer option value the C port can read: parse_eopts
 %% decodes only SMALL_INTEGER_EXT and INTEGER_EXT, a signed 32-bit int.
 -define(MAX_INT_OPT, 2147483647).

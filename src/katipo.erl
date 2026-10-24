@@ -15,7 +15,11 @@ An HTTP/HTTP2/HTTP3 client library for Erlang built around libcurl-multi and lib
 Options can be passed as the third argument to HTTP method functions, or included
 directly in the request map passed to `req/2`.
 
-See `t:opts/0` for all available options and `t:request/0` for the full request map type.
+See `t:opts/0` for the options and `t:request/0` for the full request map
+type, as the async API takes them. The synchronous API takes
+`t:sync_opts/0` and `t:sync_request/0`: `reply_to`, `stream` and
+`stream_window` there only take the values that change nothing (the
+caller, `false`, `infinity`), and anything else is `bad_opts`.
 
 ## Responses
 
@@ -106,6 +110,7 @@ worker failure arrives.
 -export([update_flow/3]).
 
 -export([check_opts/1]).
+-export([check_opts/2]).
 
 -export([tcp_fastopen_available/0]).
 -export([unix_socket_path_available/0]).
@@ -143,7 +148,7 @@ get(PoolName, Url) ->
     req(PoolName, #{url => Url, method => get}).
 
 -doc "Performs an HTTP GET request.".
--spec get(katipo_pool:name(), url(), opts()) -> response().
+-spec get(katipo_pool:name(), url(), sync_opts()) -> response().
 get(PoolName, Url, Opts) ->
     req(PoolName, Opts#{url => Url, method => get}).
 
@@ -153,7 +158,7 @@ post(PoolName, Url) ->
     req(PoolName, #{url => Url, method => post}).
 
 -doc "Performs an HTTP POST request.".
--spec post(katipo_pool:name(), url(), opts()) -> response().
+-spec post(katipo_pool:name(), url(), sync_opts()) -> response().
 post(PoolName, Url, Opts) ->
     req(PoolName, Opts#{url => Url, method => post}).
 
@@ -163,7 +168,7 @@ put(PoolName, Url) ->
     req(PoolName, #{url => Url, method => put}).
 
 -doc "Performs an HTTP PUT request.".
--spec put(katipo_pool:name(), url(), opts()) -> response().
+-spec put(katipo_pool:name(), url(), sync_opts()) -> response().
 put(PoolName, Url, Opts) ->
     req(PoolName, Opts#{url => Url, method => put}).
 
@@ -173,7 +178,7 @@ head(PoolName, Url) ->
     req(PoolName, #{url => Url, method => head}).
 
 -doc "Performs an HTTP HEAD request.".
--spec head(katipo_pool:name(), url(), opts()) -> response().
+-spec head(katipo_pool:name(), url(), sync_opts()) -> response().
 head(PoolName, Url, Opts) ->
     req(PoolName, Opts#{url => Url, method => head}).
 
@@ -183,7 +188,7 @@ options(PoolName, Url) ->
     req(PoolName, #{url => Url, method => options}).
 
 -doc "Performs an HTTP OPTIONS request.".
--spec options(katipo_pool:name(), url(), opts()) -> response().
+-spec options(katipo_pool:name(), url(), sync_opts()) -> response().
 options(PoolName, Url, Opts) ->
     req(PoolName, Opts#{url => Url, method => options}).
 
@@ -193,7 +198,7 @@ patch(PoolName, Url) ->
     req(PoolName, #{url => Url, method => patch}).
 
 -doc "Performs an HTTP PATCH request.".
--spec patch(katipo_pool:name(), url(), opts()) -> response().
+-spec patch(katipo_pool:name(), url(), sync_opts()) -> response().
 patch(PoolName, Url, Opts) ->
     req(PoolName, Opts#{url => Url, method => patch}).
 
@@ -203,7 +208,7 @@ delete(PoolName, Url) ->
     req(PoolName, #{url => Url, method => delete}).
 
 -doc "Performs an HTTP DELETE request.".
--spec delete(katipo_pool:name(), url(), opts()) -> response().
+-spec delete(katipo_pool:name(), url(), sync_opts()) -> response().
 delete(PoolName, Url, Opts) ->
     req(PoolName, Opts#{url => Url, method => delete}).
 
@@ -281,7 +286,7 @@ async_delete(PoolName, Url, Opts) ->
     async_req(PoolName, Opts#{url => Url, method => delete}).
 
 -doc "Performs an HTTP request using the full request map.".
--spec req(katipo_pool:name(), request()) -> response().
+-spec req(katipo_pool:name(), sync_request()) -> response().
 req(PoolName, Opts)
   when is_map(Opts) ->
     case katipo_req:build_req(Opts, sync) of
@@ -319,7 +324,8 @@ point, including after headers and chunks (e.g. a request timeout mid-body).
 `cancel/2` works as for buffered async requests. `await/1,2` does not apply
 to streamed requests; receive the messages directly. Streaming is only
 available through the async API -- `req/2` and the synchronous wrappers
-reject `stream => true`.
+reject `stream => true`, a bounded `stream_window`, and a `reply_to`
+other than the caller.
 
 By default chunks are delivered as fast as the transfer produces them. Pass
 `stream_window => N` to bound that: the transfer pauses (propagating
@@ -337,23 +343,15 @@ than the final one. Real-world redirect responses rarely carry bodies.
 -spec async_req(katipo_pool:name(), request()) -> async_response().
 async_req(PoolName, Opts)
   when is_map(Opts) ->
-    {ReplyTo, Opts2} =
-        case maps:take(reply_to, Opts) of
-            {RT, Rest} -> {RT, Rest};
-            error -> {self(), Opts}
-        end,
-    case is_pid(ReplyTo) of
-        false ->
-            {error, katipo_req:error_map(bad_opts, <<"[{reply_to,invalid}]">>)};
-        true ->
-            case katipo_req:build_req(Opts2, async) of
-                {ok, Req} ->
-                    Obs = katipo_span:start_async(katipo_req:method_int_to_binary(Req#req.method),
-                                                  Req#req.url),
-                    dispatch_async(PoolName, ReplyTo, Req, Obs);
-                {error, _} = Error ->
-                    Error
-            end
+    %% build_req validates reply_to along with every other option.
+    case katipo_req:build_req(Opts, async) of
+        {ok, Req} ->
+            ReplyTo = maps:get(reply_to, Opts, self()),
+            Obs = katipo_span:start_async(katipo_req:method_int_to_binary(Req#req.method),
+                                          Req#req.url),
+            dispatch_async(PoolName, ReplyTo, Req, Obs);
+        {error, _} = Error ->
+            Error
     end.
 
 %% Admission is a synchronous call, not a cast, so dispatch failures surface
@@ -544,11 +542,24 @@ spillover([Worker | Workers], Msg, Bound) ->
     end.
 
 -doc """
-Validates request options without performing the request. Cross-field rules
-are checked under the async API's rules (the superset): `stream => true`
-passes here but is additionally rejected by `req/2` and the synchronous
-wrappers.
+Validates request options for the async API without performing the
+request: `check_opts(Opts, async)`. The async rules accept everything
+either API does, so use `check_opts/2` with `sync` for options meant for
+`req/2` or `get/3`, which reject `stream => true`, a bounded
+`stream_window`, and a `reply_to` other than the caller.
 """.
--spec check_opts(request() | opts()) -> ok | {error, error()}.
+-spec check_opts(partial_request()) -> ok | {error, error()}.
 check_opts(Opts) when is_map(Opts) ->
-    katipo_req:check_opts(Opts).
+    katipo_req:check_opts(Opts, async).
+
+-doc """
+Validates request options without performing the request, by the rules of
+the synchronous API (`sync`: `req/2`, `get/3` and the rest) or the async
+one (`async`), returning the same error the request would. `url` may be
+left out. With `sync`, a `reply_to` is accepted only if it is the process
+calling `check_opts/2`, so check options in the process that will send
+the request.
+""".
+-spec check_opts(partial_request(), sync | async) -> ok | {error, error()}.
+check_opts(Opts, Mode) when is_map(Opts) andalso (Mode =:= sync orelse Mode =:= async) ->
+    katipo_req:check_opts(Opts, Mode).

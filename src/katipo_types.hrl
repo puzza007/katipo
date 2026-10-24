@@ -172,10 +172,9 @@ one space, and a CR, LF or NUL inside it is replaced with a space.
 %% See [https://curl.haxx.se/libcurl/c/CURLOPT_SSLKEY_BLOB.html]
 -type userpwd() :: binary().
 %% See [https://curl.haxx.se/libcurl/c/CURLOPT_USERPWD.html]
-%% The request options, shared by opts() and request(): Erlang cannot
-%% compose map types, so the fields are spelled out once here instead.
+%% The request options, shared by every request type: Erlang cannot compose
+%% map types, so the fields are spelled out once here instead.
 -define(KATIPO_OPTS_FIELDS,
-        reply_to => pid(),
         headers => headers(),
         cookiejar => cookiejar(),
         body => req_body(),
@@ -205,12 +204,52 @@ one space, and a CR, LF or NUL inside it is replaced with a space.
         userpwd => userpwd(),
         dns_cache_timeout => -1..?MAX_INT_OPT,
         ca_cache_timeout => -1..?MAX_INT_OPT,
-        pipewait => boolean(),
+        pipewait => boolean()).
+%% The options only the async API acts on: where to deliver the response,
+%% and whether to stream it. ?KATIPO_ASYNC_OPTS (katipo_internal.hrl) lists
+%% the same keys for katipo_req; keep the two in step.
+-define(KATIPO_ASYNC_OPTS_FIELDS,
+        reply_to => pid(),
         stream => boolean(),
         stream_window => 1..?MAX_INT_OPT | infinity).
--type request() :: #{url := url(), method => method(), ?KATIPO_OPTS_FIELDS}.
--type opts() :: #{?KATIPO_OPTS_FIELDS}.
+%% The same keys as the synchronous API takes them: only with the values
+%% that change nothing there.
+-define(KATIPO_SYNC_NOOP_FIELDS,
+        reply_to => pid(),
+        stream => false,
+        stream_window => infinity).
+-doc """
+Options for any request: `async_get/3` and the other async method
+functions take all of them. The synchronous functions take
+`t:sync_opts/0`.
+""".
+-type opts() :: #{?KATIPO_OPTS_FIELDS, ?KATIPO_ASYNC_OPTS_FIELDS}.
+-doc """
+A request for `async_req/2`: the options plus `url`, and `method`
+(default `get`). `req/2` takes `t:sync_request/0`.
+""".
+-type request() :: #{url := url(), method => method(),
+                     ?KATIPO_OPTS_FIELDS, ?KATIPO_ASYNC_OPTS_FIELDS}.
+-doc """
+Options for `get/3` and the other synchronous method functions. They
+reject `stream => true`, a bounded `stream_window`, and a `reply_to`
+other than the caller with `bad_opts`; the values that change nothing
+are accepted.
+""".
+-type sync_opts() :: #{?KATIPO_OPTS_FIELDS, ?KATIPO_SYNC_NOOP_FIELDS}.
+-doc "A request for `req/2`: the synchronous options plus `url` and `method`.".
+-type sync_request() :: #{url := url(), method => method(),
+                          ?KATIPO_OPTS_FIELDS, ?KATIPO_SYNC_NOOP_FIELDS}.
+-doc """
+Any options or request, with `url` and `method` both optional, as
+`check_opts/1` and `check_opts/2` take them.
+""".
+-type partial_request() :: #{url => url(), method => method(),
+                             ?KATIPO_OPTS_FIELDS, ?KATIPO_ASYNC_OPTS_FIELDS}.
 -export_type([opts/0]).
+-export_type([sync_opts/0]).
+-export_type([sync_request/0]).
+-export_type([partial_request/0]).
 -doc "One of the timings libcurl reports for a request.".
 -type metric() :: total_time | namelookup_time | connect_time |
                   appconnect_time | pretransfer_time | redirect_time |

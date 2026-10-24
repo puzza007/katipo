@@ -9,12 +9,30 @@ All notable changes to this project are documented here. This project follows
 - `unix_socket_path` accepts a string as well as a binary, like the other
   path options, and like them fails with `bad_opts` for a path holding a
   NUL byte.
+- `check_opts/2` validates options by the rules of the synchronous or the
+  async API (`check_opts/1` keeps the async rules), and
+  `partial_request()` types the options both take, with `url` and
+  `method` optional.
 - Exported types for what callers receive: `error()` for the error map,
   `response_map()` for a successful response, and `async_message()` for
   every message an async request can deliver, buffered or streamed.
   `check_opts/1` now takes bare options as well as a full request, and it
   and `katipo_pool:start/3` return `{error, error()}` rather than
   `{error, map()}`.
+
+### Changed
+- The synchronous API now rejects a `reply_to` other than the calling
+  process with `bad_opts`, naming it, where before it ignored it and
+  replied to the caller anyway; a bounded `stream_window` and
+  `stream => true` stay rejected. The values that change nothing there
+  (`reply_to` as the caller, `stream => false`,
+  `stream_window => infinity`) are still accepted, so one options map
+  can serve both APIs. The synchronous functions take the new
+  `sync_opts()` and `sync_request()` types, which say the same, while
+  `opts()` and `request()` keep every option, as the async functions
+  take them. An invalid `reply_to` is reported with any other invalid
+  option, named with its value, rather than as `[{reply_to,invalid}]` on
+  its own.
 
 ### Fixed
 - With libcurl 8.10.0 to 8.11.0, a request's timeout could fire late,
