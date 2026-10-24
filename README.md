@@ -129,16 +129,16 @@ another, and fails fast with `overload` when every worker is full.
 | `headers`               | `[{binary(), iodata()}]`            | `[]`        |                                                                                     |
 | `cookiejar`             | opaque (returned in response)       | `[]`        |                                                                                     |
 | `body`                  | `iodata()`                          | `<<>>`      | sent with every method but `head` (an error there); a key/value list is form-encoded. Without a `content-type` header, only POST and form bodies get `application/x-www-form-urlencoded` |
-| `connecttimeout_ms`     | `pos_integer()`                     | 30000       | [docs](https://curl.se/libcurl/c/CURLOPT_CONNECTTIMEOUT.html)                  |
+| `connecttimeout_ms`     | `1..2147483647`                     | 30000       | [docs](https://curl.se/libcurl/c/CURLOPT_CONNECTTIMEOUT.html)                  |
 | `followlocation`        | `boolean()`                         | `false`     | [docs](https://curl.se/libcurl/c/CURLOPT_FOLLOWLOCATION.html)                  |
 | `ssl_verifyhost`        | `boolean()`                         | `true`      | [docs](https://curl.se/libcurl/c/CURLOPT_SSL_VERIFYHOST.html)                  |
 | `ssl_verifypeer`        | `boolean()`                         | `true`      | [docs](https://curl.se/libcurl/c/CURLOPT_SSL_VERIFYPEER.html)                  |
 | `capath`                | `binary()`                          | `undefined` | [docs](https://curl.se/libcurl/c/CURLOPT_CAPATH.html)                          |
 | `cacert`                | `binary()`                          | `undefined` | [docs](https://curl.se/libcurl/c/CURLOPT_CAINFO.html)                          |
-| `ca_cache_timeout`      | `integer()`                         | 86400       | [docs](https://curl.se/libcurl/c/CURLOPT_CA_CACHE_TIMEOUT.html) curl >= 7.87.0 (0=disable, -1=forever) |
-| `timeout_ms`            | `pos_integer()`                     | 30000       | [docs](https://curl.se/libcurl/c/CURLOPT_TIMEOUT_MS.html)                      |
-| `dns_cache_timeout`     | `integer()`                         | 60          | [docs](https://curl.se/libcurl/c/CURLOPT_DNS_CACHE_TIMEOUT.html) (0=disable, -1=forever) |
-| `maxredirs`             | `non_neg_integer()`                 | 9           | [docs](https://curl.se/libcurl/c/CURLOPT_MAXREDIRS.html)                       |
+| `ca_cache_timeout`      | `-1..2147483647`                    | 86400       | [docs](https://curl.se/libcurl/c/CURLOPT_CA_CACHE_TIMEOUT.html) curl >= 7.87.0 (0=disable, -1=forever) |
+| `timeout_ms`            | `1..2147483647`                     | 30000       | [docs](https://curl.se/libcurl/c/CURLOPT_TIMEOUT_MS.html)                      |
+| `dns_cache_timeout`     | `-1..2147483647`                    | 60          | [docs](https://curl.se/libcurl/c/CURLOPT_DNS_CACHE_TIMEOUT.html) (0=disable, -1=forever) |
+| `maxredirs`             | `-1..2147483647`                    | 9           | [docs](https://curl.se/libcurl/c/CURLOPT_MAXREDIRS.html)                       |
 | `proxy`                 | `binary()`                          | `undefined` | [docs](https://curl.se/libcurl/c/CURLOPT_PROXY.html)                           |
 | `tcp_fastopen`          | `boolean()`                         | `false`     | [docs](https://curl.se/libcurl/c/CURLOPT_TCP_FASTOPEN.html) curl >= 7.49.0     |
 | `pipewait`              | `boolean()`                         | `true`      | [docs](https://curl.se/libcurl/c/CURLOPT_PIPEWAIT.html) curl >= 7.43.0         |
@@ -153,7 +153,7 @@ another, and fails fast with `overload` when every worker is full.
 | `keypasswd`             | `binary()`                          | `undefined` | [docs](https://curl.se/libcurl/c/CURLOPT_KEYPASSWD.html)                       |
 | `http_auth`             | `basic` <br> `digest` <br> `ntlm` <br> `negotiate` | `undefined` | [docs](https://curl.se/libcurl/c/CURLOPT_HTTPAUTH.html)                        |
 | `stream`                | `boolean()`                         | `false`     | async only; deliver the body incrementally (see Streaming responses)                |
-| `stream_window`         | `pos_integer()` \| `infinity`       | `infinity`  | chunk credits before the transfer pauses awaiting `update_flow/3`                   |
+| `stream_window`         | `1..2147483647` \| `infinity`       | `infinity`  | chunk credits before the transfer pauses awaiting `update_flow/3`                   |
 | `username`              | `binary()`                          | `undefined` | [docs](https://curl.se/libcurl/c/CURLOPT_USERNAME.html)                        |
 | `password`              | `binary()`                          | `undefined` | [docs](https://curl.se/libcurl/c/CURLOPT_PASSWORD.html)                        |
 | `userpwd`               | `binary()`                          | `undefined` | [docs](https://curl.se/libcurl/c/CURLOPT_USERPWD.html)                         |

@@ -1,7 +1,7 @@
 %% Public type definitions for the katipo API. Kept out of katipo.erl to keep
 %% the facade focused on functions. Self-contained: it pulls in
-%% katipo_internal.hrl for the ?SSL_CACERT_ERROR_CODE macro that the
-%% error_code() union references, so include order does not matter.
+%% katipo_internal.hrl for the ?SSL_CACERT_ERROR_CODE and ?MAX_INT_OPT
+%% macros the types below reference, so include order does not matter.
 
 -ifndef(KATIPO_TYPES_HRL).
 -define(KATIPO_TYPES_HRL, true).
@@ -131,7 +131,7 @@
 -type qs_vals() :: [{unicode:chardata(), unicode:chardata() | true}].
 -type req_body() :: iodata() | qs_vals().
 -type body() :: binary().
--type connecttimeout_ms() :: pos_integer().
+-type connecttimeout_ms() :: 1..?MAX_INT_OPT.
 %% See [https://curl.haxx.se/libcurl/c/CURLOPT_CONNECTTIMEOUT.html]
 -type ssl_verifyhost() :: boolean().
 %% See [https://curl.haxx.se/libcurl/c/CURLOPT_SSL_VERIFYHOST.html]
@@ -167,8 +167,8 @@
                     ssl_verifypeer => ssl_verifypeer(),
                     capath => binary(),
                     cacert => binary(),
-                    timeout_ms => pos_integer(),
-                    maxredirs => -1 | non_neg_integer(),
+                    timeout_ms => 1..?MAX_INT_OPT,
+                    maxredirs => -1..?MAX_INT_OPT,
                     http_auth => http_auth(),
                     username => binary(),
                     password => binary(),
@@ -185,11 +185,11 @@
                     sslkey_blob => sslkey_blob(),
                     keypasswd => binary(),
                     userpwd => userpwd(),
-                    dns_cache_timeout => integer(),
-                    ca_cache_timeout => integer(),
+                    dns_cache_timeout => -1..?MAX_INT_OPT,
+                    ca_cache_timeout => -1..?MAX_INT_OPT,
                     pipewait => boolean(),
                     stream => boolean(),
-                    stream_window => pos_integer() | infinity}.
+                    stream_window => 1..?MAX_INT_OPT | infinity}.
 -type opts() :: #{reply_to => pid(),
                     headers => headers(),
                     cookiejar => cookiejar(),
@@ -200,8 +200,8 @@
                     ssl_verifypeer => ssl_verifypeer(),
                     capath => binary(),
                     cacert => binary(),
-                    timeout_ms => pos_integer(),
-                    maxredirs => -1 | non_neg_integer(),
+                    timeout_ms => 1..?MAX_INT_OPT,
+                    maxredirs => -1..?MAX_INT_OPT,
                     http_auth => http_auth(),
                     username => binary(),
                     password => binary(),
@@ -218,11 +218,11 @@
                     sslkey_blob => sslkey_blob(),
                     keypasswd => binary(),
                     userpwd => userpwd(),
-                    dns_cache_timeout => integer(),
-                    ca_cache_timeout => integer(),
+                    dns_cache_timeout => -1..?MAX_INT_OPT,
+                    ca_cache_timeout => -1..?MAX_INT_OPT,
                     pipewait => boolean(),
                     stream => boolean(),
-                    stream_window => pos_integer() | infinity}.
+                    stream_window => 1..?MAX_INT_OPT | infinity}.
 -export_type([opts/0]).
 -type metrics() :: proplists:proplist().
 -type response() :: {ok, #{status := status(),
