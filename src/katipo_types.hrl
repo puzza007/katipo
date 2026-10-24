@@ -116,6 +116,8 @@
         too_large |
         ech_required |
         curl_last |
+        %% a curl code katipo's C port has no name for
+        unknown_error |
         %% returned by us, not curl
         bad_opts |
         await_timeout |

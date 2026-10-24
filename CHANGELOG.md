@@ -20,6 +20,9 @@ All notable changes to this project are documented here. This project follows
   `dns_cache_timeout` and `ca_cache_timeout`.
 - `request()` required `method`, though katipo defaults it to `get`,
   so a spec relying on the default failed to type-check.
+- `error_code()` lacked `unknown_error`, returned for a curl code katipo
+  has no name for, and on libcurl older than 7.62 named the CA
+  verification failure `ssl_cert` where katipo returns `ssl_cacert`.
 
 ## [2.1.0] — 2026-10-21
 

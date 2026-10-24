@@ -36,7 +36,7 @@
 -define(SSL_CACERT_ERROR_CODE, peer_failed_verification).
 -else.
 -define(DOH_URL_AVAILABLE, false).
--define(SSL_CACERT_ERROR_CODE, ssl_cert).
+-define(SSL_CACERT_ERROR_CODE, ssl_cacert).
 -endif.
 
 -ifdef(sslkey_blob_available).
