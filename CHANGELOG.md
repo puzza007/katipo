@@ -5,6 +5,49 @@ All notable changes to this project are documented here. This project follows
 
 ## [Unreleased]
 
+### Added
+- Exported types for what callers receive: `error()` for the error map,
+  `response_map()` for a successful response, and `async_message()` for
+  every message an async request can deliver, buffered or streamed.
+  `check_opts/1` now takes bare options as well as a full request, and it
+  and `katipo_pool:start/3` return `{error, error()}` rather than
+  `{error, map()}`.
+
+### Changed
+- The synchronous API now rejects the async-only options with `bad_opts`,
+  naming them: `reply_to`, which it used to ignore silently, and any
+  `stream` or `stream_window`, where before only `stream => true` was
+  rejected. Their types match: `opts()` and `request()` leave them out,
+  and the async functions take `async_opts()` and `async_request()`, which
+  add them, so dialyzer catches the mistake before it runs. A synchronous
+  call that passed `reply_to`, `stream => false` or
+  `stream_window => infinity` now fails; drop the option.
+
+### Fixed
+- A `capath`, `cacert`, `sslcert` or `sslkey` string that is not valid
+  text (such as a lone surrogate, or bytes that are not UTF-8) crashed the
+  calling process with `try_clause` instead of returning `bad_opts`.
+- The `capath`, `cacert`, `sslcert` and `sslkey` types said binary,
+  though katipo accepts strings too.
+- An integer option larger than 2147483647 (`timeout_ms`,
+  `connecttimeout_ms`, `maxredirs`, `dns_cache_timeout`,
+  `ca_cache_timeout` or `stream_window`) failed with an unhelpful
+  `"Couldn't read req"` from the C port, which reads only 32-bit integers.
+  It now fails with `bad_opts` naming the option, and the option types
+  give the bounds: `1..2147483647`, or from `-1` for `maxredirs`,
+  `dns_cache_timeout` and `ca_cache_timeout`.
+- `request()` required `method`, though katipo defaults it to `get`,
+  so a spec relying on the default failed to type-check.
+- `error_code()` lacked `unknown_error`, returned for a curl code katipo
+  has no name for, and on libcurl older than 7.62 named the CA
+  verification failure `ssl_cert` where katipo returns `ssl_cacert`.
+- Response headers were typed with `headers()`, whose values may be any
+  iodata, though a response's are always binaries. Responses now use
+  `resp_headers()`, and `headers()` stays the request header type, now
+  also allowing the iodata names katipo accepts.
+- `metrics()` was any proplist rather than libcurl's seven timings,
+  each a float.
+
 ## [2.1.0] — 2026-10-21
 
 Three fixes can change what an existing caller sees: a body passed to

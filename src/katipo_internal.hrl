@@ -36,7 +36,7 @@
 -define(SSL_CACERT_ERROR_CODE, peer_failed_verification).
 -else.
 -define(DOH_URL_AVAILABLE, false).
--define(SSL_CACERT_ERROR_CODE, ssl_cert).
+-define(SSL_CACERT_ERROR_CODE, ssl_cacert).
 -endif.
 
 -ifdef(sslkey_blob_available).
@@ -92,6 +92,10 @@
 -define(STREAM_WINDOW, 35).
 
 -define(DEFAULT_REQ_TIMEOUT, 30000).
+
+%% The largest integer option value the C port can read: parse_eopts
+%% decodes only SMALL_INTEGER_EXT and INTEGER_EXT, a signed 32-bit int.
+-define(MAX_INT_OPT, 2147483647).
 %% Bound on the admission gen_server:call into a pool worker. Admission is a
 %% port write plus a map insert, so a healthy worker answers in microseconds;
 %% this only trips when a worker is wedged (e.g. its C port stopped draining

@@ -21,7 +21,7 @@ every worker is at its cap, requests fail fast with
 `{error, #{code => overload}}` instead of accumulating without bound.
 """.
 -spec start(name(), pos_integer(), katipo:pool_opts()) ->
-                   supervisor:startchild_ret() | {error, map()}.
+                   supervisor:startchild_ret() | {error, katipo:error()}.
 start(PoolName, PoolSize, WorkerOpts)
   when is_atom(PoolName) andalso
        is_integer(PoolSize) andalso

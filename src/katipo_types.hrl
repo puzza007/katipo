@@ -1,7 +1,7 @@
 %% Public type definitions for the katipo API. Kept out of katipo.erl to keep
 %% the facade focused on functions. Self-contained: it pulls in
-%% katipo_internal.hrl for the ?SSL_CACERT_ERROR_CODE macro that the
-%% error_code() union references, so include order does not matter.
+%% katipo_internal.hrl for the ?SSL_CACERT_ERROR_CODE and ?MAX_INT_OPT
+%% macros the types below reference, so include order does not matter.
 
 -ifndef(KATIPO_TYPES_HRL).
 -define(KATIPO_TYPES_HRL, true).
@@ -116,6 +116,8 @@
         too_large |
         ech_required |
         curl_last |
+        %% a curl code katipo's C port has no name for
+        unknown_error |
         %% returned by us, not curl
         bad_opts |
         await_timeout |
@@ -125,13 +127,19 @@
 
 -type error_msg() :: binary().
 -type status() :: pos_integer().
--type header() :: {binary(), iodata()}.
+%% A request header. Name and value may be any iodata.
+-type header() :: {iodata(), iodata()}.
 -type headers() :: [header()].
+%% A response header, as libcurl received it except that the value's
+%% surrounding whitespace is trimmed, a folded value's lines are joined
+%% with one space, and a CR, LF or NUL inside it is replaced with a space.
+-type resp_header() :: {binary(), binary()}.
+-type resp_headers() :: [resp_header()].
 -opaque cookiejar() :: [binary()].
 -type qs_vals() :: [{unicode:chardata(), unicode:chardata() | true}].
 -type req_body() :: iodata() | qs_vals().
 -type body() :: binary().
--type connecttimeout_ms() :: pos_integer().
+-type connecttimeout_ms() :: 1..?MAX_INT_OPT.
 %% See [https://curl.haxx.se/libcurl/c/CURLOPT_CONNECTTIMEOUT.html]
 -type ssl_verifyhost() :: boolean().
 %% See [https://curl.haxx.se/libcurl/c/CURLOPT_SSL_VERIFYHOST.html]
@@ -147,93 +155,93 @@
 %% See [https://curl.haxx.se/libcurl/c/CURLOPT_UNIX_SOCKET_PATH.html]
 -type doh_url() :: binary().
 %% See [https://curl.haxx.se/libcurl/c/CURLOPT_DOH_URL.html]
--type sslcert() :: binary().
+-type sslcert() :: unicode:chardata().
 %% See [https://curl.haxx.se/libcurl/c/CURLOPT_SSLCERT.html]
--type sslkey() :: binary().
+-type capath() :: unicode:chardata().
+%% See [https://curl.haxx.se/libcurl/c/CURLOPT_CAPATH.html]
+-type cacert() :: unicode:chardata().
+%% See [https://curl.haxx.se/libcurl/c/CURLOPT_CAINFO.html]
+-type sslkey() :: unicode:chardata().
 %% See [https://curl.haxx.se/libcurl/c/CURLOPT_SSLKEY.html]
 -type sslkey_blob() :: binary().
 %% See [https://curl.haxx.se/libcurl/c/CURLOPT_SSLKEY_BLOB.html]
 -type userpwd() :: binary().
 %% See [https://curl.haxx.se/libcurl/c/CURLOPT_USERPWD.html]
--type request() :: #{url := binary(),
-                    method := method(),
-                    reply_to => pid(),
-                    headers => headers(),
-                    cookiejar => cookiejar(),
-                    body => req_body(),
-                    connecttimeout_ms => connecttimeout_ms(),
-                    followlocation => boolean(),
-                    ssl_verifyhost => ssl_verifyhost(),
-                    ssl_verifypeer => ssl_verifypeer(),
-                    capath => binary(),
-                    cacert => binary(),
-                    timeout_ms => pos_integer(),
-                    maxredirs => -1 | non_neg_integer(),
-                    http_auth => http_auth(),
-                    username => binary(),
-                    password => binary(),
-                    proxy => proxy(),
-                    tcp_fastopen => tcp_fastopen(),
-                    interface => interface(),
-                    unix_socket_path => unix_socket_path(),
-                    doh_url => doh_url(),
-                    http_version => curlopt_http_version(),
-                    sslversion => curlopt_sslversion(),
-                    verbose => boolean(),
-                    sslcert => sslcert(),
-                    sslkey => sslkey(),
-                    sslkey_blob => sslkey_blob(),
-                    keypasswd => binary(),
-                    userpwd => userpwd(),
-                    dns_cache_timeout => integer(),
-                    ca_cache_timeout => integer(),
-                    pipewait => boolean(),
-                    stream => boolean(),
-                    stream_window => pos_integer() | infinity}.
--type opts() :: #{reply_to => pid(),
-                    headers => headers(),
-                    cookiejar => cookiejar(),
-                    body => req_body(),
-                    connecttimeout_ms => connecttimeout_ms(),
-                    followlocation => boolean(),
-                    ssl_verifyhost => ssl_verifyhost(),
-                    ssl_verifypeer => ssl_verifypeer(),
-                    capath => binary(),
-                    cacert => binary(),
-                    timeout_ms => pos_integer(),
-                    maxredirs => -1 | non_neg_integer(),
-                    http_auth => http_auth(),
-                    username => binary(),
-                    password => binary(),
-                    proxy => proxy(),
-                    tcp_fastopen => tcp_fastopen(),
-                    interface => interface(),
-                    unix_socket_path => unix_socket_path(),
-                    doh_url => doh_url(),
-                    http_version => curlopt_http_version(),
-                    sslversion => curlopt_sslversion(),
-                    verbose => boolean(),
-                    sslcert => sslcert(),
-                    sslkey => sslkey(),
-                    sslkey_blob => sslkey_blob(),
-                    keypasswd => binary(),
-                    userpwd => userpwd(),
-                    dns_cache_timeout => integer(),
-                    ca_cache_timeout => integer(),
-                    pipewait => boolean(),
-                    stream => boolean(),
-                    stream_window => pos_integer() | infinity}.
+%% The request options, shared by every request type: Erlang cannot compose
+%% map types, so the fields are spelled out once here instead.
+-define(KATIPO_OPTS_FIELDS,
+        headers => headers(),
+        cookiejar => cookiejar(),
+        body => req_body(),
+        connecttimeout_ms => connecttimeout_ms(),
+        followlocation => boolean(),
+        ssl_verifyhost => ssl_verifyhost(),
+        ssl_verifypeer => ssl_verifypeer(),
+        capath => capath(),
+        cacert => cacert(),
+        timeout_ms => 1..?MAX_INT_OPT,
+        maxredirs => -1..?MAX_INT_OPT,
+        http_auth => http_auth(),
+        username => binary(),
+        password => binary(),
+        proxy => proxy(),
+        tcp_fastopen => tcp_fastopen(),
+        interface => interface(),
+        unix_socket_path => unix_socket_path(),
+        doh_url => doh_url(),
+        http_version => curlopt_http_version(),
+        sslversion => curlopt_sslversion(),
+        verbose => boolean(),
+        sslcert => sslcert(),
+        sslkey => sslkey(),
+        sslkey_blob => sslkey_blob(),
+        keypasswd => binary(),
+        userpwd => userpwd(),
+        dns_cache_timeout => -1..?MAX_INT_OPT,
+        ca_cache_timeout => -1..?MAX_INT_OPT,
+        pipewait => boolean()).
+%% The options only the async API takes: where to deliver the response,
+%% and whether to stream it. The synchronous API rejects them.
+-define(KATIPO_ASYNC_OPTS_FIELDS,
+        reply_to => pid(),
+        stream => boolean(),
+        stream_window => 1..?MAX_INT_OPT | infinity).
+%% Options and full request maps for the synchronous API (req/2, get/3 and
+%% the rest) and for the async API (async_req/2, async_get/3 and the rest).
+-type opts() :: #{?KATIPO_OPTS_FIELDS}.
+-type request() :: #{url := url(), method => method(), ?KATIPO_OPTS_FIELDS}.
+-type async_opts() :: #{?KATIPO_OPTS_FIELDS, ?KATIPO_ASYNC_OPTS_FIELDS}.
+-type async_request() :: #{url := url(), method => method(),
+                           ?KATIPO_OPTS_FIELDS, ?KATIPO_ASYNC_OPTS_FIELDS}.
 -export_type([opts/0]).
--type metrics() :: proplists:proplist().
--type response() :: {ok, #{status := status(),
-                           headers := headers(),
-                           cookiejar := cookiejar(),
-                           body := body()}} |
-                    {error, #{code := error_code(),
-                              message := error_msg()}}.
--type async_response() :: {ok, reference()} |
-                          {error, #{code := error_code(),
-                                    message := error_msg()}}.
+-export_type([async_opts/0]).
+-export_type([async_request/0]).
+%% libcurl's timings for the request, in seconds. Empty when libcurl
+%% reported none: the request failed validation, timed out or lost its
+%% worker on the Erlang side, or never reached a transfer.
+-type metric() :: total_time | namelookup_time | connect_time |
+                  appconnect_time | pretransfer_time | redirect_time |
+                  starttransfer_time.
+-type metrics() :: [{metric(), float()}].
+-type error() :: #{code := error_code(), message := error_msg()}.
+-type response_map() :: #{status := status(),
+                          headers := resp_headers(),
+                          cookiejar := cookiejar(),
+                          body := body()}.
+-type response() :: {ok, response_map()} | {error, error()}.
+-type async_response() :: {ok, reference()} | {error, error()}.
+%% Every message an async request can deliver to its reply_to process. A
+%% buffered request ends with one katipo_response or katipo_error. A
+%% streamed one (stream => true) gets katipo_headers, then zero or more
+%% katipo_chunk, then katipo_done, and katipo_error can end it at any
+%% point. A cancelled request gets nothing more, nor does one whose worker
+%% is killed outright, so keep a timeout on the receive.
+-type async_message() ::
+        {katipo_response, reference(), response_map()} |
+        {katipo_error, reference(), error()} |
+        {katipo_headers, reference(), #{status := status(), headers := resp_headers()}} |
+        {katipo_chunk, reference(), binary()} |
+        {katipo_done, reference(), #{status := status(), cookiejar := cookiejar()}}.
 -type http_auth() :: basic | digest | ntlm | negotiate.
 -type pipelining() :: nothing | http1 | multiplex.
 -type curlopt_http_version() :: curl_http_version_none |
@@ -270,6 +278,11 @@
 -export_type([status/0]).
 -export_type([header/0]).
 -export_type([headers/0]).
+-export_type([resp_header/0]).
+-export_type([resp_headers/0]).
+-export_type([capath/0]).
+-export_type([cacert/0]).
+-export_type([metric/0]).
 -export_type([cookiejar/0]).
 -export_type([req_body/0]).
 -export_type([body/0]).
@@ -292,5 +305,8 @@
 -export_type([sslkey_blob/0]).
 -export_type([userpwd/0]).
 -export_type([async_response/0]).
+-export_type([error/0]).
+-export_type([response_map/0]).
+-export_type([async_message/0]).
 
 -endif.

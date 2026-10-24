@@ -238,6 +238,8 @@ groups() ->
        capath_string,
        cacert_string,
        path_opts_bad_list,
+       path_opts_not_text,
+       int_opts_out_of_range,
        sslversion,
        badssl]},
      {https_mutual, [],
@@ -277,6 +279,7 @@ groups() ->
        streaming_timeout,
        streaming_connect_error,
        streaming_sync_rejected,
+       sync_rejects_async_opts,
        streaming_window_invalid,
        streaming_worker_death,
        streaming_flow_starvation,
@@ -1242,6 +1245,35 @@ path_opts_bad_list(_) ->
         katipo:get(?POOL, <<"https://localhost/">>,
                    #{sslkey => InvalidList}).
 
+%% Integer options the C port cannot read (above a signed 32-bit int) are
+%% rejected in Erlang, naming the option, rather than by the port with a
+%% generic "Couldn't read req"; the largest it can read still goes through.
+int_opts_out_of_range(_) ->
+    Max = 2147483647,
+    Opts = [connecttimeout_ms, timeout_ms, maxredirs, dns_cache_timeout,
+            ca_cache_timeout],
+    [{error, #{code := bad_opts, message := Message}} =
+         katipo:check_opts(#{Opt => Max + 1})
+     || Opt <- Opts,
+        Message <- [iolist_to_binary(io_lib:format("~p", [[{Opt, Max + 1}]]))]],
+    {error, #{code := bad_opts}} =
+        katipo:check_opts(#{stream => true, stream_window => Max + 1}),
+    [ok = katipo:check_opts(#{Opt => Max}) || Opt <- Opts],
+    {error, #{code := Code}} =
+        katipo:get(?POOL, <<"http://127.0.0.1:1/">>,
+                   #{dns_cache_timeout => Max, connecttimeout_ms => 1000}),
+    true = Code =/= bad_opts,
+    ok.
+
+%% Strings that are not valid text: unicode:characters_to_binary/1 returns
+%% {error, _, _} or {incomplete, _, _} for these rather than raising, which
+%% must still be bad_opts, not a crash in the caller.
+path_opts_not_text(_) ->
+    [{error, #{code := bad_opts}} = katipo:check_opts(#{Opt => Value})
+     || Opt <- [capath, cacert, sslcert, sslkey],
+        Value <- [[16#D800], [<<255>>], [<<195>>]]],
+    ok.
+
 sslversion(_) ->
     %% Test the sslversion option to set minimum TLS version
     %% TLS 1.2 should work with most modern servers
@@ -1496,6 +1528,21 @@ streaming_connect_error(_Config) ->
 streaming_sync_rejected(_Config) ->
     {error, #{code := bad_opts}} =
         katipo:get(?POOL, <<"http://192.0.2.1">>, #{stream => true}).
+
+%% Every async-only option is rejected by the synchronous API, naming it,
+%% even with a value that would change nothing (stream => false) and even
+%% reply_to, which used to be silently ignored.
+sync_rejects_async_opts(_Config) ->
+    Self = self(),
+    [{error, #{code := bad_opts, message := Message}} =
+         katipo:get(?POOL, <<"http://192.0.2.1">>, #{Opt => Value})
+     || {Opt, Value} <- [{reply_to, Self}, {stream, false},
+                         {stream_window, infinity}],
+        Message <- [iolist_to_binary(io_lib:format("~p", [[{Opt, Value}]]))]],
+    {error, #{code := bad_opts}} =
+        katipo:req(?POOL, #{url => <<"http://192.0.2.1">>, reply_to => Self}),
+    %% check_opts/1 validates under the async rules, so it accepts them.
+    ok = katipo:check_opts(#{reply_to => Self, stream => false}).
 
 %% The request timer keeps running while a transfer is paused awaiting
 %% credits: a consumer that stops granting eventually gets the same

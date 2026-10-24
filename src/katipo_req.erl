@@ -27,7 +27,17 @@
 %% rules that depend on the caller: a streamed response has no single reply
 %% to return, so `stream` is only valid on the async path, and a
 %% `stream_window` only means something on a streaming request.
--spec build_req(katipo:request(), sync | async) -> {ok, req()} | {error, map()}.
+-spec build_req(katipo:async_request(), sync | async) ->
+          {ok, req()} | {error, katipo:error()}.
+build_req(Opts, sync) when is_map_key(reply_to, Opts);
+                           is_map_key(stream, Opts);
+                           is_map_key(stream_window, Opts) ->
+    %% Options only the async API can honour. reply_to used to be ignored
+    %% here and stream => false accepted, but katipo:opts() excludes them,
+    %% so the runtime agrees with the types and the mistake is not silent.
+    Given = [{K, V} || K <- [reply_to, stream, stream_window],
+                       {ok, V} <- [maps:find(K, Opts)]],
+    {error, error_map(bad_opts, Given)};
 build_req(Opts, Mode) ->
     case process_opts(Opts) of
         {ok, #req{url = undefined}} ->
@@ -60,10 +70,10 @@ head_body_error(#req{method = ?HEAD, body = Body}) ->
 head_body_error(#req{}) ->
     ok.
 
-%% The cross-field stream rules, shared with check_opts/1 so pre-validation
-%% agrees with the request entry points.
-stream_opts_error(#req{stream = ?STREAM_TRUE}, sync) ->
-    {error, error_map(bad_opts, [{stream, true}])};
+%% The cross-field stream rule, shared with check_opts/1 so pre-validation
+%% agrees with the request entry points: a stream_window only means
+%% something on a streaming request. (The sync API rejects every stream
+%% option before getting here; see build_req/2.)
 stream_opts_error(#req{stream = ?STREAM_FALSE, stream_window = W}, _Mode)
   when W =/= ?STREAM_WINDOW_UNLIMITED ->
     {error, error_map(bad_opts, [{stream_window, W}])};
@@ -72,7 +82,7 @@ stream_opts_error(#req{}, _Mode) ->
 
 %% Validates under the async rules (the superset: `stream` is accepted);
 %% cross-field checks match what req/2 and async_req/2 enforce.
--spec check_opts(katipo:request()) -> ok | {error, map()}.
+-spec check_opts(katipo:async_request() | katipo:async_opts()) -> ok | {error, katipo:error()}.
 check_opts(Opts) when is_map(Opts) ->
     case process_opts(Opts) of
         {ok, Req} ->
@@ -94,7 +104,8 @@ method_int_to_binary(?OPTIONS) -> <<"OPTIONS">>;
 method_int_to_binary(?PATCH) -> <<"PATCH">>;
 method_int_to_binary(?DELETE) -> <<"DELETE">>.
 
--spec process_opts(katipo:request()) -> {ok, req()} | {error, map()}.
+-spec process_opts(katipo:async_request() | katipo:async_opts()) ->
+          {ok, req()} | {error, katipo:error()}.
 process_opts(Opts) ->
     case maps:fold(fun opt/3, {#req{}, []}, Opts) of
         {Req = #req{}, []} ->
@@ -162,6 +173,7 @@ encode_body(Body) when is_binary(Body) orelse is_list(Body) ->
 encode_body(Body) ->
     {error, {invalid_body, Body}}.
 
+-spec error_map(katipo:error_code(), term()) -> katipo:error().
 error_map(Code, Message) when is_atom(Code) andalso is_binary(Message) ->
     #{code => Code, message => Message};
 error_map(Code, Message) when is_atom(Code) ->
@@ -194,7 +206,8 @@ opt(body, Body, {Req, Errors}) ->
         {ok, Encoded} ->
             {Req#req{body = Encoded}, Errors}
     end;
-opt(connecttimeout_ms, Ms, {Req, Errors}) when is_integer(Ms) andalso Ms > 0 ->
+opt(connecttimeout_ms, Ms, {Req, Errors})
+  when is_integer(Ms) andalso Ms > 0 andalso Ms =< ?MAX_INT_OPT ->
     {Req#req{connecttimeout_ms = Ms}, Errors};
 opt(followlocation, true, {Req, Errors}) ->
     {Req#req{followlocation = ?FOLLOWLOCATION_TRUE}, Errors};
@@ -212,17 +225,21 @@ opt(capath, CAPath, {Req, Errors}) when is_binary(CAPath) ->
     {Req#req{capath = CAPath}, Errors};
 opt(capath, CAPath, {Req, Errors}) when is_list(CAPath) ->
     try unicode:characters_to_binary(CAPath) of
-        Bin when is_binary(Bin) -> {Req#req{capath = Bin}, Errors}
+        Bin when is_binary(Bin) -> {Req#req{capath = Bin}, Errors};
+        _Invalid -> {Req, [{capath, CAPath} | Errors]}
     catch _:_ -> {Req, [{capath, CAPath} | Errors]} end;
 opt(cacert, CACert, {Req, Errors}) when is_binary(CACert) ->
     {Req#req{cacert = CACert}, Errors};
 opt(cacert, CACert, {Req, Errors}) when is_list(CACert) ->
     try unicode:characters_to_binary(CACert) of
-        Bin when is_binary(Bin) -> {Req#req{cacert = Bin}, Errors}
+        Bin when is_binary(Bin) -> {Req#req{cacert = Bin}, Errors};
+        _Invalid -> {Req, [{cacert, CACert} | Errors]}
     catch _:_ -> {Req, [{cacert, CACert} | Errors]} end;
-opt(timeout_ms, Ms, {Req, Errors}) when is_integer(Ms) andalso Ms > 0 ->
+opt(timeout_ms, Ms, {Req, Errors})
+  when is_integer(Ms) andalso Ms > 0 andalso Ms =< ?MAX_INT_OPT ->
     {Req#req{timeout_ms = Ms}, Errors};
-opt(maxredirs, M, {Req, Errors}) when is_integer(M) andalso M >= -1 ->
+opt(maxredirs, M, {Req, Errors})
+  when is_integer(M) andalso M >= -1 andalso M =< ?MAX_INT_OPT ->
     {Req#req{maxredirs = M}, Errors};
 opt(http_auth, basic, {Req, Errors}) ->
     {Req#req{http_auth = ?CURLAUTH_BASIC}, Errors};
@@ -283,13 +300,15 @@ opt(sslcert, Cert, {Req, Errors}) when is_binary(Cert) ->
     {Req#req{sslcert = Cert}, Errors};
 opt(sslcert, Cert, {Req, Errors}) when is_list(Cert) ->
     try unicode:characters_to_binary(Cert) of
-        Bin when is_binary(Bin) -> {Req#req{sslcert = Bin}, Errors}
+        Bin when is_binary(Bin) -> {Req#req{sslcert = Bin}, Errors};
+        _Invalid -> {Req, [{sslcert, Cert} | Errors]}
     catch _:_ -> {Req, [{sslcert, Cert} | Errors]} end;
 opt(sslkey, Key, {Req, Errors}) when is_binary(Key) ->
     {Req#req{sslkey = Key}, Errors};
 opt(sslkey, Key, {Req, Errors}) when is_list(Key) ->
     try unicode:characters_to_binary(Key) of
-        Bin when is_binary(Bin) -> {Req#req{sslkey = Bin}, Errors}
+        Bin when is_binary(Bin) -> {Req#req{sslkey = Bin}, Errors};
+        _Invalid -> {Req, [{sslkey, Key} | Errors]}
     catch _:_ -> {Req, [{sslkey, Key} | Errors]} end;
 opt(sslkey_blob, Key, {Req, Errors})
   when ?SSLKEY_BLOB_AVAILABLE andalso is_binary(Key) ->
@@ -298,9 +317,11 @@ opt(keypasswd, Pass, {Req, Errors}) when is_binary(Pass) ->
     {Req#req{keypasswd = Pass}, Errors};
 opt(userpwd, UserPwd, {Req, Errors}) when is_binary(UserPwd) ->
     {Req#req{userpwd = UserPwd}, Errors};
-opt(dns_cache_timeout, Secs, {Req, Errors}) when is_integer(Secs) andalso Secs >= -1 ->
+opt(dns_cache_timeout, Secs, {Req, Errors})
+  when is_integer(Secs) andalso Secs >= -1 andalso Secs =< ?MAX_INT_OPT ->
     {Req#req{dns_cache_timeout = Secs}, Errors};
-opt(ca_cache_timeout, Secs, {Req, Errors}) when is_integer(Secs) andalso Secs >= -1 ->
+opt(ca_cache_timeout, Secs, {Req, Errors})
+  when is_integer(Secs) andalso Secs >= -1 andalso Secs =< ?MAX_INT_OPT ->
     {Req#req{ca_cache_timeout = Secs}, Errors};
 opt(pipewait, true, {Req, Errors}) ->
     {Req#req{pipewait = ?PIPEWAIT_TRUE}, Errors};
@@ -312,7 +333,8 @@ opt(stream, false, {Req, Errors}) ->
     {Req#req{stream = ?STREAM_FALSE}, Errors};
 opt(stream_window, infinity, {Req, Errors}) ->
     {Req#req{stream_window = ?STREAM_WINDOW_UNLIMITED}, Errors};
-opt(stream_window, N, {Req, Errors}) when is_integer(N) andalso N > 0 ->
+opt(stream_window, N, {Req, Errors})
+  when is_integer(N) andalso N > 0 andalso N =< ?MAX_INT_OPT ->
     {Req#req{stream_window = N}, Errors};
 opt(reply_to, Pid, {Req, Errors}) when is_pid(Pid) ->
     {Req, Errors};
