@@ -55,6 +55,10 @@ All notable changes to this project are documented here. This project follows
   build saw, which could differ from the one the C port was built with
   (on libcurl older than 7.62 it named `ssl_cert` instead). It now lists
   both.
+- Response headers were typed with `headers()`, whose values may be any
+  iodata, though a response's are always binaries. Responses now use
+  `resp_headers()`, and `headers()` stays the request header type, now
+  also allowing the iodata names katipo accepts.
 
 ## [2.1.0] — 2026-10-21
 

@@ -126,7 +126,7 @@ another, and fails fast with `overload` when every worker is full.
 
 | Option                  | Type                                | Default     | Notes                                                                               |
 |:------------------------|:------------------------------------|:------------|:------------------------------------------------------------------------------------|
-| `headers`               | `[{binary(), iodata()}]`            | `[]`        |                                                                                     |
+| `headers`               | `[{iodata(), iodata()}]`            | `[]`        |                                                                                     |
 | `cookiejar`             | opaque (returned in response)       | `[]`        |                                                                                     |
 | `body`                  | `iodata()`                          | `<<>>`      | sent with every method but `head` (an error there); a key/value list is form-encoded. Without a `content-type` header, only POST and form bodies get `application/x-www-form-urlencoded` |
 | `connecttimeout_ms`     | `1..2147483647`                     | 30000       | [docs](https://curl.se/libcurl/c/CURLOPT_CONNECTTIMEOUT.html)                  |
