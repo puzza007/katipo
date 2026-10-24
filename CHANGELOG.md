@@ -5,6 +5,17 @@ All notable changes to this project are documented here. This project follows
 
 ## [Unreleased]
 
+### Fixed
+- With libcurl 8.10.0 to 8.11.0, a request's timeout could fire late,
+  not until some transfer on the same port next sent or received data,
+  which for a lone request stuck on a slow server meant when the server
+  finally answered. libcurl's timer could fire slightly early (after many
+  transfers finished in one go, or because libevent reads a coarser clock
+  than libcurl); libcurl then found nothing due and asked for no new
+  timer. Other libcurl versions ask again themselves. The port now re-arms
+  the timer whenever it fires before anything is due. Building katipo
+  now needs libevent 2.1.1 or later.
+
 ## [2.1.0] — 2026-10-21
 
 Three fixes can change what an existing caller sees: a body passed to

@@ -14,7 +14,8 @@ connections per worker.
 {deps, [{katipo, "2.1.0"}]}.
 ```
 
-Building needs a C compiler, `make`, and the libcurl and libevent headers:
+Building needs a C compiler, `make`, and the libcurl and libevent (2.1.1 or
+later) headers:
 
 ```sh
 apt-get install gcc make libcurl4-openssl-dev libevent-dev   # Debian/Ubuntu

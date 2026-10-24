@@ -1476,7 +1476,7 @@ streaming_timeout(Config) ->
                                               method => get,
                                               stream => true,
                                               timeout_ms => 1000}),
-    ok = expect_stream_error(Ref, operation_timedout, 10000).
+    ok = expect_stream_error(Ref, operation_timedout, 5000).
 
 %% A connect failure before any response arrives delivers a single
 %% katipo_error and no headers.
@@ -1511,7 +1511,7 @@ streaming_flow_starvation(Config) ->
                                               stream_window => 1,
                                               connecttimeout_ms => 1500,
                                               timeout_ms => 1500}),
-    ok = expect_stream_error(Ref, operation_timedout, 10000).
+    ok = expect_stream_error(Ref, operation_timedout, 5000).
 
 %% Worker death mid-stream delivers the same prompt terminal worker_died
 %% as it does for buffered async requests.

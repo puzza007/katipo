@@ -2,6 +2,10 @@
 #include <event2/event.h>
 #include <event2/bufferevent.h>
 #include <event2/buffer.h>
+
+#if LIBEVENT_VERSION_NUMBER < 0x02010100
+#error "katipo needs libevent 2.1.1 or later (for event_base_update_cache_time)"
+#endif
 #include <sys/types.h>
 #include <sys/uio.h>
 #include <sys/resource.h>
@@ -415,6 +419,7 @@ static const char *curl_error_code(CURLcode error) {
 }
 
 static void check_multi_info(GlobalInfo *global);
+static int multi_timer_cb(CURLM *multi, long timeout_ms, void *userp);
 
 /* Die if we get a bad CURLMcode somewhere */
 static void mcode_or_die(const char *where, CURLMcode code) {
@@ -794,6 +799,22 @@ static void check_multi_info(GlobalInfo *global) {
   }
 }
 
+/* curl only calls multi_timer_cb when its next deadline changes. If the
+ * timer fired before that deadline, curl found nothing due and, its deadline
+ * unchanged, asks for no new timer, so none is pending and the transfers'
+ * timeouts would wait for socket activity. Arm one for whatever curl still
+ * has due. Early fires happen even with the cache refreshed: libevent reads
+ * a coarser clock than curl, so this is what keeps the timer armed. */
+static void rearm_if_early(GlobalInfo *global) {
+  long timeout_ms;
+
+  if (!evtimer_pending(global->timer_event, NULL) &&
+      curl_multi_timeout(global->multi, &timeout_ms) == CURLM_OK &&
+      timeout_ms >= 0) {
+    multi_timer_cb(global->multi, timeout_ms, global);
+  }
+}
+
 static void timer_cb(int fd, short kind, void *userp) {
   GlobalInfo *global = (GlobalInfo *)userp;
   CURLMcode rc;
@@ -804,6 +825,7 @@ static void timer_cb(int fd, short kind, void *userp) {
                                 &global->still_running);
   mcode_or_die("timer_cb: curl_multi_socket_action", rc);
   check_multi_info(global);
+  rearm_if_early(global);
 }
 
 static void event_cb(int fd, short kind, void *userp) {
@@ -818,11 +840,6 @@ static void event_cb(int fd, short kind, void *userp) {
   mcode_or_die("event_cb: curl_multi_socket_action", rc);
 
   check_multi_info(global);
-  if (global->still_running <= 0) {
-    if (evtimer_pending(global->timer_event, NULL)) {
-      evtimer_del(global->timer_event);
-    }
-  }
 }
 
 static void setsock(SockInfo *f, curl_socket_t s, CURL *e, int act,
@@ -878,8 +895,19 @@ static int multi_timer_cb(CURLM *multi, long timeout_ms, void *userp) {
   struct timeval timeout;
   (void)multi; /* unused */
 
+  if (timeout_ms < 0) {
+    /* No timeouts left: curl asks for the timer to be removed. */
+    evtimer_del(global->timer_event);
+    return 0;
+  }
   timeout.tv_sec = timeout_ms / 1000;
   timeout.tv_usec = (timeout_ms % 1000) * 1000;
+  /* curl counts timeout_ms from now, but libevent adds it to the time it
+   * cached when this loop iteration began, so after a long callback (many
+   * transfers completing at once) the timer would fire early by however
+   * long the callback ran. Refreshing the cache removes that error; the
+   * clock difference that remains is left to rearm_if_early. */
+  event_base_update_cache_time(global->evbase);
   evtimer_add(global->timer_event, &timeout);
   return 0;
 }
