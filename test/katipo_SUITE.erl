@@ -1471,7 +1471,7 @@ streaming_cancel(Config) ->
 %% katipo_error as for buffered requests.
 streaming_timeout(Config) ->
     {req_opts, Opts} = lists:keyfind(req_opts, 1, Config),
-    Url = httpbin_url(Config, <<"/delay/10">>),
+    Url = httpbin_url(Config, <<"/delay/3">>),
     {ok, Ref} = katipo:async_req(?POOL, Opts#{url => Url,
                                               method => get,
                                               stream => true,
