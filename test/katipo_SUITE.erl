@@ -304,6 +304,7 @@ groups() ->
        streaming_timeout,
        streaming_connect_error,
        streaming_sync_rejected,
+       sync_rejects_async_opts,
        streaming_window_invalid,
        streaming_worker_death,
        streaming_flow_starvation,
@@ -1539,6 +1540,38 @@ streaming_sync_rejected(_Config) ->
     {error, #{code := bad_opts}} =
         katipo:get(?POOL, <<"http://192.0.2.1">>, #{stream => true}).
 
+%% The synchronous API rejects an async-only option it would not act on,
+%% naming it: stream => true, a bounded stream_window, and a reply_to other
+%% than the caller, which used to be silently ignored.
+sync_rejects_async_opts(_Config) ->
+    Self = self(),
+    Other = spawn(fun() -> ok end),
+    [{error, #{code := bad_opts, message := Message}} =
+         katipo:get(?POOL, <<"http://192.0.2.1">>, #{Opt => Value})
+     || {Opt, Value} <- [{reply_to, Other}, {stream, true},
+                         {stream_window, 8}],
+        Message <- [iolist_to_binary(io_lib:format("~p", [[{Opt, Value}]]))]],
+    {error, #{code := bad_opts}} =
+        katipo:req(?POOL, #{url => <<"http://192.0.2.1">>, reply_to => Other}),
+    %% The values that change nothing on a sync call are accepted, so one
+    %% options map can serve both APIs.
+    Shared = #{reply_to => Self, stream => false, stream_window => infinity},
+    ok = katipo:check_opts(Shared#{url => <<"http://192.0.2.1">>}, sync),
+    {error, #{code := Code}} =
+        katipo:get(?POOL, <<"http://127.0.0.1:1/">>, Shared#{connecttimeout_ms => 1000}),
+    true = Code =/= bad_opts,
+    %% They are reported along with any other invalid option, not instead.
+    {error, #{code := bad_opts, message := Both}} =
+        katipo:get(?POOL, <<"http://192.0.2.1">>, #{reply_to => Other, timeout_ms => 0}),
+    {match, _} = re:run(Both, <<"reply_to">>),
+    {match, _} = re:run(Both, <<"timeout_ms">>),
+    %% check_opts/2 applies the same rules; check_opts/1 is the async ones.
+    {error, #{code := bad_opts}} =
+        katipo:check_opts(#{reply_to => Other, stream => true}, sync),
+    ok = katipo:check_opts(#{reply_to => Other, stream => true}, async),
+    ok = katipo:check_opts(#{reply_to => Other, stream => true}),
+    ok = katipo:check_opts(#{method => post, body => <<"x">>}, sync).
+
 %% The request timer keeps running while a transfer is paused awaiting
 %% credits: a consumer that stops granting eventually gets the same
 %% terminal operation_timedout as any stalled request. Both curl-side and
@@ -2164,9 +2197,17 @@ async_delete(Config) ->
     {ok, Ref} = katipo:async_delete(?POOL, Url, Opts),
     {ok, #{status := 200}} = katipo:await(Ref).
 
+%% An invalid reply_to is named like any other invalid option, alongside
+%% the others, and check_opts/2 gives the same error.
 async_invalid_reply_to(_Config) ->
-    {error, #{code := bad_opts, message := <<"[{reply_to,invalid}]">>}} =
-        katipo:async_get(?POOL, <<"https://localhost">>, #{reply_to => not_a_pid}).
+    {error, #{code := bad_opts, message := <<"[{reply_to,not_a_pid}]">>}} =
+        katipo:async_get(?POOL, <<"https://localhost">>, #{reply_to => not_a_pid}),
+    Opts = #{reply_to => not_a_pid, timeout_ms => 0},
+    {error, Error} = katipo:async_get(?POOL, <<"https://localhost">>, Opts),
+    {error, Error} = katipo:check_opts(Opts, async),
+    #{message := Both} = Error,
+    {match, _} = re:run(Both, <<"reply_to">>),
+    {match, _} = re:run(Both, <<"timeout_ms">>).
 
 async_url_missing(_Config) ->
     {error, #{code := bad_opts}} =

@@ -8,7 +8,7 @@
 %% of katipo to keep the public facade small.
 
 -export([build_req/2]).
--export([check_opts/1]).
+-export([check_opts/2]).
 -export([get_timeout/1]).
 -export([method_int_to_binary/1]).
 -export([error_map/2]).
@@ -23,29 +23,44 @@
 -dialyzer({nowarn_function, opt/3}).
 
 %% Build a validated, timeout-stamped #req{} from an opts map. Shared by the
-%% sync req/2 and async_req/2 entry points; Mode carries the cross-field
-%% rules that depend on the caller: a streamed response has no single reply
-%% to return, so `stream` is only valid on the async path, and a
-%% `stream_window` only means something on a streaming request.
--spec build_req(katipo:request(), sync | async) -> {ok, req()} | {error, katipo:error()}.
+%% sync req/2 and async_req/2 entry points; Mode says whether the async-only
+%% options are allowed.
+-spec build_req(katipo:request(), sync | async) ->
+          {ok, req()} | {error, katipo:error()}.
 build_req(Opts, Mode) ->
-    case process_opts(Opts) of
+    case validate(Opts, Mode) of
         {ok, #req{url = undefined}} ->
             {error, error_map(bad_opts, <<"[{url,undefined}]">>)};
         {ok, Req} ->
-            case cross_field_error(Req, Mode) of
-                ok ->
-                    {ok, Req#req{timeout = ?MODULE:get_timeout(Req)}};
-                {error, _} = Error ->
-                    Error
+            {ok, Req#req{timeout = ?MODULE:get_timeout(Req)}};
+        {error, _} = Error ->
+            Error
+    end.
+
+%% The checks build_req/2 makes for the same Mode, except that the
+%% options may leave out url.
+-spec check_opts(katipo:partial_request(), sync | async) ->
+          ok | {error, katipo:error()}.
+check_opts(Opts, Mode) when is_map(Opts) ->
+    case validate(Opts, Mode) of
+        {ok, _} -> ok;
+        {error, _} = Error -> Error
+    end.
+
+validate(Opts, Mode) ->
+    case process_opts(Opts, Mode) of
+        {ok, Req} ->
+            case cross_field_error(Req) of
+                ok -> {ok, Req};
+                {error, _} = Error -> Error
             end;
         {error, _} = Error ->
             Error
     end.
 
-cross_field_error(Req, Mode) ->
+cross_field_error(Req) ->
     case head_body_error(Req) of
-        ok -> stream_opts_error(Req, Mode);
+        ok -> stream_opts_error(Req);
         {error, _} = Error -> Error
     end.
 
@@ -60,26 +75,12 @@ head_body_error(#req{method = ?HEAD, body = Body}) ->
 head_body_error(#req{}) ->
     ok.
 
-%% The cross-field stream rules, shared with check_opts/1 so pre-validation
-%% agrees with the request entry points.
-stream_opts_error(#req{stream = ?STREAM_TRUE}, sync) ->
-    {error, error_map(bad_opts, [{stream, true}])};
-stream_opts_error(#req{stream = ?STREAM_FALSE, stream_window = W}, _Mode)
+%% A stream_window only means something on a streaming request.
+stream_opts_error(#req{stream = ?STREAM_FALSE, stream_window = W})
   when W =/= ?STREAM_WINDOW_UNLIMITED ->
     {error, error_map(bad_opts, [{stream_window, W}])};
-stream_opts_error(#req{}, _Mode) ->
+stream_opts_error(#req{}) ->
     ok.
-
-%% Validates under the async rules (the superset: `stream` is accepted);
-%% cross-field checks match what req/2 and async_req/2 enforce.
--spec check_opts(katipo:request() | katipo:opts()) -> ok | {error, katipo:error()}.
-check_opts(Opts) when is_map(Opts) ->
-    case process_opts(Opts) of
-        {ok, Req} ->
-            cross_field_error(Req, async);
-        {error, _} = Error ->
-            Error
-    end.
 
 -spec get_timeout(req()) -> pos_integer().
 get_timeout(#req{connecttimeout_ms = ConnMs, timeout_ms = ReqMs}) ->
@@ -94,9 +95,36 @@ method_int_to_binary(?OPTIONS) -> <<"OPTIONS">>;
 method_int_to_binary(?PATCH) -> <<"PATCH">>;
 method_int_to_binary(?DELETE) -> <<"DELETE">>.
 
--spec process_opts(katipo:request() | katipo:opts()) -> {ok, req()} | {error, katipo:error()}.
-process_opts(Opts) ->
-    case maps:fold(fun opt/3, {#req{}, []}, Opts) of
+%% Every invalid option is reported at once. The sync API acts on none of
+%% the async-only options, so it takes only the values that change nothing
+%% there (the reply goes to the caller, the body is not streamed) and
+%% rejects the rest, rather than ignoring a mistake.
+-spec process_opts(katipo:partial_request(), sync | async) ->
+          {ok, req()} | {error, katipo:error()}.
+process_opts(Opts, async) ->
+    fold_opts(Opts, []);
+process_opts(Opts, sync) ->
+    {SyncOpts, Rejected} = lists:foldl(fun take_sync_noop/2, {Opts, []},
+                                       ?KATIPO_ASYNC_OPTS),
+    fold_opts(SyncOpts, Rejected).
+
+take_sync_noop(Key, {Opts, Rejected}) ->
+    case maps:take(Key, Opts) of
+        error -> {Opts, Rejected};
+        {Value, Rest} ->
+            case sync_noop(Key, Value) of
+                true -> {Rest, Rejected};
+                false -> {Rest, [{Key, Value} | Rejected]}
+            end
+    end.
+
+sync_noop(reply_to, Pid) -> Pid =:= self();
+sync_noop(stream, false) -> true;
+sync_noop(stream_window, infinity) -> true;
+sync_noop(_, _) -> false.
+
+fold_opts(Opts, Rejected) ->
+    case maps:fold(fun opt/3, {#req{}, Rejected}, Opts) of
         {Req = #req{}, []} ->
             {ok, content_type(Req, Opts)};
         {#req{}, Errors} ->
