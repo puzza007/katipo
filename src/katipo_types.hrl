@@ -159,8 +159,8 @@
 %% See [https://curl.haxx.se/libcurl/c/CURLOPT_SSLKEY_BLOB.html]
 -type userpwd() :: binary().
 %% See [https://curl.haxx.se/libcurl/c/CURLOPT_USERPWD.html]
--type request() :: #{url := binary(),
-                    method := method(),
+-type request() :: #{url := url(),
+                    method => method(),
                     reply_to => pid(),
                     headers => headers(),
                     cookiejar => cookiejar(),

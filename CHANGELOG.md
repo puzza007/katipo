@@ -47,6 +47,8 @@ All notable changes to this project are documented here. This project follows
   on a 32-bit build the port dropped a larger one and left the stream
   paused until it timed out, and repeated grants no longer overflow the
   port's count.
+- `request()` required `method`, though katipo defaults it to `get`,
+  so a spec relying on the default failed to type-check.
 
 ## [2.1.0] — 2026-10-21
 
