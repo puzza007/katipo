@@ -15,6 +15,14 @@ All notable changes to this project are documented here. This project follows
   timer. Other libcurl versions ask again themselves. The port now re-arms
   the timer whenever it fires before anything is due. Building katipo
   now needs libevent 2.1.1 or later.
+- A request header name that is not valid UTF-8 crashed the calling
+  process with `badarg` on any request whose body katipo labels, instead
+  of being sent as given.
+- A request header that is not a `{Name, Value}` pair of binaries or
+  iolists now fails with `bad_opts`, naming its position in the list
+  rather than the headers, which may hold credentials. Before, a bare binary crashed the
+  caller or was silently dropped, and an integer value crashed it or was
+  sent as a single byte.
 
 ## [2.1.0] — 2026-10-21
 
