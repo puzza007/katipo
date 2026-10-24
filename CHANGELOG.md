@@ -5,6 +5,11 @@ All notable changes to this project are documented here. This project follows
 
 ## [Unreleased]
 
+### Added
+- `unix_socket_path` accepts a string as well as a binary, like the other
+  path options, and like them fails with `bad_opts` for a path holding a
+  NUL byte.
+
 ### Fixed
 - With libcurl 8.10.0 to 8.11.0, a request's timeout could fire late,
   not until some transfer on the same port next sent or received data,

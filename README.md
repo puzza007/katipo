@@ -143,7 +143,7 @@ another, and fails fast with `overload` when every worker is full.
 | `tcp_fastopen`          | `boolean()`                         | `false`     | [docs](https://curl.se/libcurl/c/CURLOPT_TCP_FASTOPEN.html) curl >= 7.49.0     |
 | `pipewait`              | `boolean()`                         | `true`      | [docs](https://curl.se/libcurl/c/CURLOPT_PIPEWAIT.html) curl >= 7.43.0         |
 | `interface`             | `binary()`                          | `undefined` | [docs](https://curl.se/libcurl/c/CURLOPT_INTERFACE.html)                       |
-| `unix_socket_path`      | `binary()`                          | `undefined` | [docs](https://curl.se/libcurl/c/CURLOPT_UNIX_SOCKET_PATH.html) curl >= 7.40.0 |
+| `unix_socket_path`      | `binary()` \| `string()`            | `undefined` | [docs](https://curl.se/libcurl/c/CURLOPT_UNIX_SOCKET_PATH.html) curl >= 7.40.0 |
 | `doh_url`               | `binary()`                          | `undefined` | [docs](https://curl.se/libcurl/c/CURLOPT_DOH_URL.html) curl >= 7.62.0          |
 | `http_version`          | `curl_http_version_none` <br> `curl_http_version_1_0` <br> `curl_http_version_1_1` <br> `curl_http_version_2_0` <br> `curl_http_version_2tls` <br> `curl_http_version_2_prior_knowledge` <br> `curl_http_version_3` | `curl_http_version_none` | [docs](https://curl.se/libcurl/c/CURLOPT_HTTP_VERSION.html) HTTP/3 requires curl >= 7.66.0 |
 | `sslversion`            | `sslversion_default` <br> `sslversion_tlsv1` <br> `sslversion_tlsv1_0` <br> `sslversion_tlsv1_1` <br> `sslversion_tlsv1_2` <br> `sslversion_tlsv1_3` | `sslversion_default` | [docs](https://curl.se/libcurl/c/CURLOPT_SSLVERSION.html) |

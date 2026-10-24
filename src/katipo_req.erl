@@ -260,16 +260,10 @@ opt(ssl_verifypeer, true, {Req, Errors}) ->
     {Req#req{ssl_verifypeer = ?SSL_VERIFYPEER_TRUE}, Errors};
 opt(ssl_verifypeer, false, {Req, Errors}) ->
     {Req#req{ssl_verifypeer = ?SSL_VERIFYPEER_FALSE}, Errors};
-opt(capath, CAPath, {Req, Errors}) ->
-    case path_to_binary(CAPath) of
-        {ok, Bin} -> {Req#req{capath = Bin}, Errors};
-        error -> {Req, [{capath, CAPath} | Errors]}
-    end;
-opt(cacert, CACert, {Req, Errors}) ->
-    case path_to_binary(CACert) of
-        {ok, Bin} -> {Req#req{cacert = Bin}, Errors};
-        error -> {Req, [{cacert, CACert} | Errors]}
-    end;
+opt(capath, CAPath, Acc) ->
+    path_opt(capath, #req.capath, CAPath, Acc);
+opt(cacert, CACert, Acc) ->
+    path_opt(cacert, #req.cacert, CACert, Acc);
 opt(timeout_ms, Ms, {Req, Errors}) when ?IS_INT_OPT(Ms, 1) ->
     {Req#req{timeout_ms = Ms}, Errors};
 opt(maxredirs, M, {Req, Errors}) when ?IS_INT_OPT(M, -1) ->
@@ -294,9 +288,8 @@ opt(tcp_fastopen, false, {Req, Errors}) when ?TCP_FASTOPEN_AVAILABLE ->
     {Req#req{tcp_fastopen = ?TCP_FASTOPEN_FALSE}, Errors};
 opt(interface, Interface, {Req, Errors}) when is_binary(Interface) ->
     {Req#req{interface = Interface}, Errors};
-opt(unix_socket_path, UnixSocketPath, {Req, Errors})
-  when is_binary(UnixSocketPath) andalso ?UNIX_SOCKET_PATH_AVAILABLE ->
-    {Req#req{unix_socket_path = UnixSocketPath}, Errors};
+opt(unix_socket_path, UnixSocketPath, Acc) when ?UNIX_SOCKET_PATH_AVAILABLE ->
+    path_opt(unix_socket_path, #req.unix_socket_path, UnixSocketPath, Acc);
 opt(doh_url, DOHURL, {Req, Errors}) when ?DOH_URL_AVAILABLE andalso is_binary(DOHURL) ->
     {Req#req{doh_url = DOHURL}, Errors};
 opt(http_version, curl_http_version_none, {Req, Errors}) ->
@@ -329,16 +322,10 @@ opt(verbose, true, {Req, Errors}) ->
     {Req#req{verbose = ?VERBOSE_TRUE}, Errors};
 opt(verbose, false, {Req, Errors}) ->
     {Req#req{verbose = ?VERBOSE_FALSE}, Errors};
-opt(sslcert, Cert, {Req, Errors}) ->
-    case path_to_binary(Cert) of
-        {ok, Bin} -> {Req#req{sslcert = Bin}, Errors};
-        error -> {Req, [{sslcert, Cert} | Errors]}
-    end;
-opt(sslkey, Key, {Req, Errors}) ->
-    case path_to_binary(Key) of
-        {ok, Bin} -> {Req#req{sslkey = Bin}, Errors};
-        error -> {Req, [{sslkey, Key} | Errors]}
-    end;
+opt(sslcert, Cert, Acc) ->
+    path_opt(sslcert, #req.sslcert, Cert, Acc);
+opt(sslkey, Key, Acc) ->
+    path_opt(sslkey, #req.sslkey, Key, Acc);
 opt(sslkey_blob, Key, {Req, Errors})
   when ?SSLKEY_BLOB_AVAILABLE andalso is_binary(Key) ->
     {Req#req{sslkey_blob = Key}, Errors};
@@ -366,3 +353,10 @@ opt(reply_to, Pid, {Req, Errors}) when is_pid(Pid) ->
     {Req, Errors};
 opt(K, V, {Req, Errors}) ->
     {Req, [{K, V} | Errors]}.
+
+%% A path option: stored as a binary in the #req field at Pos.
+path_opt(Key, Pos, Path, {Req, Errors}) ->
+    case path_to_binary(Path) of
+        {ok, Bin} -> {setelement(Pos, Req, Bin), Errors};
+        error -> {Req, [{Key, Path} | Errors]}
+    end.

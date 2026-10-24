@@ -143,7 +143,7 @@
 %% See [https://curl.haxx.se/libcurl/c/CURLOPT_TCP_FASTOPEN.html]
 -type interface() :: binary().
 %% See [https://curl.haxx.se/libcurl/c/CURLOPT_INTERFACE.html]
--type unix_socket_path() :: binary().
+-type unix_socket_path() :: unicode:chardata().
 %% See [https://curl.haxx.se/libcurl/c/CURLOPT_UNIX_SOCKET_PATH.html]
 -type doh_url() :: binary().
 %% See [https://curl.haxx.se/libcurl/c/CURLOPT_DOH_URL.html]
