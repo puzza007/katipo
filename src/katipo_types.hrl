@@ -147,9 +147,13 @@
 %% See [https://curl.haxx.se/libcurl/c/CURLOPT_UNIX_SOCKET_PATH.html]
 -type doh_url() :: binary().
 %% See [https://curl.haxx.se/libcurl/c/CURLOPT_DOH_URL.html]
--type sslcert() :: binary().
+-type sslcert() :: unicode:chardata().
 %% See [https://curl.haxx.se/libcurl/c/CURLOPT_SSLCERT.html]
--type sslkey() :: binary().
+-type capath() :: unicode:chardata().
+%% See [https://curl.haxx.se/libcurl/c/CURLOPT_CAPATH.html]
+-type cacert() :: unicode:chardata().
+%% See [https://curl.haxx.se/libcurl/c/CURLOPT_CAINFO.html]
+-type sslkey() :: unicode:chardata().
 %% See [https://curl.haxx.se/libcurl/c/CURLOPT_SSLKEY.html]
 -type sslkey_blob() :: binary().
 %% See [https://curl.haxx.se/libcurl/c/CURLOPT_SSLKEY_BLOB.html]
@@ -165,8 +169,8 @@
                     followlocation => boolean(),
                     ssl_verifyhost => ssl_verifyhost(),
                     ssl_verifypeer => ssl_verifypeer(),
-                    capath => binary(),
-                    cacert => binary(),
+                    capath => capath(),
+                    cacert => cacert(),
                     timeout_ms => 1..?MAX_INT_OPT,
                     maxredirs => -1..?MAX_INT_OPT,
                     http_auth => http_auth(),
@@ -198,8 +202,8 @@
                     followlocation => boolean(),
                     ssl_verifyhost => ssl_verifyhost(),
                     ssl_verifypeer => ssl_verifypeer(),
-                    capath => binary(),
-                    cacert => binary(),
+                    capath => capath(),
+                    cacert => cacert(),
                     timeout_ms => 1..?MAX_INT_OPT,
                     maxredirs => -1..?MAX_INT_OPT,
                     http_auth => http_auth(),
@@ -270,6 +274,8 @@
 -export_type([status/0]).
 -export_type([header/0]).
 -export_type([headers/0]).
+-export_type([capath/0]).
+-export_type([cacert/0]).
 -export_type([cookiejar/0]).
 -export_type([req_body/0]).
 -export_type([body/0]).
