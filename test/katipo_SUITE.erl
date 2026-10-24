@@ -222,6 +222,7 @@ groups() ->
        header_non_utf8_value,
        request_header_non_utf8_name,
        request_header_invalid,
+       path_opts_not_text,
        body_frame_shares_large_body,
        body_frame_copies_small_body,
        body_frame_chunk]},
@@ -1263,6 +1264,18 @@ path_opts_bad_list(_) ->
     {error, #{code := bad_opts}} =
         katipo:get(?POOL, <<"https://localhost/">>,
                    #{sslkey => InvalidList}).
+
+%% Strings that are not valid text: unicode:characters_to_binary/1 returns
+%% {error, _, _} or {incomplete, _, _} for these rather than raising, which
+%% must still be bad_opts, not a crash in the caller. A NUL, in a string or
+%% a binary, would cut the path short in the C port.
+path_opts_not_text(_) ->
+    [{error, #{code := bad_opts}} = katipo:check_opts(#{Opt => Value})
+     || Opt <- [capath, cacert, sslcert, sslkey],
+        Value <- [[16#D800], [<<255>>], [<<195>>],
+                  "/certs/a.pem\0junk", <<"/certs/a.pem", 0, "junk">>]],
+    ok = katipo:check_opts(#{capath => [<<"/certs/"/utf8>>, "\x{e9}.pem"]}),
+    ok.
 
 sslversion(Config) ->
     CACert = ?config(cacert_file, Config),
