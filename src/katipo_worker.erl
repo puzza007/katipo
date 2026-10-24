@@ -409,7 +409,7 @@ send_to_port(Port, {Self, Ref},
     Command = {Self, Ref, Method, Url, Headers, CookieJar, Body, Opts},
     true = port_command(Port, term_to_binary(Command)).
 
--spec parse_headers([binary()]) -> katipo:headers().
+-spec parse_headers([binary()]) -> katipo:resp_headers().
 parse_headers([]) ->
     [];
 parse_headers([_StatusLine | Lines]) ->
@@ -434,7 +434,7 @@ unfold([]) ->
 %% verbatim, so "name:value" and padded values do occur. OWS is octets, so
 %% it is trimmed byte-wise rather than with string:trim, whose grapheme
 %% handling dominated the cost of a response with many headers.
--spec parse_header(binary(), binary:cp()) -> katipo:header().
+-spec parse_header(binary(), binary:cp()) -> katipo:resp_header().
 parse_header(Line, Colon) ->
     case binary:split(Line, Colon) of
         [K] -> {K, <<>>};

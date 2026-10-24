@@ -22,7 +22,8 @@ See `t:opts/0` for all available options and `t:request/0` for the full request 
 Synchronous request functions return `t:response/0`:
 
 ```erlang
-{ok, #{status := pos_integer(), headers := headers(), cookiejar := cookiejar(), body := body()}}
+{ok, #{status := pos_integer(), headers := resp_headers(),
+       cookiejar := cookiejar(), body := body()}}
 {error, #{code := error_code(), message := error_msg()}}
 ```
 
@@ -33,7 +34,7 @@ and deliver the response as a message to the calling process (or the pid specifi
 by the `reply_to` option):
 
 ```erlang
-{katipo_response, Ref, #{status := pos_integer(), headers := headers(), ...}}
+{katipo_response, Ref, #{status := pos_integer(), headers := resp_headers(), ...}}
 {katipo_error, Ref, #{code := error_code(), message := error_msg()}}
 ```
 
@@ -306,7 +307,7 @@ With `stream => true` the response body is delivered incrementally instead of
 as one buffered binary. The message flow is:
 
 ```erlang
-{katipo_headers, Ref, #{status := pos_integer(), headers := headers()}}
+{katipo_headers, Ref, #{status := pos_integer(), headers := resp_headers()}}
 {katipo_chunk, Ref, binary()}     %% zero or more, in order
 {katipo_done, Ref, #{status := pos_integer(), cookiejar := cookiejar()}}
 ```

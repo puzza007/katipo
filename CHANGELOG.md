@@ -23,6 +23,10 @@ All notable changes to this project are documented here. This project follows
 - `error_code()` lacked `unknown_error`, returned for a curl code katipo
   has no name for, and on libcurl older than 7.62 named the CA
   verification failure `ssl_cert` where katipo returns `ssl_cacert`.
+- Response headers were typed with `headers()`, whose values may be any
+  iodata, though a response's are always binaries. Responses now use
+  `resp_headers()`, and `headers()` stays the request header type, now
+  also allowing the iodata names katipo accepts.
 
 ## [2.1.0] — 2026-10-21
 
