@@ -719,15 +719,16 @@ interface_unknown(Config) ->
         katipo:get(?POOL, Url, BaseOpts#{interface => <<"cannot_be_an_interface">>}).
 
 unix_socket_path(Config) ->
-    Filename = list_to_binary(?config(unix_socket_file, Config)),
-    case katipo:get(?POOL, <<"http://localhost/unix">>, #{unix_socket_path => Filename}) of
-        {ok, #{status := 200, headers := Headers}} ->
-            HeadersMap = maps:from_list(Headers),
-            ?assertEqual(<<"katipo-test">>, maps:get(<<"server">>, HeadersMap));
-        {error, #{code := bad_opts}} ->
-            ct:pal("unix_socket_path not supported by installed version of curl"),
-            ok
-    end.
+    Filename = ?config(unix_socket_file, Config),
+    Available = katipo:unix_socket_path_available(),
+    [case katipo:get(?POOL, <<"http://localhost/unix">>, #{unix_socket_path => Path}) of
+         {ok, #{status := 200, headers := Headers}} when Available ->
+             HeadersMap = maps:from_list(Headers),
+             ?assertEqual(<<"katipo-test">>, maps:get(<<"server">>, HeadersMap));
+         {error, #{code := bad_opts}} when not Available ->
+             ct:pal("unix_socket_path not supported by installed version of curl")
+     end || Path <- [list_to_binary(Filename), Filename]],
+    ok.
 
 unix_socket_path_cant_connect(_) ->
     case katipo:get(?POOL, <<"http://localhost/images/json">>, #{unix_socket_path => <<"4e199b4a1c40b497a95fcd1cd896351733849949">>}) of
@@ -1295,7 +1296,7 @@ int_opts_out_of_range(_) ->
 %% a binary, would cut the path short in the C port.
 path_opts_not_text(_) ->
     [{error, #{code := bad_opts}} = katipo:check_opts(#{Opt => Value})
-     || Opt <- [capath, cacert, sslcert, sslkey],
+     || Opt <- [capath, cacert, sslcert, sslkey, unix_socket_path],
         Value <- [[16#D800], [<<255>>], [<<195>>],
                   "/certs/a.pem\0junk", <<"/certs/a.pem", 0, "junk">>]],
     ok = katipo:check_opts(#{capath => [<<"/certs/"/utf8>>, "\x{e9}.pem"]}),
