@@ -123,10 +123,17 @@ content_type(Req, _Opts) ->
 content_type_line([{_, _} | _]) -> <<"Content-Type: application/x-www-form-urlencoded">>;
 content_type_line(_) -> <<"Content-Type:">>.
 
+%% Header names are bytes, not necessarily UTF-8, so they are compared with
+%% ASCII case folding: string:lowercase/1 raises badarg on a name that is
+%% not valid UTF-8. The headers have been validated by then (opt/3).
 has_content_type(Headers) ->
     lists:any(fun({K, _}) ->
-                      string:lowercase(iolist_to_binary(K)) =:= <<"content-type">>
+                      iolist_size(K) =:= 12 andalso
+                          ascii_lowercase(iolist_to_binary(K)) =:= <<"content-type">>
               end, Headers).
+
+ascii_lowercase(Bin) ->
+    << <<(case C of _ when C >= $A, C =< $Z -> C + 32; _ -> C end)>> || <<C>> <= Bin >>.
 
 %% Whether a body has any bytes. Malformed iodata counts as a body: the C
 %% port rejects it with bad_opts, as it always has.
@@ -135,9 +142,27 @@ sends_body(Body) ->
     catch error:badarg -> true
     end.
 
--spec headers_to_binary(katipo:headers()) -> [binary()].
+%% Each header must be a {Name, Value} pair of binaries or iolists; a bare
+%% integer would otherwise go out as a single byte. A bad one is named by
+%% its position (from 1), not echoed: headers carry credentials, and the
+%% error is usually logged.
+-spec headers_to_binary(term()) -> {ok, [binary()]} | {error, pos_integer()}.
 headers_to_binary(Headers) ->
-    [iolist_to_binary([K, <<": ">>, V]) || {K, V} <- Headers].
+    headers_to_binary(Headers, 1, []).
+
+headers_to_binary([], _, Acc) ->
+    {ok, lists:reverse(Acc)};
+headers_to_binary([H | T], N, Acc) ->
+    try header_line(H) of
+        Line -> headers_to_binary(T, N + 1, [Line | Acc])
+    catch error:_ -> {error, N}
+    end;
+headers_to_binary(_ImproperTail, N, _) ->
+    {error, N}.
+
+header_line({K, V}) when (is_binary(K) orelse is_list(K)),
+                         (is_binary(V) orelse is_list(V)) ->
+    iolist_to_binary([K, <<": ">>, V]).
 
 -spec method_to_int(katipo:method()) -> method_int().
 method_to_int(get)     -> ?GET;
@@ -179,7 +204,10 @@ opt(method, Method, {Req, Errors}) when is_atom(Method) ->
             {Req, [{method, Method} | Errors]}
     end;
 opt(headers, Headers, {Req, Errors}) when is_list(Headers) ->
-    {Req#req{headers = headers_to_binary(Headers)}, Errors};
+    case headers_to_binary(Headers) of
+        {ok, Bins} -> {Req#req{headers = Bins}, Errors};
+        {error, N} -> {Req, [{headers, {invalid_header, N}} | Errors]}
+    end;
 opt(cookiejar, CookieJar, {Req, Errors}) when is_list(CookieJar) ->
     case lists:all(fun erlang:is_binary/1, CookieJar) of
         true ->

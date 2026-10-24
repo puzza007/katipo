@@ -220,6 +220,8 @@ groups() ->
        pipewait,
        header_optional_whitespace,
        header_non_utf8_value,
+       request_header_non_utf8_name,
+       request_header_invalid,
        body_frame_shares_large_body,
        body_frame_copies_small_body,
        body_frame_chunk]},
@@ -1564,6 +1566,30 @@ header_non_utf8_value(_Config) ->
         katipo:get(?POOL, katipo_drip_server:url(Port)),
     ?assertEqual(<<16#C9, "mile">>, proplists:get_value(<<"x-latin1">>, Headers)),
     ok = katipo_drip_server:stop(Drip).
+
+%% A request header name that is not UTF-8 is still valid iodata, so
+%% checking for a Content-Type header must not crash on it.
+request_header_non_utf8_name(_Config) ->
+    ok = katipo:check_opts(#{url => <<"http://192.0.2.1">>, method => put,
+                             body => <<"x">>,
+                             headers => [{<<255, "X-A">>, <<"v">>}]}).
+
+%% Headers that are not {Name, Value} pairs of binaries or iolists are
+%% invalid options, not a crash or a header silently dropped or mangled.
+request_header_invalid(_Config) ->
+    [{error, #{code := bad_opts}} =
+         katipo:check_opts(#{url => <<"http://192.0.2.1">>, method => M,
+                             body => <<"x">>, headers => Hs})
+     || M <- [get, put],
+        Hs <- [[<<"X: y">>], [{<<"x">>, 1000}], [{<<"X-Retry">>, 3}],
+               [{x, <<"y">>}]]],
+    %% Named by position, so the other headers' values stay out of the log.
+    {error, #{message := <<"[{headers,{invalid_header,2}}]">>}} =
+        katipo:check_opts(#{headers => [{<<"Authorization">>, <<"Bearer s3cr3t">>},
+                                        {<<"X-Retry">>, 3}]}),
+    {error, #{message := <<"[{headers,{invalid_header,2}}]">>}} =
+        katipo:check_opts(#{headers => [{<<"a">>, <<"b">>} | bad]}),
+    ok.
 
 %% -- drip-server streaming tests -----------------------------------------
 %% The local httpbin stack buffers whole responses, so these mid-response
