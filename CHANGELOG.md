@@ -18,6 +18,8 @@ All notable changes to this project are documented here. This project follows
   It now fails with `bad_opts` naming the option, and the option types
   give the bounds: `1..2147483647`, or from `-1` for `maxredirs`,
   `dns_cache_timeout` and `ca_cache_timeout`.
+- `request()` required `method`, though katipo defaults it to `get`,
+  so a spec relying on the default failed to type-check.
 
 ## [2.1.0] — 2026-10-21
 
