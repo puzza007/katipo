@@ -1,7 +1,7 @@
 %% Public type definitions for the katipo API. Kept out of katipo.erl to keep
 %% the facade focused on functions. Self-contained: it pulls in
-%% katipo_internal.hrl for the ?SSL_CACERT_ERROR_CODE and ?MAX_INT_OPT
-%% macros the types below reference, so include order does not matter.
+%% katipo_internal.hrl for the ?MAX_INT_OPT macro the types below
+%% reference, so include order does not matter.
 
 -ifndef(KATIPO_TYPES_HRL).
 -define(KATIPO_TYPES_HRL, true).
@@ -70,9 +70,12 @@
         obsolete57 |
         ssl_certproblem |
         ssl_cipher |
-        %% Gone since 7.62.0
-        %% TODO: more structured way to do version-dependent stuff
-        ?SSL_CACERT_ERROR_CODE |
+        %% The CA verification failure: ssl_cacert before libcurl 7.62.0,
+        %% peer_failed_verification since. The C port picks one from the
+        %% curl headers it is built with, which the Erlang build cannot
+        %% see reliably, so both are listed.
+        ssl_cacert |
+        peer_failed_verification |
         bad_content_encoding |
         ldap_invalid_url |
         filesize_exceeded |
@@ -116,6 +119,8 @@
         too_large |
         ech_required |
         curl_last |
+        %% a curl code katipo's C port has no name for
+        unknown_error |
         %% returned by us, not curl
         bad_opts |
         await_timeout |

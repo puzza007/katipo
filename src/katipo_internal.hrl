@@ -33,10 +33,8 @@
 
 -ifdef(doh_url_available).
 -define(DOH_URL_AVAILABLE, true).
--define(SSL_CACERT_ERROR_CODE, peer_failed_verification).
 -else.
 -define(DOH_URL_AVAILABLE, false).
--define(SSL_CACERT_ERROR_CODE, ssl_cert).
 -endif.
 
 -ifdef(sslkey_blob_available).
