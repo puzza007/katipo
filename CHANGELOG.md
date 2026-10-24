@@ -23,6 +23,12 @@ All notable changes to this project are documented here. This project follows
   rather than the headers, which may hold credentials. Before, a bare binary crashed the
   caller or was silently dropped, and an integer value crashed it or was
   sent as a single byte.
+- A `capath`, `cacert`, `sslcert` or `sslkey` string that is not valid
+  text (such as a lone surrogate, or bytes that are not UTF-8) crashed the
+  calling process with `try_clause` instead of returning `bad_opts`.
+- A path option (`capath`, `cacert`, `sslcert` or `sslkey`) containing a
+  NUL byte now fails with `bad_opts`; before, curl quietly used only the
+  part before it.
 
 ## [2.1.0] — 2026-10-21
 

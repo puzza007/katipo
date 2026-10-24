@@ -142,6 +142,30 @@ sends_body(Body) ->
     catch error:badarg -> true
     end.
 
+%% A path option as a binary: given as one, or converted from a string as
+%% UTF-8. Text that is not valid makes unicode:characters_to_binary/1
+%% return {error, _, _} or {incomplete, _, _}, and a list that is not
+%% chardata makes it raise badarg; either is an invalid option. So is a
+%% NUL, which OTP's own file functions reject too: the C port hands the
+%% path to curl as a C string, which would end there.
+-spec path_to_binary(term()) -> {ok, binary()} | error.
+path_to_binary(Path) when is_binary(Path) ->
+    without_nul(Path);
+path_to_binary(Path) when is_list(Path) ->
+    try unicode:characters_to_binary(Path) of
+        Bin when is_binary(Bin) -> without_nul(Bin);
+        _Invalid -> error
+    catch error:badarg -> error
+    end;
+path_to_binary(_) ->
+    error.
+
+without_nul(Bin) ->
+    case binary:match(Bin, <<0>>) of
+        nomatch -> {ok, Bin};
+        _ -> error
+    end.
+
 %% Each header must be a {Name, Value} pair of binaries or iolists; a bare
 %% integer would otherwise go out as a single byte. A bad one is named by
 %% its position (from 1), not echoed: headers carry credentials, and the
@@ -236,18 +260,16 @@ opt(ssl_verifypeer, true, {Req, Errors}) ->
     {Req#req{ssl_verifypeer = ?SSL_VERIFYPEER_TRUE}, Errors};
 opt(ssl_verifypeer, false, {Req, Errors}) ->
     {Req#req{ssl_verifypeer = ?SSL_VERIFYPEER_FALSE}, Errors};
-opt(capath, CAPath, {Req, Errors}) when is_binary(CAPath) ->
-    {Req#req{capath = CAPath}, Errors};
-opt(capath, CAPath, {Req, Errors}) when is_list(CAPath) ->
-    try unicode:characters_to_binary(CAPath) of
-        Bin when is_binary(Bin) -> {Req#req{capath = Bin}, Errors}
-    catch _:_ -> {Req, [{capath, CAPath} | Errors]} end;
-opt(cacert, CACert, {Req, Errors}) when is_binary(CACert) ->
-    {Req#req{cacert = CACert}, Errors};
-opt(cacert, CACert, {Req, Errors}) when is_list(CACert) ->
-    try unicode:characters_to_binary(CACert) of
-        Bin when is_binary(Bin) -> {Req#req{cacert = Bin}, Errors}
-    catch _:_ -> {Req, [{cacert, CACert} | Errors]} end;
+opt(capath, CAPath, {Req, Errors}) ->
+    case path_to_binary(CAPath) of
+        {ok, Bin} -> {Req#req{capath = Bin}, Errors};
+        error -> {Req, [{capath, CAPath} | Errors]}
+    end;
+opt(cacert, CACert, {Req, Errors}) ->
+    case path_to_binary(CACert) of
+        {ok, Bin} -> {Req#req{cacert = Bin}, Errors};
+        error -> {Req, [{cacert, CACert} | Errors]}
+    end;
 opt(timeout_ms, Ms, {Req, Errors}) when is_integer(Ms) andalso Ms > 0 ->
     {Req#req{timeout_ms = Ms}, Errors};
 opt(maxredirs, M, {Req, Errors}) when is_integer(M) andalso M >= -1 ->
@@ -307,18 +329,16 @@ opt(verbose, true, {Req, Errors}) ->
     {Req#req{verbose = ?VERBOSE_TRUE}, Errors};
 opt(verbose, false, {Req, Errors}) ->
     {Req#req{verbose = ?VERBOSE_FALSE}, Errors};
-opt(sslcert, Cert, {Req, Errors}) when is_binary(Cert) ->
-    {Req#req{sslcert = Cert}, Errors};
-opt(sslcert, Cert, {Req, Errors}) when is_list(Cert) ->
-    try unicode:characters_to_binary(Cert) of
-        Bin when is_binary(Bin) -> {Req#req{sslcert = Bin}, Errors}
-    catch _:_ -> {Req, [{sslcert, Cert} | Errors]} end;
-opt(sslkey, Key, {Req, Errors}) when is_binary(Key) ->
-    {Req#req{sslkey = Key}, Errors};
-opt(sslkey, Key, {Req, Errors}) when is_list(Key) ->
-    try unicode:characters_to_binary(Key) of
-        Bin when is_binary(Bin) -> {Req#req{sslkey = Bin}, Errors}
-    catch _:_ -> {Req, [{sslkey, Key} | Errors]} end;
+opt(sslcert, Cert, {Req, Errors}) ->
+    case path_to_binary(Cert) of
+        {ok, Bin} -> {Req#req{sslcert = Bin}, Errors};
+        error -> {Req, [{sslcert, Cert} | Errors]}
+    end;
+opt(sslkey, Key, {Req, Errors}) ->
+    case path_to_binary(Key) of
+        {ok, Bin} -> {Req#req{sslkey = Bin}, Errors};
+        error -> {Req, [{sslkey, Key} | Errors]}
+    end;
 opt(sslkey_blob, Key, {Req, Errors})
   when ?SSLKEY_BLOB_AVAILABLE andalso is_binary(Key) ->
     {Req#req{sslkey_blob = Key}, Errors};
