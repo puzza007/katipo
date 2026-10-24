@@ -6,7 +6,7 @@ This directory contains a docker-compose setup for running a local httpbin serve
 
 ```bash
 cd test/http3-httpbin
-docker-compose up -d
+docker compose up -d --build
 ```
 
 The server will be available at `https://localhost:8443`

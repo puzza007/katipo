@@ -28,4 +28,12 @@ EXPOSE 80
 # Threaded sync worker (gthread) ships with gunicorn, so there's no async
 # worker (eventlet/gevent) to keep version-compatible. Caddy terminates
 # HTTP/3 out front, so the backend only serves plain HTTP/1 here.
-CMD ["gunicorn", "-b", "0.0.0.0:80", "wsgi_wrapper:app", "--workers", "4", "--threads", "4"]
+#
+# Every thread serves one request to the end, even after the client gives
+# up: the suite's timeout and worker-death tests abandon /delay/N requests
+# early, each holding a thread for seconds. The parallel test groups run
+# many of those at once, so the thread count must leave room for them, or
+# every other request queues behind them and the streaming tests waiting
+# 5s for headers fail. Rebuild the image after changing this
+# (`docker compose up -d --build`).
+CMD ["gunicorn", "-b", "0.0.0.0:80", "wsgi_wrapper:app", "--workers", "4", "--threads", "64"]

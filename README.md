@@ -235,7 +235,7 @@ The tests run against httpbin behind Caddy (HTTPS, HTTP/2 and HTTP/3 on
 port 8443):
 
 ```sh
-(cd test/http3-httpbin && docker compose up -d)
+(cd test/http3-httpbin && docker compose up -d --build)
 curl -k https://localhost:8443/get   # wait for a 200; a 502 means httpbin is down
 rebar3 ct
 ```
