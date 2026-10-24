@@ -148,7 +148,7 @@ collect(Ref) ->
         {katipo_headers, Ref, #{status := Status, headers := Headers}} ->
             {Status, Headers, collect_chunks(Ref, [])}
     after 10000 ->
-            ct:fail(no_stream_headers)
+            ct:fail({no_stream_headers, element(2, process_info(self(), messages))})
     end.
 
 collect_chunks(Ref, Acc) ->
@@ -157,7 +157,7 @@ collect_chunks(Ref, Acc) ->
         {katipo_done, Ref, #{}} -> lists:reverse(Acc);
         {katipo_error, Ref, Error} -> ct:fail({stream_error, Error})
     after 10000 ->
-            ct:fail(no_stream_done)
+            ct:fail({no_stream_done, element(2, process_info(self(), messages))})
     end.
 
 %% Content-Length most often; chunked with random chunk sizes (from one
