@@ -45,7 +45,8 @@ all() ->
      request_round_trips,
      response_headers_parsed,
      span_url_sanitised,
-     span_url_never_crashes].
+     span_url_never_crashes,
+     streamed_uploads_statem].
 
 init_per_suite(Config) ->
     {ok, _} = application:ensure_all_started(katipo),
@@ -60,6 +61,23 @@ end_per_suite(Config) ->
     ok = katipo_prop_server:stop(?config(server, Config)),
     application:stop(katipo),
     Config.
+
+%% =====================================================================
+%% Streamed request bodies: a state machine over concurrent uploads
+%% =====================================================================
+
+%% See katipo_upload_statem: chunked and declared-length uploads, several
+%% at once, driven through every way a caller may answer, end, lie about
+%% the length, send after eof or cancel.
+streamed_uploads_statem(_Config) ->
+    {ok, Server, Port} = katipo_upload_server:start(#{concurrent => true}),
+    persistent_term:put({katipo_upload_statem, port}, Port),
+    try
+        run(katipo_upload_statem:prop_uploads())
+    after
+        persistent_term:erase({katipo_upload_statem, port}),
+        katipo_upload_server:stop(Server)
+    end.
 
 run(Prop) ->
     case proper:quickcheck(Prop, [{numtests, ?NUMTESTS},
