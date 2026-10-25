@@ -55,6 +55,7 @@ static ConnInfo *make_conn(int stream, long window) {
   conn->global = &global;
   conn->stream = stream;
   conn->window = window;
+  conn->upload_fd = -1; /* a buffered body, so free_conn closes nothing */
   register_conn(&global, conn);
   return conn;
 }

@@ -142,7 +142,16 @@ one space, and a CR, LF or NUL inside it is replaced with a space.
 -type resp_headers() :: [resp_header()].
 -opaque cookiejar() :: [binary()].
 -type qs_vals() :: [{unicode:chardata(), unicode:chardata() | true}].
--type req_body() :: iodata() | qs_vals().
+-doc """
+A request body: iodata, sent as given; a form, sent form-urlencoded; or
+`{file, Path}`, a file the C port reads as it sends it, so it is never
+held in memory, and seeks back to its start to send it again after a
+redirect. A relative `Path` is taken from the VM's working directory when
+the request is made. `Content-Length` is the file's size then: if the file
+grows, no more is sent, and if it shrinks the request fails with
+`read_error`.
+""".
+-type req_body() :: iodata() | qs_vals() | {file, unicode:chardata()}.
 -type body() :: binary().
 -type connecttimeout_ms() :: 1..?MAX_INT_OPT.
 %% See [https://curl.haxx.se/libcurl/c/CURLOPT_CONNECTTIMEOUT.html]

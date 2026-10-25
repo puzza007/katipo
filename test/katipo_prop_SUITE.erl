@@ -51,9 +51,11 @@ init_per_suite(Config) ->
     {ok, _} = application:ensure_all_started(katipo),
     {ok, _} = katipo_pool:start(?POOL, 2, []),
     {ok, Server, Port} = katipo_prop_server:start(),
+    persistent_term:put({?MODULE, file_dir}, ?config(priv_dir, Config)),
     [{server, Server}, {port, Port} | Config].
 
 end_per_suite(Config) ->
+    persistent_term:erase({?MODULE, file_dir}),
     ok = katipo_pool:stop(?POOL),
     ok = katipo_prop_server:stop(?config(server, Config)),
     application:stop(katipo),
@@ -231,10 +233,10 @@ request_round_trips(Config) ->
 %% the method, every sent header in order, the body and its length, and
 %% the Content-Type katipo is responsible for.
 request_ok(Port, head, Headers, Body, Redirect) ->
-    case sent_bytes(Body) of
-        <<>> ->
+    case head_refuses(Body) of
+        false ->
             request_sent(Port, head, Headers, Body, Redirect);
-        _ ->
+        true ->
             Result = katipo:head(?POOL, <<"http://127.0.0.1:1/">>,
                                  #{body => unwrap(Body)}),
             ?WHENFAIL(ct:pal("head with a body: ~P", [Result, 20]),
@@ -245,6 +247,11 @@ request_ok(Port, head, Headers, Body, Redirect) ->
     end;
 request_ok(Port, Method, Headers, Body, Redirect) ->
     request_sent(Port, Method, Headers, Body, Redirect).
+
+%% A HEAD refuses any body but an empty one. A file counts as a body
+%% whatever its size, which only the port finds out.
+head_refuses({file, _}) -> true;
+head_refuses(Body) -> sent_bytes(Body) =/= <<>>.
 
 request_sent(Port, Method, Headers, Body, Redirect) ->
     Key = key(),
@@ -304,9 +311,15 @@ content_types(Headers) ->
     [V || {K, V} <- Headers, string:lowercase(K) =:= <<"content-type">>].
 
 unwrap({form, KVs}) -> KVs;
+unwrap({file, Bytes}) ->
+    Path = filename:join(persistent_term:get({?MODULE, file_dir}),
+                         integer_to_list(erlang:unique_integer([positive]))),
+    ok = file:write_file(Path, Bytes),
+    {file, Path};
 unwrap(IoData) -> IoData.
 
 sent_bytes({form, KVs}) -> iolist_to_binary(uri_string:compose_query(KVs));
+sent_bytes({file, Bytes}) -> Bytes;
 sent_bytes(IoData) -> iolist_to_binary(IoData).
 
 %% The form body must decode back to the pairs it was built from, so a
@@ -428,7 +441,9 @@ req_body() ->
     frequency([{4, ?LET({Len, Seed}, {req_body_len(), non_empty(binary())},
                         fill(Len, Seed, <<>>))},
                {3, iodata_body()},
-               {2, {form, form_pairs()}}]).
+               {2, {form, form_pairs()}},
+               {1, ?LET({Len, Seed}, {req_body_len(), non_empty(binary())},
+                        {file, fill(Len, Seed, <<>>)})}]).
 
 req_body_len() ->
     frequency([{1, exactly(0)},
@@ -775,7 +790,8 @@ generators_cover_edges(_Config) ->
                         fun({binary, S}) -> S > ?EXPECT_THRESHOLD; (_) -> false end, 0.05},
                        {nested_iolist, fun({iolist, _, Nested}) -> Nested; (_) -> false end, 0.1},
                        {improper_iolist, fun({iolist, Proper, _}) -> not Proper; (_) -> false end, 0.05},
-                       {form, fun(C) -> C =:= form end, 0.15}]),
+                       {form, fun(C) -> C =:= form end, 0.15},
+                       {file, fun({file, _}) -> true; (_) -> false end, 0.05}]),
        check_coverage(form_pairs, N, form_pairs(), fun(KVs) -> KVs end,
                       [{bare_key, fun(KVs) -> lists:keymember(true, 2, KVs) end, 0.2},
                        {non_latin1,
@@ -851,6 +867,7 @@ sample(Gen, I) ->
     V.
 
 classify_req_body({form, _}) -> form;
+classify_req_body({file, B}) -> {file, byte_size(B)};
 classify_req_body(B) when is_binary(B) -> {binary, byte_size(B)};
 classify_req_body(L) ->
     {iolist, is_proper_list(L), has_sublist(L)}.

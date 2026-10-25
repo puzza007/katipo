@@ -171,6 +171,13 @@ groups() ->
        put_data,
        put_arity_2,
        put_qs,
+       put_file,
+       post_file_large,
+       file_body_missing,
+       file_body_invalid,
+       file_body_fifo,
+       file_body_grew,
+       file_body_shrank,
        patch_data,
        patch_arity_2,
        patch_qs,
@@ -321,6 +328,8 @@ groups() ->
        otel_url_sanitization,
        otel_noop_metrics_no_crash,
        otel_metrics_init_no_crash]},
+     %% Alone: it changes the VM's working directory.
+     {cwd, [], [file_body_relative]},
      {http1, [parallel],
       [{group, http},
        {group, https}]},
@@ -340,7 +349,8 @@ all() ->
                   {group, https_mutual},
                   {group, port},
                   {group, async},
-                  {group, otel}],
+                  {group, otel},
+                  {group, cwd}],
     %% HTTP/2 tests always run (local httpbin supports HTTP/2)
     Http2Groups = [{group, http2}],
     %% HTTP/3 tests run when KATIPO_TEST_HTTP3 is set
@@ -489,6 +499,128 @@ put_qs(Config) ->
     Form = maps:get(<<"form">>, Json),
     ?assertEqual(<<>>, maps:get(<<"baz">>, Form)),
     ?assertEqual(<<"bar">>, maps:get(<<"foo">>, Form)).
+
+%% A {file, Path} body is read by the C port as it is sent, as a path
+%% string or binary.
+put_file(Config) ->
+    {req_opts, Opts} = lists:keyfind(req_opts, 1, Config),
+    File = filename:join(?config(priv_dir, Config), "put_file.txt"),
+    ok = file:write_file(File, <<"!@#$%^&*() from a file">>),
+    [begin
+         {ok, #{status := 200, body := Body}} =
+             katipo:put(?POOL, httpbin_url(Config, <<"/put">>),
+                        Opts#{body => {file, Path}}),
+         Json = json:decode(Body),
+         ?assertEqual(<<"!@#$%^&*() from a file">>, maps:get(<<"data">>, Json)),
+         ?assertEqual(<<"22">>,
+                      maps:get(<<"Content-Length">>, maps:get(<<"headers">>, Json)))
+     end || Path <- [File, list_to_binary(File)]],
+    ok.
+
+%% Large enough for curl to send Expect: 100-continue first, and sent
+%% through the async API too.
+post_file_large(Config) ->
+    {req_opts, Opts} = lists:keyfind(req_opts, 1, Config),
+    File = filename:join(?config(priv_dir, Config), "post_file_large.txt"),
+    Data = binary:copy(<<"0123456789abcdef">>, 200000),
+    ok = file:write_file(File, Data),
+    Headers = [{<<"Content-Type">>, <<"text/plain">>}],
+    {ok, Ref} = katipo:async_post(?POOL, httpbin_url(Config, <<"/post">>),
+                                  Opts#{headers => Headers, body => {file, File}}),
+    {ok, #{status := 200, body := Body}} = katipo:await(Ref, 30000),
+    ?assertEqual(Data, maps:get(<<"data">>, json:decode(Body))).
+
+%% A file the port cannot open fails the request, saying why.
+file_body_missing(Config) ->
+    Missing = filename:join(?config(priv_dir, Config), "no_such_file"),
+    {error, #{code := file_couldnt_read_file, message := Message}} =
+        katipo:put(?POOL, <<"http://192.0.2.1">>, #{body => {file, Missing}}),
+    {match, _} = re:run(Message, <<"no_such_file">>),
+    {error, #{code := file_couldnt_read_file, message := NotFile}} =
+        katipo:put(?POOL, <<"http://192.0.2.1">>,
+                   #{body => {file, ?config(priv_dir, Config)}}),
+    {match, _} = re:run(NotFile, <<"not a regular file">>),
+    %% A path longer than curl's 256-byte error buffer still comes back
+    %% whole, with its reason.
+    Long = filename:join([?config(priv_dir, Config) | lists:duplicate(3, lists:duplicate(100, $a))]),
+    {error, #{code := file_couldnt_read_file, message := LongMessage}} =
+        katipo:put(?POOL, <<"http://192.0.2.1">>, #{body => {file, Long}}),
+    {match, _} = re:run(LongMessage, <<"a: No such file or directory$">>).
+
+%% The path must be valid text without a NUL, and a HEAD cannot send a
+%% file any more than another body.
+file_body_invalid(_Config) ->
+    [{error, #{code := bad_opts}} = katipo:check_opts(#{body => {file, Path}})
+     || Path <- [123, "a\0b", [16#D800]]],
+    {error, #{message := <<"[{body,not_allowed_with_head}]">>}} =
+        katipo:check_opts(#{method => head, body => {file, "/etc/hosts"}}),
+    ok.
+
+%% A relative path is taken from the VM's working directory when the
+%% request is made, not the port's, fixed when it started.
+file_body_relative(Config) ->
+    Dir = ?config(priv_dir, Config),
+    ok = file:write_file(filename:join(Dir, "relative.txt"), <<"relative">>),
+    {Server, Port} = upload_server(#{}),
+    {ok, Cwd} = file:get_cwd(),
+    ok = file:set_cwd(Dir),
+    try
+        {ok, #{status := 200}} =
+            katipo:put(?POOL, katipo_upload_server:url(Port),
+                       #{body => {file, "relative.txt"}}),
+        receive {upload_body, Server, Body} -> ?assertEqual(<<"relative">>, Body) end
+    after
+        ok = file:set_cwd(Cwd),
+        katipo_upload_server:stop(Server)
+    end.
+
+%% A fifo fails like any other file that is not a regular one, without
+%% the port blocking in open until a writer comes.
+file_body_fifo(Config) ->
+    Fifo = filename:join(?config(priv_dir, Config), "fifo"),
+    _ = file:delete(Fifo),
+    "" = os:cmd("mkfifo " ++ Fifo),
+    {error, #{code := file_couldnt_read_file, message := Message}} =
+        katipo:put(?POOL, <<"http://192.0.2.1">>, #{body => {file, Fifo}}),
+    {match, _} = re:run(Message, <<"not a regular file">>).
+
+%% The body is the file as it was when the request was made: if it grows
+%% before curl reads it (here, while curl waits for 100 Continue), only
+%% the declared length is sent...
+file_body_grew(Config) ->
+    File = filename:join(?config(priv_dir, Config), "grew.txt"),
+    Data = binary:copy(<<"x">>, 1000),
+    ok = file:write_file(File, Data),
+    {Server, Port} = upload_server(#{continue => ask}),
+    {ok, Ref} = katipo:async_put(?POOL, katipo_upload_server:url(Port),
+                                 #{body => {file, File},
+                                   headers => [{<<"Expect">>, <<"100-continue">>}]}),
+    receive {upload_head, Server, _} -> ok end,
+    ok = file:write_file(File, <<"more">>, [append]),
+    Server ! continue,
+    receive {upload_body, Server, Sent} -> ?assertEqual(Data, Sent) end,
+    {ok, #{status := 200}} = katipo:await(Ref),
+    ok = katipo_upload_server:stop(Server).
+
+%% ...and if it shrinks, the request fails rather than leave the server
+%% waiting for the rest.
+file_body_shrank(Config) ->
+    File = filename:join(?config(priv_dir, Config), "shrank.txt"),
+    ok = file:write_file(File, binary:copy(<<"x">>, 1000)),
+    {Server, Port} = upload_server(#{continue => ask}),
+    {ok, Ref} = katipo:async_put(?POOL, katipo_upload_server:url(Port),
+                                 #{body => {file, File},
+                                   headers => [{<<"Expect">>, <<"100-continue">>}]}),
+    receive {upload_head, Server, _} -> ok end,
+    ok = file:write_file(File, <<"short">>),
+    Server ! continue,
+    {error, #{code := read_error, message := Message}} = katipo:await(Ref),
+    {match, _} = re:run(Message, <<"shrank">>),
+    ok = katipo_upload_server:stop(Server).
+
+upload_server(Opts) ->
+    {ok, Server, Port} = katipo_upload_server:start(Opts),
+    {Server, Port}.
 
 patch_data(Config) ->
     {req_opts, Opts} = lists:keyfind(req_opts, 1, Config),

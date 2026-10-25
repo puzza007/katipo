@@ -167,7 +167,7 @@
           url :: undefined | binary(),
           headers = [] :: [binary()],
           cookiejar = [] :: [binary()],
-          body = <<>> :: iodata(),
+          body = <<>> :: iodata() | {file, binary()},
           connecttimeout_ms = ?DEFAULT_REQ_TIMEOUT :: pos_integer(),
           followlocation = ?FOLLOWLOCATION_FALSE :: integer(),
           ssl_verifyhost = ?SSL_VERIFYHOST_TRUE :: integer(),
