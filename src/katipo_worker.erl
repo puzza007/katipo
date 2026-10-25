@@ -151,6 +151,9 @@ handle_port_msg({headers, {From, {Status, Headers}}}, Reqs) ->
                               #{status => Status,
                                 headers => parse_headers(Headers)}}
                      end);
+handle_port_msg({demand, {From, []}}, Reqs) ->
+    forward_progress(From, Reqs,
+                     fun(UserRef) -> {katipo_body_demand, UserRef} end);
 handle_port_msg({chunk, {From, Body}}, Reqs) ->
     forward_progress(From, Reqs,
                      fun(UserRef) -> {katipo_chunk, UserRef, Body} end);
@@ -293,6 +296,9 @@ handle_info({cancel, Ref}, State = #state{port = Port, reqs = Reqs}) ->
 handle_info({flow, Ref, N}, State) ->
     %% Sent directly to the request's alias by katipo:update_flow/3.
     relay(Ref, flow, N, State);
+handle_info({send_body, Ref, Data}, State) ->
+    %% Sent directly to the request's alias by katipo:send_body/3.
+    relay(Ref, body, Data, State);
 handle_info({'EXIT', Port, Reason}, State = #state{port = Port}) ->
     logger:error("Port ~p died with reason: ~p", [Port, Reason]),
     {stop, port_died, State}.
@@ -324,12 +330,18 @@ abort_transfer(Port, {Pid, Ref}) ->
     port_cmd(Port, term_to_binary({Pid, Ref, cancel})).
 
 %% Pass a caller's command for one of our requests to the port; one for a
-%% request that has finished is dropped.
+%% request that has finished is dropped. A body chunk goes after the term,
+%% whose own element is an empty-binary placeholder, so it is neither
+%% copied into the term nor decoded by the port: the mirror of decode/1.
 relay(Ref, Tag, Arg, State = #state{port = Port, reqs = Reqs}) ->
     Self = self(),
     _ = case is_map_key({Self, Ref}, Reqs) of
-            true -> port_cmd(Port, term_to_binary({Self, Ref, Tag, Arg}));
-            false -> ok
+            true when Tag =:= body, Arg =/= eof ->
+                port_cmd(Port, [term_to_binary({Self, Ref, body, <<>>}), Arg]);
+            true ->
+                port_cmd(Port, term_to_binary({Self, Ref, Tag, Arg}));
+            false ->
+                ok
         end,
     {noreply, State}.
 

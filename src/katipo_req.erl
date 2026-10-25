@@ -53,7 +53,7 @@ check_opts(Opts, Mode) when is_map(Opts) ->
 validate(Opts, Mode, Url) ->
     {Req, Errors} = process_opts(Opts, Mode),
     Invalid = [K || {K, _} <- Errors],
-    case Errors ++ cross_field_errors(Req, Url, Invalid) of
+    case Errors ++ cross_field_errors(Req, Url, Invalid) ++ stream_body_error(Req, Mode) of
         [] -> {ok, Req};
         All -> {error, error_map(bad_opts, All)}
     end.
@@ -76,6 +76,11 @@ head_body_error(#req{method = ?HEAD, body = Body}) ->
     end;
 head_body_error(#req{}) ->
     [].
+
+%% A streamed body is sent in answer to messages the caller receives, which
+%% only the async API delivers.
+stream_body_error(#req{body = {stream, _}}, sync) -> [{body, stream_requires_async}];
+stream_body_error(#req{}, _) -> [].
 
 %% A stream_window only means something on a streaming request.
 stream_opts_error(#req{stream = ?STREAM_FALSE, stream_window = W}, Invalid)
@@ -163,6 +168,8 @@ ascii_lowercase(Bin) ->
 %% counts as a body even if it turns out empty.
 sends_body({file, _}) ->
     true;
+sends_body({stream, _}) ->
+    true;
 sends_body(Body) ->
     iolist_size(Body) > 0.
 
@@ -226,7 +233,14 @@ method_to_int(delete)  -> ?DELETE.
 %% here rather than failing in the C port. A list body is not echoed in
 %% the error, as it may be large.
 -spec encode_body(term()) ->
-          {ok, iodata() | {file, binary()}} | {error, {atom(), term()}}.
+          {ok, iodata() | {file, binary()} | {stream, integer()}} |
+          {error, {atom(), term()}}.
+encode_body({stream, Opts}) when is_map(Opts) ->
+    case maps:to_list(Opts) of
+        [] -> {ok, {stream, -1}};
+        [{length, N}] when is_integer(N), N >= 0, N =< ?MAX_STREAM_LENGTH -> {ok, {stream, N}};
+        _ -> {error, {invalid_body, {stream, Opts}}}
+    end;
 encode_body({file, Path}) ->
     case path_to_binary(Path) of
         %% The port's working directory is the VM's when it started.

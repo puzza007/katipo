@@ -20,6 +20,7 @@
 #include <err.h>
 #include <limits.h>
 #include <string.h>
+#include <strings.h>
 #include <stdarg.h>
 #include <ei.h>
 #include <curl/curl.h>
@@ -118,6 +119,17 @@ typedef struct _ConnInfo {
   int upload_fd;
   curl_off_t upload_size;
   curl_off_t upload_pos;
+  /* body => {stream, _}: the caller sends the body on demand. read_stream_cb
+   * hands curl what upload_buf holds; when it is empty it sends one demand
+   * (demanded until the answer arrives), sets upload_paused and pauses the
+   * upload until body_conn buffers the answer.
+   * upload_size is the declared length, or -1 to send it chunked, and
+   * upload_pos counts the bytes the caller has sent. */
+  int upload_stream;
+  struct evbuffer *upload_buf;
+  int upload_eof;
+  int demanded;
+  int upload_paused;
   /* Why the port failed the upload, or CURLE_OK. The read callback then
    * aborts, and complete_conn reports this and upload_msg rather than
    * what curl saw. upload_msg has room for a path as long as Linux allows
@@ -187,6 +199,16 @@ typedef struct _EasyOpts {
   long curlopt_stream;
   long curlopt_stream_window;
 } EasyOpts;
+
+/* A request body as Erlang sent it: iodata (data, size), a file to read
+ * (path), or a stream the caller sends on demand (stream, length). */
+typedef struct _ReqBody {
+  char *data;
+  int size;
+  char *path;
+  int stream;
+  curl_off_t length;
+} ReqBody;
 
 static const char *curl_error_code(CURLcode error) {
   switch (error) {
@@ -439,6 +461,11 @@ static const char *curl_error_code(CURLcode error) {
 }
 
 static void check_multi_info(GlobalInfo *global);
+static void fail_upload(ConnInfo *conn, CURLcode code, const char *fmt, ...);
+
+/* What a body command carries: a chunk of a streamed body, its end, or
+ * something the port could not decode. */
+typedef enum { BODY_CHUNK, BODY_EOF, BODY_BAD } BodyPart;
 static int multi_timer_cb(CURLM *multi, long timeout_ms, void *userp);
 
 /* Die if we get a bad CURLMcode somewhere */
@@ -696,6 +723,18 @@ static void send_error_to_erlang(CURLcode curl_code, ConnInfo *conn) {
   ei_x_free(&result);
 }
 
+/* Streaming body: {demand, {{Pid, Ref}, []}} -- send the next chunk. */
+static void send_demand_to_erlang(ConnInfo *conn) {
+  ei_x_buff result;
+
+  begin_msg(&result, "demand", conn->pid, conn->ref);
+  if (ei_x_encode_empty_list(&result)) {
+    errx(2, "Failed to encode demand message");
+  }
+  send_to_erlang(conn->global, result.buff, result.index);
+  ei_x_free(&result);
+}
+
 static void register_conn(GlobalInfo *global, ConnInfo *conn) {
   conn->prev = NULL;
   conn->next = global->active_conns;
@@ -731,6 +770,9 @@ static void free_conn(GlobalInfo *global, ConnInfo *conn) {
   if (conn->upload_fd >= 0) {
     close(conn->upload_fd);
   }
+  if (conn->upload_buf != NULL) {
+    evbuffer_free(conn->upload_buf);
+  }
   curl_slist_free_all(conn->req_cookies);
   curl_slist_free_all(conn->req_headers);
   ei_x_free(&conn->resp_headers);
@@ -760,14 +802,15 @@ static void cancel_conn(GlobalInfo *global, erlang_pid *pid, erlang_ref *ref) {
   }
 }
 
-/* Resume a transfer once flow_conn has cleared paused. curl_easy_pause
- * sets both directions at once, so the mask keeps paused whichever still
- * waits. curl may call write_cb inside it, and check_multi_info may free
- * conn. */
+/* Resume a transfer once flow_conn or body_conn has cleared paused or
+ * upload_paused. curl_easy_pause sets both directions at once, so the mask
+ * keeps paused whichever still waits. curl may call write_cb or
+ * read_stream_cb inside it, and check_multi_info may free conn. */
 static void resume_conn(GlobalInfo *global, ConnInfo *conn) {
   CURLMcode rc;
 
-  curl_easy_pause(conn->easy, conn->paused ? CURLPAUSE_RECV : CURLPAUSE_CONT);
+  curl_easy_pause(conn->easy, (conn->paused ? CURLPAUSE_RECV : 0) |
+                                  (conn->upload_paused ? CURLPAUSE_SEND : 0));
   /* Kick the multi so the transfer moves on promptly. */
   rc = curl_multi_socket_action(global->multi, CURL_SOCKET_TIMEOUT, 0,
                                 &global->still_running);
@@ -832,6 +875,52 @@ static void complete_conn(GlobalInfo *global, ConnInfo *conn, CURLcode res) {
   }
 
   free_conn(global, conn);
+}
+
+/* Buffer the next chunk of a streamed body, or its end, for the transfer
+ * matching {pid, ref}, and resume the upload if it was waiting. The port,
+ * not curl, holds the body to its declared length: curl before 8.7 would
+ * put the excess on the wire after the body, or leave the server waiting
+ * for the rest. A no-op if the transfer is gone or does not stream its
+ * body, and after eof or a failure: a chunk after eof is no part of the
+ * body. */
+static void body_conn(GlobalInfo *global, erlang_pid *pid, erlang_ref *ref,
+                      BodyPart part, const char *data, size_t len) {
+  ConnInfo *conn = find_conn(global, pid, ref);
+
+  if (conn == NULL || !conn->upload_stream || conn->upload_eof ||
+      conn->upload_error != CURLE_OK) {
+    return;
+  }
+  /* State first: curl may call read_stream_cb synchronously inside
+   * curl_easy_pause. An empty chunk buffers nothing, so the resumed read
+   * demands again. */
+  if (part == BODY_BAD) {
+    fail_upload(conn, CURLE_READ_ERROR, "Couldn't decode a body chunk");
+  } else if (part == BODY_EOF) {
+    conn->upload_eof = 1;
+    if (conn->upload_size >= 0 && conn->upload_pos < conn->upload_size) {
+      fail_upload(conn, CURLE_READ_ERROR,
+                  "Body ended after %" CURL_FORMAT_CURL_OFF_T
+                  " of its declared %" CURL_FORMAT_CURL_OFF_T " bytes",
+                  conn->upload_pos, conn->upload_size);
+    }
+  } else if (conn->upload_size >= 0 &&
+             (curl_off_t)len > conn->upload_size - conn->upload_pos) {
+    fail_upload(conn, CURLE_READ_ERROR,
+                "Body longer than its declared %" CURL_FORMAT_CURL_OFF_T " bytes",
+                conn->upload_size);
+  } else {
+    if (len > 0 && evbuffer_add(conn->upload_buf, data, len)) {
+      errx(2, "evbuffer_add");
+    }
+    conn->upload_pos += (curl_off_t)len;
+  }
+  conn->demanded = 0;
+  if (conn->upload_paused) {
+    conn->upload_paused = 0;
+    resume_conn(global, conn);
+  }
 }
 
 static void check_multi_info(GlobalInfo *global) {
@@ -1158,6 +1247,61 @@ static int seek_cb(void *data, curl_off_t offset, int origin) {
   return CURL_SEEKFUNC_OK;
 }
 
+/* body => {stream, _}: hand curl what the caller has sent. With nothing
+ * buffered, ask the caller for more (once until it answers) and pause.
+ * curl reads no further than a declared length, so it never finds the
+ * buffer empty once the length is all in. */
+static size_t read_stream_cb(char *buffer, size_t size, size_t nitems, void *data) {
+  ConnInfo *conn = (ConnInfo *)data;
+  int n;
+
+  if (conn->upload_error != CURLE_OK) {
+    return CURL_READFUNC_ABORT;
+  }
+  n = evbuffer_remove(conn->upload_buf, buffer, size * nitems);
+  if (n < 0) {
+    return CURL_READFUNC_ABORT;
+  }
+  if (n > 0 || conn->upload_eof) {
+    return (size_t)n;
+  }
+  if (!conn->demanded) {
+    conn->demanded = 1;
+    send_demand_to_erlang(conn);
+  }
+  conn->upload_paused = 1;
+  return CURL_READFUNC_PAUSE;
+}
+
+/* A streamed body is gone once sent, so anything that must send it again
+ * fails with send_fail_rewind: a redirect, an auth retry, or curl's retry
+ * on a reused connection the server had closed. The port names the error
+ * itself, as curl reports a refused rewind as send_fail_rewind or
+ * read_error depending on its version. Back to the start before curl has
+ * read anything, there is nothing to send again. */
+static int seek_stream_cb(void *data, curl_off_t offset, int origin) {
+  ConnInfo *conn = (ConnInfo *)data;
+  curl_off_t taken = conn->upload_pos - (curl_off_t)evbuffer_get_length(conn->upload_buf);
+
+  if (offset == 0 && origin == SEEK_SET && taken == 0) {
+    return CURL_SEEKFUNC_OK;
+  }
+  fail_upload(conn, CURLE_SEND_FAIL_REWIND, "A streamed body cannot be sent again");
+  return CURL_SEEKFUNC_CANTSEEK;
+}
+
+/* Whether the request sets the header name, given with its colon. */
+static int has_header(const struct curl_slist *list, const char *name) {
+  size_t len = strlen(name);
+
+  for (; list != NULL; list = list->next) {
+    if (strncasecmp(list->data, name, len) == 0) {
+      return 1;
+    }
+  }
+  return 0;
+}
+
 static void set_method(long method, ConnInfo *conn) {
   switch (method) {
     case KATIPO_GET:
@@ -1195,18 +1339,21 @@ static void set_method(long method, ConnInfo *conn) {
   curl_off_t size = conn->upload_path != NULL ? conn->upload_size
                                               : (curl_off_t)conn->post_data_size;
   if (method == KATIPO_HEAD ||
-      (size == 0 && method != KATIPO_POST &&
+      (!conn->upload_stream && size == 0 && method != KATIPO_POST &&
        method != KATIPO_PUT && method != KATIPO_PATCH)) {
     return;
   }
-  if (conn->upload_path != NULL) {
+  if (conn->upload_path != NULL || conn->upload_stream) {
     /* POST semantics with a read callback, as POSTFIELDS gives for a body
-     * in memory; CUSTOMREQUEST keeps the method's name. */
+     * in memory; CUSTOMREQUEST keeps the method's name. A streamed body's
+     * length of -1 sends it chunked (or as HTTP/2 or 3 frames). */
     curl_easy_setopt(conn->easy, CURLOPT_POST, 1L);
-    curl_easy_setopt(conn->easy, CURLOPT_POSTFIELDSIZE_LARGE, size);
-    curl_easy_setopt(conn->easy, CURLOPT_READFUNCTION, read_cb);
+    curl_easy_setopt(conn->easy, CURLOPT_POSTFIELDSIZE_LARGE, conn->upload_size);
+    curl_easy_setopt(conn->easy, CURLOPT_READFUNCTION,
+                     conn->upload_stream ? read_stream_cb : read_cb);
     curl_easy_setopt(conn->easy, CURLOPT_READDATA, conn);
-    curl_easy_setopt(conn->easy, CURLOPT_SEEKFUNCTION, seek_cb);
+    curl_easy_setopt(conn->easy, CURLOPT_SEEKFUNCTION,
+                     conn->upload_stream ? seek_stream_cb : seek_cb);
     curl_easy_setopt(conn->easy, CURLOPT_SEEKDATA, conn);
   } else {
     curl_easy_setopt(conn->easy, CURLOPT_POSTFIELDS, conn->post_data);
@@ -1223,10 +1370,11 @@ static void set_method(long method, ConnInfo *conn) {
 
 static void free_eopts(EasyOpts *eopts);
 
+/* Takes ownership of url, the lists, the body's buffers, pid and ref. */
 static void new_conn(long method, char *url, struct curl_slist *req_headers,
-                     struct curl_slist *req_cookies, char *post_data,
-                     long post_data_size, char *upload_path, EasyOpts eopts,
-                     erlang_pid *pid, erlang_ref *ref, GlobalInfo *global) {
+                     struct curl_slist *req_cookies, ReqBody *body,
+                     EasyOpts eopts, erlang_pid *pid, erlang_ref *ref,
+                     GlobalInfo *global) {
   ConnInfo *conn;
   CURLMcode rc;
   struct curl_slist *nc;
@@ -1250,13 +1398,21 @@ static void new_conn(long method, char *url, struct curl_slist *req_headers,
   conn->ref = ref;
   conn->req_headers = req_headers;
   conn->req_cookies = req_cookies;
-  conn->post_data = post_data;
-  conn->post_data_size = post_data_size;
+  conn->post_data = body->data;
+  conn->post_data_size = body->size;
   conn->stream = eopts.curlopt_stream != 0;
   conn->window = eopts.curlopt_stream_window;
-  conn->upload_path = upload_path;
+  conn->upload_path = body->path;
   conn->upload_fd = -1;
-  if (upload_path != NULL && !stat_upload(conn)) {
+  if (body->stream) {
+    conn->upload_stream = 1;
+    conn->upload_size = body->length;
+    conn->upload_buf = evbuffer_new();
+    if (conn->upload_buf == NULL) {
+      errx(2, "Failed to allocate the upload buffer, exiting!\n");
+    }
+  }
+  if (body->path != NULL && !stat_upload(conn)) {
     send_error_to_erlang(conn->upload_error, conn);
     free_eopts(&eopts);
     free_conn(global, conn);
@@ -1274,6 +1430,17 @@ static void new_conn(long method, char *url, struct curl_slist *req_headers,
     curl_easy_setopt(conn->easy, CURLOPT_REDIR_PROTOCOLS, CURLPROTO_HTTP | CURLPROTO_HTTPS);
   #endif
   curl_easy_setopt(conn->easy, CURLOPT_URL, conn->url);
+  /* curl holds a body of unknown length behind Expect: 100-continue
+   * (HTTP/1.1) until the server answers or a second passes, and with it a
+   * streamed body's first demand: send it straight away instead, unless
+   * the caller asks for Expect itself. */
+  if (conn->upload_stream && !has_header(conn->req_headers, "Expect:")) {
+    nc = curl_slist_append(conn->req_headers, "Expect:");
+    if (nc == NULL) {
+      errx(2, "curl_slist_append failed, exiting!\n");
+    }
+    conn->req_headers = nc;
+  }
   curl_easy_setopt(conn->easy, CURLOPT_HTTPHEADER, conn->req_headers);
   if (eopts.curlopt_http_version) {
     curl_easy_setopt(conn->easy, CURLOPT_HTTP_VERSION, eopts.curlopt_http_version);
@@ -1453,10 +1620,9 @@ static int parse_slist(char *buf, int *index, struct curl_slist **out) {
   return 0;
 }
 
-/* The body: iodata, flattened into out_data, or {file, Path}, whose path
- * goes to out_path instead. */
-static int parse_body(char *buf, int *index, char **out_data, int *out_size,
-                      char **out_path) {
+/* The body: iodata, flattened into body->data; {file, Path}, whose path
+ * goes to body->path; or {stream, Length}, Length -1 when not declared. */
+static int parse_body(char *buf, int *index, ReqBody *body) {
   int erl_type;
   int size;
   int index_prev;
@@ -1468,32 +1634,43 @@ static int parse_body(char *buf, int *index, char **out_data, int *out_size,
     char tag[MAXATOMLEN];
     int arity;
     long len;
+    long long length;
 
     if (ei_decode_tuple_header(buf, index, &arity) || arity != 2 ||
-        ei_decode_atom(buf, index, tag) || strcmp(tag, "file") != 0 ||
+        ei_decode_atom(buf, index, tag)) {
+      return -1;
+    }
+    if (strcmp(tag, "stream") == 0) {
+      if (ei_decode_longlong(buf, index, &length) || length < -1) {
+        return -1;
+      }
+      body->stream = 1;
+      body->length = (curl_off_t)length;
+      return 0;
+    }
+    if (strcmp(tag, "file") != 0 ||
         ei_get_type(buf, index, &erl_type, &size) ||
         erl_type != ERL_BINARY_EXT) {
       return -1;
     }
-    *out_path = (char *)malloc(size + 1);
-    if (*out_path == NULL || ei_decode_binary(buf, index, *out_path, &len)) {
-      free(*out_path);
-      *out_path = NULL;
+    body->path = (char *)malloc(size + 1);
+    if (body->path == NULL || ei_decode_binary(buf, index, body->path, &len)) {
+      free(body->path);
+      body->path = NULL;
       return -1;
     }
-    (*out_path)[size] = '\0';
-    *out_size = 0;
+    body->path[size] = '\0';
     return 0;
   }
   index_prev = *index;
-  if (ei_decode_iodata(buf, index, out_size, NULL)) {
+  if (ei_decode_iodata(buf, index, &body->size, NULL)) {
     return -1;
   }
   *index = index_prev;
-  *out_data = (char *)malloc(*out_size);
-  if (ei_decode_iodata(buf, index, out_size, *out_data)) {
-    free(*out_data);
-    *out_data = NULL;
+  body->data = (char *)malloc(body->size);
+  if (ei_decode_iodata(buf, index, &body->size, body->data)) {
+    free(body->data);
+    body->data = NULL;
     return -1;
   }
   return 0;
@@ -1678,7 +1855,8 @@ static void free_eopts(EasyOpts *eopts) {
  * cancel or flow command. buf holds the term, version byte first; the
  * caller frees it. Split out of erl_input so the decoding can be fuzzed
  * without the pipe (see fuzz/). */
-static void handle_frame(GlobalInfo *global, char *buf) {
+/* One frame from Erlang, len bytes. */
+static void handle_frame(GlobalInfo *global, char *buf, size_t len) {
   int index;
   int version;
   int arity;
@@ -1694,9 +1872,7 @@ static void handle_frame(GlobalInfo *global, char *buf) {
   char *url = NULL;
   struct curl_slist *req_headers = NULL;
   struct curl_slist *req_cookies = NULL;
-  char *post_data = NULL;
-  int post_data_size = 0;
-  char *upload_path = NULL;
+  ReqBody body = {0};
   EasyOpts eopts = {0};
 
   index = 0;
@@ -1732,17 +1908,40 @@ static void handle_frame(GlobalInfo *global, char *buf) {
   }
 
   /* Flow command: {Pid, Ref, flow, N} (arity 4). Grant N more chunk
-   * credits to the matching streaming transfer. */
+   * credits to the matching streaming transfer.
+   * Body command: {Pid, Ref, body, Data | eof} (arity 4). The next chunk of
+   * a streamed request body, or its end. */
 
   if (arity == 4) {
-    char flow_atom[MAXATOMLEN];
+    char tag[MAXATOMLEN];
     long flow_n;
-    if (ei_decode_atom(buf, &index, flow_atom) ||
-        strcmp(flow_atom, "flow") != 0 ||
-        ei_decode_long(buf, &index, &flow_n)) {
-      fprintf(stderr, "ERROR: Couldn't decode flow command\n");
+    if (ei_decode_atom(buf, &index, tag)) {
+      fprintf(stderr, "ERROR: Couldn't decode command\n");
+    } else if (strcmp(tag, "flow") == 0) {
+      if (ei_decode_long(buf, &index, &flow_n)) {
+        fprintf(stderr, "ERROR: Couldn't decode flow command\n");
+      } else {
+        flow_conn(global, pid, ref, flow_n);
+      }
+    } else if (strcmp(tag, "body") == 0) {
+      /* The chunk is the frame's raw bytes after the term, whose own
+       * element is an empty-binary placeholder: the mirror of a body frame
+       * (begin_body_frame), so the chunk is neither copied into the term
+       * nor decoded. Anything else fails the upload rather than leave the
+       * caller waiting for a demand. */
+      char eof_atom[MAXATOMLEN];
+      int at = index;
+      if (ei_decode_atom(buf, &at, eof_atom) == 0 && strcmp(eof_atom, "eof") == 0) {
+        body_conn(global, pid, ref, BODY_EOF, NULL, 0);
+      } else if (ei_get_type(buf, &index, &erl_type, &size) == 0 &&
+                 erl_type == ERL_BINARY_EXT && size == 0 &&
+                 ei_skip_term(buf, &index) == 0 && (size_t)index <= len) {
+        body_conn(global, pid, ref, BODY_CHUNK, buf + index, len - (size_t)index);
+      } else {
+        body_conn(global, pid, ref, BODY_BAD, NULL, 0);
+      }
     } else {
-      flow_conn(global, pid, ref, flow_n);
+      fprintf(stderr, "ERROR: Unknown command %s\n", tag);
     }
     free(pid);
     free(ref);
@@ -1775,7 +1974,7 @@ static void handle_frame(GlobalInfo *global, char *buf) {
     goto cleanup;
   }
 
-  if (parse_body(buf, &index, &post_data, &post_data_size, &upload_path) != 0) {
+  if (parse_body(buf, &index, &body) != 0) {
     goto cleanup;
   }
 
@@ -1796,8 +1995,8 @@ static void handle_frame(GlobalInfo *global, char *buf) {
     goto cleanup;
   }
 
-  new_conn(method, url, req_headers, req_cookies, post_data,
-           post_data_size, upload_path, eopts, pid, ref, global);
+  new_conn(method, url, req_headers, req_cookies, &body, eopts, pid, ref,
+           global);
 
   return;
 
@@ -1810,8 +2009,8 @@ cleanup:
   free(pid);
   free(ref);
   free(url);
-  free(post_data);
-  free(upload_path);
+  free(body.data);
+  free(body.path);
   curl_slist_free_all(req_headers);
   curl_slist_free_all(req_cookies);
   free_eopts(&eopts);
@@ -1865,7 +2064,7 @@ static void erl_input(struct bufferevent *ev, void *arg) {
       errx(2, "Wanted to read %u bytes data but got %zu", len, data_read);
     }
 
-    handle_frame(global, buf);
+    handle_frame(global, buf, len);
     free(buf);
   }
 }
