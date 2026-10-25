@@ -335,7 +335,8 @@ groups() ->
        stream_body_expect,
        stream_body_longer,
        stream_body_shorter,
-       stream_body_after_eof]},
+       stream_body_after_eof,
+       stream_body_backpressure]},
      {otel, [],
       [otel_span_created,
        otel_metrics_recorded,
@@ -633,6 +634,47 @@ file_body_shrank(Config) ->
     {error, #{code := read_error, message := Message}} = katipo:await(Ref),
     {match, _} = re:run(Message, <<"shrank">>),
     ok = katipo_upload_server:stop(Server).
+
+%% Both directions pushing back at once: a server that reads the upload a
+%% piece at a time and echoes each piece straight back, against a caller
+%% that grants response credits one at a time and slowly. The upload's pause
+%% and the response's share one curl handle; each must resume only its own
+%% direction for the transfer to finish, with the body intact both ways and
+%% exactly one demand per chunk.
+stream_body_backpressure(_Config) ->
+    {Server, Port} = upload_server(#{echo => {16384, 1}}),
+    Chunks = [binary:copy(<<(I rem 26 + $a)>>, 65536) || I <- lists:seq(1, 32)],
+    Body = iolist_to_binary(Chunks),
+    {ok, Ref} = katipo:async_put(?POOL, katipo_upload_server:url(Port),
+                                 #{body => {stream, #{length => byte_size(Body)}},
+                                   stream => true, stream_window => 1,
+                                   http_version => curl_http_version_1_1,
+                                   timeout_ms => 60000}),
+    {Echoed, Demands} = echo_loop(Ref, Chunks, [], 0),
+    ?assertEqual(Body, Echoed),
+    ?assertEqual(length(Chunks), Demands),
+    receive {upload_body, Server, Sent} -> ?assertEqual(Body, Sent) end,
+    ok = katipo_upload_server:stop(Server).
+
+echo_loop(Ref, Chunks, Acc, Demands) ->
+    receive
+        {katipo_body_demand, Ref} ->
+            [C | Cs] = Chunks,
+            ok = katipo:send_body(?POOL, Ref, C),
+            echo_loop(Ref, Cs, Acc, Demands + 1);
+        {katipo_headers, Ref, #{status := 200}} ->
+            echo_loop(Ref, Chunks, Acc, Demands);
+        {katipo_chunk, Ref, Data} ->
+            timer:sleep(1),
+            ok = katipo:update_flow(?POOL, Ref, 1),
+            echo_loop(Ref, Chunks, [Data | Acc], Demands);
+        {katipo_done, Ref, _} ->
+            {iolist_to_binary(lists:reverse(Acc)), Demands};
+        {katipo_error, Ref, Error} ->
+            ct:fail({backpressure_error, Error})
+    after 30000 ->
+            ct:fail({backpressure_stalled, mailbox()})
+    end.
 
 upload_server(Opts) ->
     {ok, Server, Port} = katipo_upload_server:start(Opts),
