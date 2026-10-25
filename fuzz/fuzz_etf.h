@@ -209,10 +209,24 @@ static long encode_request(ei_x_buff *x, FuzzInput *in, erlang_pid *pid,
   encode_bin(x, in);
   encode_bin_list(x, in);
   encode_bin_list(x, in);
-  if (fi_u8(in) & 1) {
-    encode_bin_list(x, in); /* an iolist body */
-  } else {
+  switch (fi_u8(in) % 3) {
+  case 0:
     encode_bin(x, in);
+    break;
+  case 1:
+    encode_bin_list(x, in); /* an iolist body */
+    break;
+  default:
+    /* {stream, Length}: -1, or a length up to 2^63-1, encoded as
+     * term_to_binary encodes it. */
+    FUZZ_ASSERT(ei_x_encode_tuple_header(x, 2) == 0);
+    FUZZ_ASSERT(ei_x_encode_atom(x, "stream") == 0);
+    if (fi_u8(in) & 1) {
+      encode_int(x, 1, 1);
+    } else {
+      encode_int(x, 0, (pos_int_any(in) - 1) & 0x7fffffffffffffffULL);
+    }
+    break;
   }
   return encode_opts(x, in);
 }
