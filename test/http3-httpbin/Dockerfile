@@ -1,4 +1,6 @@
-FROM python:3.11-slim
+# Google's mirror of Docker Hub: the same image, without Docker Hub's
+# anonymous pull limits, which failed CI jobs before any test ran.
+FROM mirror.gcr.io/library/python:3.11-slim
 
 LABEL name="httpbin"
 LABEL description="A simple HTTP service for testing HTTP/3"

@@ -1,6 +1,7 @@
 services:
   caddy:
-    image: caddy:2-alpine
+    # Google's mirror of Docker Hub, as in the Dockerfile.
+    image: mirror.gcr.io/library/caddy:2-alpine
     restart: unless-stopped
     ports:
       - "8443:443"        # TCP for HTTP/1.1 and HTTP/2
