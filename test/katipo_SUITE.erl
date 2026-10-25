@@ -35,17 +35,51 @@ init_per_suite(Config) ->
     ok = katipo_trace:start(),
     {ok, _} = katipo_pool:start(?POOL, ?POOL_SIZE),
     DataDir = ?config(data_dir, Config),
-    CACert = filename:join(DataDir, "ca-bundle.crt"),
+    CACert = filename:join([DataDir, "tls", "ca.pem"]),
     %% Use local httpbin instance (must be started manually with docker-compose)
     HttpbinBase = <<"https://localhost:8443">>,
     HttpbinOpts = #{ssl_verifyhost => false, ssl_verifypeer => false},
     [{cacert_file, list_to_binary(CACert)},
      {httpbin_base, HttpbinBase},
-     {httpbin_opts, HttpbinOpts} | Config].
+     {httpbin_opts, HttpbinOpts} | start_tls_servers(Config)].
 
-end_per_suite(_Config) ->
+end_per_suite(Config) ->
+    [ok = katipo_tls_server:stop(Pid) || {_, {Pid, _}} <- ?config(tls_servers, Config)],
     ok = application:stop(katipo),
     katipo_trace:dump(?MODULE).
+
+%% The local HTTPS servers the TLS tests use in place of public sites, one
+%% per kind of certificate: see katipo_tls_server. Leaves are signed by the
+%% committed test CA unless the case is that they are not.
+start_tls_servers(Config) ->
+    CA = katipo_tls_server:ca(?config(data_dir, Config)),
+    Good = katipo_tls_server:leaf(CA, #{names => ["localhost", "doh.katipo.test"]}),
+    Client = katipo_tls_server:leaf(CA, #{key => {rsa, 2048, 65537}}),
+    #{cert := CACertDer} = CA,
+    Servers =
+        [{good, Good},
+         {expired, katipo_tls_server:leaf(CA, #{validity => {{2000, 1, 1}, {2001, 1, 1}}})},
+         {wrong_host, katipo_tls_server:leaf(CA, #{names => ["wrong.host.invalid"]})},
+         {self_signed, katipo_tls_server:self_signed()},
+         {untrusted_root, katipo_tls_server:leaf([{key, {namedCurve, secp256r1}},
+                                                  {digest, sha256}], #{})},
+         {tls12_only, Good#{versions => ['tlsv1.2']}},
+         {client_cert, Good#{client_cas => [CACertDer]}}],
+    Started = [{Name, begin
+                          {ok, Pid, Port} = katipo_tls_server:start(Opts),
+                          {Pid, Port}
+                      end} || {Name, Opts} <- Servers],
+    #{key := {_, ClientKeyDer}} = Client,
+    {CertFile, KeyFile} = katipo_tls_server:write_pem(?config(priv_dir, Config),
+                                                      Client, "katipo"),
+    [{tls_servers, Started},
+     {cert_file, list_to_binary(CertFile)},
+     {key_file, list_to_binary(KeyFile)},
+     {decrypted_key_der, ClientKeyDer} | Config].
+
+tls_url(Config, Name) ->
+    {_, Port} = proplists:get_value(Name, ?config(tls_servers, Config)),
+    iolist_to_binary(["https://localhost:", integer_to_list(Port), "/"]).
 
 init_per_group(otel, Config) ->
     %% OTel tests will configure their own exporters since each test
@@ -70,17 +104,6 @@ init_per_group(curl, Config) ->
 init_per_group(pool, Config) ->
     application:ensure_all_started(meck),
     Config;
-init_per_group(https_mutual, Config) ->
-    DataDir = ?config(data_dir, Config),
-    Cert = filename:join(DataDir, "badssl.com-client.pem"),
-    Key = filename:join(DataDir, "badssl.com-client.key"),
-    {ok, PemBin} = file:read_file(Key),
-    [KeyPem] = public_key:pem_decode(PemBin),
-    KeyDecoded = public_key:pem_entry_decode(KeyPem, <<"badssl.com">>),
-    KeyDer = public_key:der_encode('RSAPrivateKey', KeyDecoded),
-    [{cert_file, list_to_binary(Cert)},
-     {key_file, list_to_binary(Key)},
-     {decrypted_key_der, KeyDer} | Config];
 init_per_group(http1, Config) ->
     %% Use local httpbin instance for HTTP/1.1 tests
     [{httpbin_base, <<"https://localhost:8443">>},
@@ -771,12 +794,16 @@ digest_authorised_userpwd(Config) ->
     ?assert(maps:get(<<"authenticated">>, Json)),
     ?assertEqual(Username, maps:get(<<"user">>, Json)).
 
-doh_url(_) ->
+%% doh.katipo.test exists only in the local DoH server's answers.
+doh_url(Config) ->
     case katipo:doh_url_available() of
         true ->
-            {ok, #{status := 301}} =
-                katipo:get(?POOL, <<"https://google.com">>,
-                           #{doh_url => <<"https://1.1.1.1/dns-query">>});
+            Good = tls_url(Config, good),
+            <<"https://localhost:", Rest/binary>> = Good,
+            {ok, #{status := 200}} =
+                katipo:get(?POOL, <<"https://doh.katipo.test:", Rest/binary>>,
+                           #{doh_url => <<Good/binary, "dns-query">>,
+                             cacert => ?config(cacert_file, Config)});
         false ->
             ok
     end.
@@ -1159,50 +1186,43 @@ max_concurrent_streams(_) ->
     {ok, _} = katipo_pool:start(PoolName, PoolSize, PoolOpts),
     ok = katipo_pool:stop(PoolName).
 
-verify_host_verify_peer_ok(_) ->
+verify_host_verify_peer_ok(Config) ->
+    CACert = ?config(cacert_file, Config),
     Opts = [#{ssl_verifyhost => true, ssl_verifypeer => true},
             #{ssl_verifyhost => false, ssl_verifypeer => true},
             #{ssl_verifyhost => true, ssl_verifypeer => false},
             #{ssl_verifyhost => false, ssl_verifypeer => false}],
-    [{ok, _} = katipo:get(?POOL, <<"https://google.com">>, O) || O <- Opts].
+    [{ok, #{status := 200}} = katipo:get(?POOL, tls_url(Config, good), O#{cacert => CACert})
+     || O <- Opts].
 
-verify_host_verify_peer_error(_) ->
-    {error, #{code := Code}} =
-         katipo:get(?POOL, <<"https://self-signed.badssl.com/">>,
-                    #{ssl_verifyhost => true, ssl_verifypeer => true}),
-    %% TODO: this could be made to reflect the ifdef from katipo.c...
-    ok = case Code of
-             ssl_cacert -> ok;
-             peer_failed_verification -> ok
-         end,
-    {error, #{code := Code}} =
-         katipo:get(?POOL, <<"https://self-signed.badssl.com/">>,
-                    #{ssl_verifyhost => false, ssl_verifypeer => true}),
-    ok = case Code of
-             ssl_cacert -> ok;
-             peer_failed_verification -> ok
-         end,
+verify_host_verify_peer_error(Config) ->
+    Url = tls_url(Config, self_signed),
+    {error, #{code := peer_failed_verification}} =
+         katipo:get(?POOL, Url, #{ssl_verifyhost => true, ssl_verifypeer => true}),
+    {error, #{code := peer_failed_verification}} =
+         katipo:get(?POOL, Url, #{ssl_verifyhost => false, ssl_verifypeer => true}),
     {ok, #{status := 200}} =
-        katipo:get(?POOL, <<"https://self-signed.badssl.com/">>,
-                   #{ssl_verifyhost => true, ssl_verifypeer => false}),
+        katipo:get(?POOL, Url, #{ssl_verifyhost => true, ssl_verifypeer => false}),
     {ok, #{status := 200}} =
-        katipo:get(?POOL, <<"https://self-signed.badssl.com/">>,
-                   #{ssl_verifyhost => false, ssl_verifypeer => false}).
+        katipo:get(?POOL, Url, #{ssl_verifyhost => false, ssl_verifypeer => false}).
 
+%% The test CA is no system's, so only the cacert or capath options make
+%% the good server's certificate verify.
 cacert_self_signed(Config) ->
-    CACert = ?config(cacert_file, Config),
-    {ok, #{status := 301}} =
-        katipo:get(?POOL, <<"https://google.com">>,
-                   #{ssl_verifyhost => true, ssl_verifypeer => true, cacert => CACert}).
+    {error, #{code := peer_failed_verification}} =
+        katipo:get(?POOL, tls_url(Config, good), #{}),
+    {ok, #{status := 200}} =
+        katipo:get(?POOL, tls_url(Config, good),
+                   #{ssl_verifyhost => true, ssl_verifypeer => true,
+                     cacert => ?config(cacert_file, Config)}).
 
 capath(Config) ->
-    %% Test the capath option which specifies a directory containing CA certs
-    %% The capath directory contains pre-split certificates with hash symlinks
-    %% (created by openssl rehash). This avoids needing openssl rehash at runtime.
+    %% The capath directory holds the test CA under its OpenSSL subject
+    %% hash, so no openssl rehash is needed at runtime.
     DataDir = ?config(data_dir, Config),
     CAPath = list_to_binary(filename:join(DataDir, "capath")),
-    {ok, #{status := 301}} =
-        katipo:get(?POOL, <<"https://google.com">>,
+    {ok, #{status := 200}} =
+        katipo:get(?POOL, tls_url(Config, good),
                    #{ssl_verifyhost => true,
                      ssl_verifypeer => true,
                      capath => CAPath}).
@@ -1211,8 +1231,8 @@ capath_string(Config) ->
     %% Test that capath accepts string (charlist) paths, not just binaries
     DataDir = ?config(data_dir, Config),
     CAPath = filename:join(DataDir, "capath"),  %% string, not binary
-    {ok, #{status := 301}} =
-        katipo:get(?POOL, <<"https://google.com">>,
+    {ok, #{status := 200}} =
+        katipo:get(?POOL, tls_url(Config, good),
                    #{ssl_verifyhost => true,
                      ssl_verifypeer => true,
                      capath => CAPath}).
@@ -1220,8 +1240,8 @@ capath_string(Config) ->
 cacert_string(Config) ->
     %% Test that cacert accepts string (charlist) paths, not just binaries
     CACert = binary_to_list(?config(cacert_file, Config)),  %% string, not binary
-    {ok, #{status := 301}} =
-        katipo:get(?POOL, <<"https://google.com">>,
+    {ok, #{status := 200}} =
+        katipo:get(?POOL, tls_url(Config, good),
                    #{ssl_verifyhost => true,
                      ssl_verifypeer => true,
                      cacert => CACert}).
@@ -1242,73 +1262,54 @@ path_opts_bad_list(_) ->
         katipo:get(?POOL, <<"https://localhost/">>,
                    #{sslkey => InvalidList}).
 
-sslversion(_) ->
-    %% Test the sslversion option to set minimum TLS version
-    %% TLS 1.2 should work with most modern servers
-    {ok, #{status := 301}} =
-        katipo:get(?POOL, <<"https://google.com">>,
-                   #{sslversion => sslversion_tlsv1_2}),
-    %% TLS 1.3 should also work with google.com
-    {ok, #{status := 301}} =
-        katipo:get(?POOL, <<"https://google.com">>,
-                   #{sslversion => sslversion_tlsv1_3}),
-    %% badssl.com has endpoints that only support specific TLS versions
-    %% tls-v1-2.badssl.com:1012 only supports TLS 1.2
-    %% Requiring TLS 1.3 minimum should fail against a TLS 1.2-only server
+sslversion(Config) ->
+    CACert = ?config(cacert_file, Config),
+    %% The good server speaks TLS 1.2 and 1.3; requiring either works.
+    [{ok, #{status := 200}} =
+         katipo:get(?POOL, tls_url(Config, good), #{sslversion => V, cacert => CACert})
+     || V <- [sslversion_tlsv1_2, sslversion_tlsv1_3]],
+    %% Requiring TLS 1.3 fails against a server that only speaks 1.2.
     {error, #{code := ssl_connect_error}} =
-        katipo:get(?POOL, <<"https://tls-v1-2.badssl.com:1012/">>,
+        katipo:get(?POOL, tls_url(Config, tls12_only),
                    #{sslversion => sslversion_tlsv1_3,
                      ssl_verifyhost => false,
                      ssl_verifypeer => false}).
 
-badssl(_) ->
-    {error, _} =
-        katipo:get(?POOL, <<"https://expired.badssl.com/">>),
-    {error, _} =
-        katipo:get(?POOL, <<"https://wrong.host.badssl.com/">>),
-    {error, _} =
-        katipo:get(?POOL, <<"https://self-signed.badssl.com/">>),
-    {error, _} =
-        katipo:get(?POOL, <<"https://untrusted-root.badssl.com/">>).
+%% Each defect fails verification even with the test CA trusted, so it is
+%% the defect, not the CA, that fails it.
+badssl(Config) ->
+    CACert = ?config(cacert_file, Config),
+    [{error, #{code := peer_failed_verification}} =
+         katipo:get(?POOL, tls_url(Config, Name), #{cacert => CACert})
+     || Name <- [expired, wrong_host, self_signed, untrusted_root]],
+    ok.
 
+%% The server asks for a client certificate signed by the test CA, and
+%% answers 400 when none is sent.
 badssl_client_cert(Config) ->
-    {ok, #{status := 400}} =
-        katipo:get(?POOL, <<"https://client.badssl.com">>,
-                   #{ssl_verifyhost => true,
-                     ssl_verifypeer => true}),
+    Url = tls_url(Config, client_cert),
+    Base = #{ssl_verifyhost => true, ssl_verifypeer => true,
+             cacert => ?config(cacert_file, Config)},
+    {ok, #{status := 400}} = katipo:get(?POOL, Url, Base),
     CertFile = ?config(cert_file, Config),
     KeyFile = ?config(key_file, Config),
     %% Certificate provided but no key - different curl versions return different errors
     {error, #{code := Code1}} =
-        katipo:get(?POOL, <<"https://client.badssl.com">>,
-                   #{ssl_verifyhost => true,
-                     ssl_verifypeer => true,
-                     sslcert => CertFile}),
+        katipo:get(?POOL, Url, Base#{sslcert => CertFile}),
     ?assert(Code1 =:= ssl_certproblem orelse Code1 =:= bad_function_argument),
     %% This key requires a passphrase - different curl versions return different errors
     {error, #{code := Code2}} =
-        katipo:get(?POOL, <<"https://client.badssl.com">>,
-                   #{ssl_verifyhost => true,
-                     ssl_verifypeer => true,
-                     sslcert => CertFile,
-                     sslkey => KeyFile}),
+        katipo:get(?POOL, Url, Base#{sslcert => CertFile, sslkey => KeyFile}),
     ?assert(Code2 =:= ssl_certproblem orelse Code2 =:= bad_function_argument),
     {ok, #{status := 200}} =
-        katipo:get(?POOL, <<"https://client.badssl.com">>,
-                   #{ssl_verifyhost => true,
-                     ssl_verifypeer => true,
-                     sslcert => CertFile,
-                     sslkey => KeyFile,
-                     keypasswd => <<"badssl.com">>}),
+        katipo:get(?POOL, Url, Base#{sslcert => CertFile, sslkey => KeyFile,
+                                     keypasswd => <<"katipo">>}),
     case katipo:sslkey_blob_available() of
         true ->
             KeyDer = ?config(decrypted_key_der, Config),
             {ok, #{status := 200}} =
-                katipo:get(?POOL, <<"https://client.badssl.com">>,
-                        #{ssl_verifyhost => true,
-                            ssl_verifypeer => true,
-                            sslcert => CertFile,
-                            sslkey_blob => KeyDer});
+                katipo:get(?POOL, Url, Base#{sslcert => CertFile,
+                                             sslkey_blob => KeyDer});
         false ->
             ok
     end,
