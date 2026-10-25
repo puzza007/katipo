@@ -760,12 +760,26 @@ static void cancel_conn(GlobalInfo *global, erlang_pid *pid, erlang_ref *ref) {
   }
 }
 
+/* Resume a transfer once flow_conn has cleared paused. curl_easy_pause
+ * sets both directions at once, so the mask keeps paused whichever still
+ * waits. curl may call write_cb inside it, and check_multi_info may free
+ * conn. */
+static void resume_conn(GlobalInfo *global, ConnInfo *conn) {
+  CURLMcode rc;
+
+  curl_easy_pause(conn->easy, conn->paused ? CURLPAUSE_RECV : CURLPAUSE_CONT);
+  /* Kick the multi so the transfer moves on promptly. */
+  rc = curl_multi_socket_action(global->multi, CURL_SOCKET_TIMEOUT, 0,
+                                &global->still_running);
+  mcode_or_die("resume_conn: curl_multi_socket_action", rc);
+  check_multi_info(global);
+}
+
 /* Grant n more chunk credits to the streaming transfer matching {pid, ref}
  * and resume it if it was paused waiting for credits. A no-op if the
  * transfer is gone (completed/cancelled) or was started unbounded. */
 static void flow_conn(GlobalInfo *global, erlang_pid *pid, erlang_ref *ref,
                       long n) {
-  CURLMcode rc;
   ConnInfo *conn = find_conn(global, pid, ref);
 
   if (conn == NULL || conn->window < 0 || n <= 0) {
@@ -778,12 +792,7 @@ static void flow_conn(GlobalInfo *global, erlang_pid *pid, erlang_ref *ref,
   conn->window = n > LONG_MAX - conn->window ? LONG_MAX : conn->window + n;
   if (conn->paused) {
     conn->paused = 0;
-    curl_easy_pause(conn->easy, CURLPAUSE_CONT);
-    /* Kick the multi so socket reading resumes promptly. */
-    rc = curl_multi_socket_action(global->multi, CURL_SOCKET_TIMEOUT, 0,
-                                  &global->still_running);
-    mcode_or_die("flow_conn: curl_multi_socket_action", rc);
-    check_multi_info(global);
+    resume_conn(global, conn);
   }
 }
 
