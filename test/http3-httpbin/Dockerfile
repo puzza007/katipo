@@ -1,4 +1,6 @@
-FROM python:3.11-slim
+# Docker Hub's mirror on ECR Public: same image, without Docker Hub's
+# anonymous pull limits, which failed CI jobs before any test ran.
+FROM public.ecr.aws/docker/library/python:3.11-slim
 
 LABEL name="httpbin"
 LABEL description="A simple HTTP service for testing HTTP/3"

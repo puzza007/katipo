@@ -1,6 +1,7 @@
 services:
   caddy:
-    image: caddy:2-alpine
+    # Docker Hub's mirror on ECR Public, as in the Dockerfile.
+    image: public.ecr.aws/docker/library/caddy:2-alpine
     restart: unless-stopped
     ports:
       - "8443:443"        # TCP for HTTP/1.1 and HTTP/2
