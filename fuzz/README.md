@@ -10,6 +10,8 @@ and the port dying on that is a bug.
 |---|---|---|
 | `fuzz_headers` | `header_cb` + `encode_headers`, one call per header line | the encoded list matches a model: lines since the last status line, CR/LF/NUL replaced, trailers dropped |
 | `fuzz_request` | `handle_frame` with requests, cancels and flow grants shaped as `katipo_worker` sends them | no `bad_opts` reply to a valid request; the in-flight list and stream windows match a model |
+| `fuzz_framing` | `erl_input` with requests and cancels laid end to end, delivered in pieces of any size | exactly the frames that arrived in full are handled, once; nothing is left half read |
+| `fuzz_transfer` | `header_cb`, `write_cb`, `flow_conn` and `complete_conn` for one buffered or streaming transfer | every frame written to Erlang decodes; streaming sends one headers message first, the body in order, and no more chunks than the window allows; a buffered `ok` carries every byte; one terminal message, last |
 
 ## Running
 
@@ -24,6 +26,8 @@ fuzz/docker.sh fuzz/out/libfuzzer/fuzz_headers -dict=fuzz/http.dict \
     -fork=8 fuzz/corpus/fuzz_headers
 fuzz/docker.sh fuzz/out/libfuzzer/fuzz_request -rss_limit_mb=2048 \
     -fork=8 fuzz/corpus/fuzz_request
+fuzz/docker.sh fuzz/out/libfuzzer/fuzz_framing -fork=8 fuzz/corpus/fuzz_framing
+fuzz/docker.sh fuzz/out/libfuzzer/fuzz_transfer -fork=8 fuzz/corpus/fuzz_transfer
 ```
 
 `build.sh` also builds `afl` and `cmplog` binaries for `afl-fuzz`,
@@ -46,7 +50,7 @@ fuzz/docker.sh fuzz/out/replay/fuzz_request crash-<hash>
 After both fixes, 10 hours of `-fork` runs (16 jobs on `fuzz_request`,
 8 on `fuzz_headers`; 3.0 and 15.0 billion inputs) found nothing more.
 The corpora reach `header_cb`, `encode_headers`, `handle_frame`,
-`parse_eopts` and `new_conn`; the transfer callbacks (`write_cb`,
-`check_multi_info`, the `send_*_to_erlang` replies), the socket
-callbacks and the framing in `erl_input` are not reached by any target
-yet.
+`parse_eopts`, `new_conn`, the framing in `erl_input`, `write_cb`,
+`flow_conn`, `complete_conn` and the `send_*_to_erlang` replies. No
+target runs a real transfer, so the socket and timer callbacks are not
+reached.

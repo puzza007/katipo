@@ -59,7 +59,14 @@ HEADER_SEEDS = {
     "no_status": lines(b"X: a\r\n", b"\r\n", b"Y: b\r\n"),
 }
 
-SEEDS = {"fuzz_headers": HEADER_SEEDS}
+# The other targets start from an empty corpus, which libFuzzer still
+# needs to exist.
+SEEDS = {
+    "fuzz_headers": HEADER_SEEDS,
+    "fuzz_request": {},
+    "fuzz_framing": {},
+    "fuzz_transfer": {},
+}
 
 
 def main():
