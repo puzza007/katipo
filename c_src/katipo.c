@@ -760,43 +760,49 @@ static void flow_conn(GlobalInfo *global, erlang_pid *pid, erlang_ref *ref,
   }
 }
 
+/* Report a finished transfer to Erlang and free it: the buffered response,
+ * the streaming terminal (with any headers message still owed), or the
+ * error. Split out of check_multi_info so the fuzz targets can finish a
+ * transfer without running one. */
+static void complete_conn(GlobalInfo *global, ConnInfo *conn, CURLcode res) {
+  CURL *easy = conn->easy;
+
+  curl_easy_getinfo(easy, CURLINFO_RESPONSE_CODE, &conn->response_code);
+  curl_easy_getinfo(easy, CURLINFO_TOTAL_TIME, &conn->total_time);
+  curl_easy_getinfo(easy, CURLINFO_NAMELOOKUP_TIME, &conn->namelookup_time);
+  curl_easy_getinfo(easy, CURLINFO_CONNECT_TIME, &conn->connect_time);
+  curl_easy_getinfo(easy, CURLINFO_APPCONNECT_TIME, &conn->appconnect_time);
+  curl_easy_getinfo(easy, CURLINFO_PRETRANSFER_TIME, &conn->pretransfer_time);
+  curl_easy_getinfo(easy, CURLINFO_REDIRECT_TIME, &conn->redirect_time);
+  curl_easy_getinfo(easy, CURLINFO_STARTTRANSFER_TIME, &conn->starttransfer_time);
+
+  if (res == CURLE_OK) {
+    if (conn->stream) {
+      /* A bodyless response never entered write_cb, so the headers
+       * message may still be owed before the terminal done. */
+      if (!conn->headers_sent) {
+        send_headers_to_erlang(conn);
+      }
+      send_done_to_erlang(conn);
+    } else {
+      send_ok_to_erlang(conn);
+    }
+  } else {
+    send_error_to_erlang(res, conn);
+  }
+
+  free_conn(global, conn);
+}
+
 static void check_multi_info(GlobalInfo *global) {
   CURLMsg *msg;
   int msgs_left;
   ConnInfo *conn;
-  CURL *easy;
-  CURLcode res;
 
   while ((msg = curl_multi_info_read(global->multi, &msgs_left))) {
     if (msg->msg == CURLMSG_DONE) {
-      easy = msg->easy_handle;
-      res = msg->data.result;
-      curl_easy_getinfo(easy, CURLINFO_PRIVATE, &conn);
-      curl_easy_getinfo(easy, CURLINFO_RESPONSE_CODE, &conn->response_code);
-      curl_easy_getinfo(easy, CURLINFO_TOTAL_TIME, &conn->total_time);
-      curl_easy_getinfo(easy, CURLINFO_NAMELOOKUP_TIME, &conn->namelookup_time);
-      curl_easy_getinfo(easy, CURLINFO_CONNECT_TIME, &conn->connect_time);
-      curl_easy_getinfo(easy, CURLINFO_APPCONNECT_TIME, &conn->appconnect_time);
-      curl_easy_getinfo(easy, CURLINFO_PRETRANSFER_TIME, &conn->pretransfer_time);
-      curl_easy_getinfo(easy, CURLINFO_REDIRECT_TIME, &conn->redirect_time);
-      curl_easy_getinfo(easy, CURLINFO_STARTTRANSFER_TIME, &conn->starttransfer_time);
-
-      if (res == CURLE_OK) {
-        if (conn->stream) {
-          /* A bodyless response never entered write_cb, so the headers
-           * message may still be owed before the terminal done. */
-          if (!conn->headers_sent) {
-            send_headers_to_erlang(conn);
-          }
-          send_done_to_erlang(conn);
-        } else {
-          send_ok_to_erlang(conn);
-        }
-      } else {
-        send_error_to_erlang(res, conn);
-      }
-
-      free_conn(global, conn);
+      curl_easy_getinfo(msg->easy_handle, CURLINFO_PRIVATE, &conn);
+      complete_conn(global, conn, msg->data.result);
     }
   }
 }
