@@ -150,6 +150,62 @@ fires in every lagged config, the fixed port included, and none in
 deadlines pending at once. Every action fires (`-coverage 1`), and the
 verdicts are the same at `MaxTime = 11`, `MaxSkew = 3`, `MaxXfers = 3`.
 
+### Streaming request bodies
+
+`KatipoUpload.tla`: one async request whose body the caller streams on
+demand (`body => {stream, _}`), with a streamed, windowed response, so the
+upload's pause and the response's pause share one curl easy handle. The C
+port's `read_stream_cb` sends one demand and pauses the upload when it
+finds nothing to send;
+`body_conn` buffers the caller's answer and resumes the upload, holding
+the body to its declared length; and `write_cb`/`flow_conn` pause and
+resume the response as in `KatipoFlow.tla`. Written before the code, as a
+design check, and kept in step with it.
+
+| config | question | result |
+|---|---|---|
+| `KatipoUpload.cfg` | the design, chunked, with timeouts, cancels, failures and an early response: body whole and in order, one chunk and one demand in flight, nothing after the terminal message, pause flags in step | pass |
+| `KatipoUploadLength.cfg` | the same with the length declared: no demand once the whole length is in, and no eof read | pass |
+| `KatipoUploadLiveness.cfg` | a caller that answers every demand: does every request finish with the whole body sent? | pass |
+| `KatipoUploadEarlyLiveness.cfg` | the same, with the response free to finish before the body | pass |
+| `KatipoUploadLengthLiveness.cfg` | the same with the length declared, though the caller is never asked for eof | pass |
+| `KatipoUploadLiar.cfg` | a caller that sends past the declared length, ends short of it, or sends after eof: does curl ever get more than the length, or finish the upload with less? | pass |
+| `KatipoUploadLiarChunked.cfg` | the same caller, chunked: does curl get exactly what was sent before eof? | pass |
+| `KatipoUploadLiarLiveness.cfg` | that caller: does the request still finish, rather than leave the server waiting? | pass |
+| `KatipoUploadCont.cfg` | plain `CURLPAUSE_CONT` instead of the masked resume: still safe? | pass |
+| `KatipoUploadContLiveness.cfg` | plain `CURLPAUSE_CONT`: still live? | pass |
+| `KatipoUploadContAgrees.cfg` | plain `CURLPAUSE_CONT`: do the pause flags drift from curl's? | **fails**, as expected |
+| `KatipoUploadNoGuard.cfg` | no one-demand guard, plain `CONT`: a second demand before the first is answered? | **fails**, as expected |
+| `KatipoUploadNoGuardMasked.cfg` | no guard, masked resume | pass: the guard is redundant there |
+| `KatipoUploadEarly.cfg` | demanding as curl drains the buffer, not shipped: still safe, with the guard? | pass |
+| `KatipoUploadNoGuardEarly.cfg` | that, without the guard | **fails**, as expected: the early demand needs the guard |
+| `KatipoUploadEager.cfg` | a caller that sends without demand: more than one chunk buffered? | **fails**, as expected (the body still arrives whole) |
+
+**Found.** `curl_easy_pause` sets the whole pause state, so plain
+`CURLPAUSE_CONT` resuming one direction also resumes the other. That is
+safe and live, because each callback re-checks its own state and pauses
+again, but it lets katipo's flags disagree with curl's; the port resumes
+with a mask instead. With the mask the one-demand guard is redundant:
+only the answer resumes the upload. It stays as defence in depth.
+Sending the demand as soon as curl drains the buffer, so the next chunk
+travels while curl sends the last, is safe too, but makes the guard
+necessary, since curl's next read finds the buffer empty with the demand
+still out; it measured no faster (`test/katipo_upload_bench.erl`), so it
+is not shipped. curl before 8.7 does not hold a body to its declared length,
+so the port does: a chunk past it, or eof short of it, fails the upload,
+and anything after eof is ignored.
+Witnesses (`-inv`): both directions paused at once, `read_stream_cb` running
+inside `curl_easy_pause`, a demand queued behind a timeout's error, and a
+lie ending in an error all happen; with the early demand, so does a
+demand outstanding while curl reads. Sabotage that each config catches: never clearing the outstanding
+demand or never resuming the upload (liveness), dropping the buffered chunk
+(`BodyConserved`), forwarding a demand after letting go (`ProtocolOrder`),
+taking a chunk after eof, skipping the length check or not aborting a
+failed upload (`BodyIsSent`, `LengthHeld`). Letting the worker relay a
+body after a cancel changes nothing: the port drops it. Every action and
+branch fires in some config (`-coverage 1`), and the verdicts hold at
+`Total = 3`, `W = 2`, `Resp = 3`.
+
 ## Lean proofs (`lean/`)
 
 Core Lean 4 only (no Mathlib), toolchain pinned in `lean/lean-toolchain`.
