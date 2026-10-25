@@ -13,7 +13,9 @@
  *    back as bad_opts);
  *  - the in-flight list holds exactly the requests not yet cancelled, each
  *    findable by its {Pid, Ref};
- *  - a flow grant adds to the window of a bounded streaming request. */
+ *  - a flow grant adds to the window of a bounded streaming request;
+ *  - a body command ({Pid, Ref, body, eof | <<>>} with a chunk's raw bytes
+ *    after the term, or a malformed one) is taken without reply. */
 #include "fuzz_common.h"
 #include "fuzz_etf.h"
 
@@ -96,7 +98,27 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
     } else if (next_id > 0) {
       uint32_t id = fi_u8(&in) % next_id;
       Live *l = &live[id];
-      if (kind % 4 == 2) {
+      if (kind % 8 == 7) {
+        /* {Pid, Ref, body, eof}, or {Pid, Ref, body, <<>>} with the
+         * chunk's raw bytes after the term; or, as Erlang never sends,
+         * the chunk inside the term, which fails the upload silently. */
+        uint8_t what = fi_u8(&in) % 4;
+        FUZZ_ASSERT(ei_x_encode_tuple_header(&x, 4) == 0);
+        FUZZ_ASSERT(ei_x_encode_pid(&x, &l->pid) == 0);
+        FUZZ_ASSERT(ei_x_encode_ref(&x, &l->ref) == 0);
+        FUZZ_ASSERT(ei_x_encode_atom(&x, "body") == 0);
+        if (what == 0) {
+          FUZZ_ASSERT(ei_x_encode_atom(&x, "eof") == 0);
+        } else if (what == 1) {
+          encode_bin_list(&x, &in);
+        } else {
+          const uint8_t *raw;
+          size_t raw_len = fi_bytes(&in, 256, &raw);
+          FUZZ_ASSERT(ei_x_encode_binary(&x, "", 0) == 0);
+          FUZZ_ASSERT(ei_x_append_buf(&x, (const char *)raw, (int)raw_len) == 0);
+        }
+        run_frame(&x);
+      } else if (kind % 4 == 2) {
         /* {Pid, Ref, cancel} */
         FUZZ_ASSERT(ei_x_encode_tuple_header(&x, 3) == 0);
         FUZZ_ASSERT(ei_x_encode_pid(&x, &l->pid) == 0);

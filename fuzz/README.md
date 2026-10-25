@@ -9,9 +9,9 @@ and the port dying on that is a bug.
 | Target | What it drives | Checked |
 |---|---|---|
 | `fuzz_headers` | `header_cb` + `encode_headers`, one call per header line | the encoded list matches a model: lines since the last status line, CR/LF/NUL replaced, trailers dropped |
-| `fuzz_request` | `handle_frame` with requests, cancels and flow grants shaped as `katipo_worker` sends them | no `bad_opts` reply to a valid request; the in-flight list and stream windows match a model |
+| `fuzz_request` | `handle_frame` with requests, cancels, flow grants and body commands shaped as `katipo_worker` sends them | no `bad_opts` reply to a valid request; the in-flight list and stream windows match a model |
 | `fuzz_framing` | `erl_input` with requests and cancels laid end to end, delivered in pieces of any size | exactly the frames that arrived in full are handled, once; nothing is left half read |
-| `fuzz_transfer` | `header_cb`, `write_cb`, `flow_conn` and `complete_conn` for one buffered or streaming transfer | every frame written to Erlang decodes; streaming sends one headers message first, the body in order, and no more chunks than the window allows; a buffered `ok` carries every byte; one terminal message, last |
+| `fuzz_transfer` | `header_cb`, `write_cb`, `flow_conn` and `complete_conn` for one buffered or streaming transfer, with `read_stream_cb` and `body_conn` for a streamed body, chunked or of a declared length | every frame written to Erlang decodes; streaming sends one headers message first, the body in order, and no more chunks than the window allows; a buffered `ok` carries every byte; one terminal message, last; curl reads the body sent, in order, nothing after eof, and one demand per pause with none outstanding; a wrong length fails the transfer |
 
 ## Running
 

@@ -16,7 +16,19 @@
  *    is spent, and no more chunks go out than the window and grants allow;
  *  - buffered: one ok message whose body is every byte delivered;
  *  - exactly one terminal message (ok, done or error), and it is last;
- *  - the transfer is freed. */
+ *  - the transfer is freed.
+ *
+ * With a streamed request body (body => {stream, _}), chunked or of a
+ * declared length, the input also interleaves curl's reads
+ * (read_stream_cb, with any buffer size, never while the upload is paused
+ * nor past a declared length) with the caller's chunks, eof and
+ * undecodable commands (body_conn), in any order and after eof too, and
+ * checks: a read returns the bytes sent, in order, as many as fit; with
+ * nothing buffered it returns 0 after eof and otherwise pauses the upload;
+ * exactly one demand goes out per pause with none outstanding; anything after
+ * eof is ignored; a body past its declared length, eof short of it or an
+ * undecodable command fails the upload, so reads abort and the transfer
+ * ends in an error even if curl finished. */
 #include "fuzz_common.h"
 #include "fuzz_etf.h"
 
@@ -27,6 +39,7 @@
 static GlobalInfo global;
 static uint8_t delivered[MAX_BODY];
 static uint8_t received[MAX_BODY];
+static uint8_t sent_up[MAX_BODY];
 
 int LLVMFuzzerInitialize(int *argc, char ***argv) {
   (void)argc;
@@ -55,7 +68,7 @@ static ConnInfo *make_conn(int stream, long window) {
   conn->global = &global;
   conn->stream = stream;
   conn->window = window;
-  conn->upload_fd = -1; /* a buffered body, so free_conn closes nothing */
+  conn->upload_fd = -1; /* no file body, so free_conn closes nothing */
   register_conn(&global, conn);
   return conn;
 }
@@ -110,14 +123,30 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
   long window = (mode & 2) ? -1 : (long)(fi_u8(&in) % 8);
   long credits = window; /* chunks the window and grants allow */
   ConnInfo *conn = make_conn(stream, window);
+  int upload = (mode & 4) != 0;
+  long declared = (mode & 8) ? (long)fi_u8(&in) * 4 : -1; /* bytes, or chunked */
+  size_t sent_n = 0;  /* body bytes the port took */
+  size_t read_n = 0;  /* body bytes curl read */
+  int sent_eof = 0;   /* the port has eof */
+  int read_eof = 0;
+  int failed = 0;     /* the port should have failed the upload */
+  int demanded = 0;   /* the model's outstanding demand */
+  int demands = 0;    /* demands the port should have sent */
   size_t delivered_n = 0;
   size_t received_n = 0;
   const uint8_t *held = NULL; /* a chunk refused with a pause */
   size_t held_len = 0;
   int ok;
 
+  if (upload) {
+    conn->upload_stream = 1;
+    conn->upload_size = declared;
+    conn->upload_buf = evbuffer_new();
+    FUZZ_ASSERT(conn->upload_buf != NULL);
+  }
+
   for (int op = 0; op < MAX_OPS && in.size > 0; op++) {
-    uint8_t kind = fi_u8(&in) % 3;
+    uint8_t kind = fi_u8(&in) % 5;
     const uint8_t *bytes;
     size_t len;
 
@@ -135,6 +164,67 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
       }
       held = bytes;
       held_len = len;
+    } else if (kind == 3 && upload && !conn->upload_paused && !read_eof &&
+               (declared < 0 || read_n < (size_t)declared)) {
+      /* curl reads the body into a buffer of any size, but no further
+       * than a declared length. */
+      uint8_t buf[64];
+      size_t want = fi_u8(&in) % sizeof(buf) + 1;
+      size_t r = read_stream_cb((char *)buf, 1, want, conn);
+      size_t avail = sent_n - read_n;
+      if (failed) {
+        FUZZ_ASSERT(r == CURL_READFUNC_ABORT);
+        read_eof = 1; /* curl gives up the upload */
+        continue;
+      }
+      if (avail > 0) {
+        size_t n = avail < want ? avail : want;
+        FUZZ_ASSERT(r == n);
+        FUZZ_ASSERT(memcmp(buf, sent_up + read_n, n) == 0);
+        read_n += n;
+      } else if (sent_eof) {
+        FUZZ_ASSERT(r == 0);
+        read_eof = 1;
+      } else {
+        FUZZ_ASSERT(r == CURL_READFUNC_PAUSE && conn->upload_paused);
+        if (!demanded) {
+          demanded = 1;
+          demands++;
+        }
+      }
+      continue;
+    } else if (kind == 4 && upload) {
+      /* The caller sends a chunk or eof, or a command the port cannot
+       * decode, even after eof. */
+      uint8_t what = fi_u8(&in) % 8;
+      int taken = !sent_eof && !failed;
+      if (what == 0) {
+        body_conn(&global, conn->pid, conn->ref, BODY_EOF, NULL, 0);
+        if (taken) {
+          sent_eof = 1;
+          failed = declared >= 0 && sent_n < (size_t)declared;
+        }
+      } else if (what == 1) {
+        body_conn(&global, conn->pid, conn->ref, BODY_BAD, NULL, 0);
+        failed |= taken;
+      } else {
+        len = fi_bytes(&in, 512, &bytes);
+        if (sent_n + len > MAX_BODY) {
+          continue;
+        }
+        body_conn(&global, conn->pid, conn->ref, BODY_CHUNK, (const char *)bytes, len);
+        if (taken && declared >= 0 && sent_n + len > (size_t)declared) {
+          failed = 1;
+        } else if (taken) {
+          memcpy(sent_up + sent_n, bytes, len);
+          sent_n += len;
+        }
+      }
+      if (taken) {
+        demanded = 0;
+        FUZZ_ASSERT(!conn->upload_paused);
+      }
+      continue;
     } else if (kind == 2 && stream) {
       long n = fi_u8(&in) % 4 + 1;
       flow_conn(&global, conn->pid, conn->ref, n);
@@ -173,6 +263,7 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
     size_t pos = 0;
     int headers = 0;
     int chunks = 0;
+    int demand_frames = 0;
     int terminal = 0;
 
     FUZZ_ASSERT(all != NULL);
@@ -199,26 +290,30 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
         received_n += f.body_len;
         chunks++;
       } else if (strcmp(f.tag, "done") == 0) {
-        FUZZ_ASSERT(stream && ok && headers == 1);
+        FUZZ_ASSERT(stream && ok && !failed && headers == 1);
         terminal = 1;
       } else if (strcmp(f.tag, "ok") == 0) {
-        FUZZ_ASSERT(!stream && ok);
+        FUZZ_ASSERT(!stream && ok && !failed);
         memcpy(received + received_n, f.body, f.body_len);
         received_n += f.body_len;
         terminal = 1;
+      } else if (strcmp(f.tag, "demand") == 0) {
+        FUZZ_ASSERT(upload);
+        demand_frames++;
       } else if (strcmp(f.tag, "error") == 0) {
-        FUZZ_ASSERT(!ok);
+        FUZZ_ASSERT(!ok || failed);
         terminal = 1;
       } else {
         FUZZ_ASSERT(!"unknown message tag");
       }
     }
     FUZZ_ASSERT(terminal);
+    FUZZ_ASSERT(demand_frames == demands);
     if (credits >= 0) {
       FUZZ_ASSERT(chunks <= credits);
     }
     /* An error drops a buffered body; anything else arrives in full. */
-    if (stream || ok) {
+    if (stream || (ok && !failed)) {
       FUZZ_ASSERT(received_n == delivered_n);
       FUZZ_ASSERT(memcmp(received, delivered, delivered_n) == 0);
     }
