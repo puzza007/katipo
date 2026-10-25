@@ -13,11 +13,14 @@
 #include <assert.h>
 #include <stdio.h>
 #include <fcntl.h>
+#include <errno.h>
+#include <sys/stat.h>
 #include <getopt.h>
 #include <arpa/inet.h>
 #include <err.h>
 #include <limits.h>
 #include <string.h>
+#include <stdarg.h>
 #include <ei.h>
 #include <curl/curl.h>
 
@@ -104,6 +107,23 @@ typedef struct _ConnInfo {
   long response_code;
   char *post_data;
   long post_data_size;
+  /* body => {file, Path}: curl reads the body from upload_path (read_cb),
+   * seeking back to re-send it after a redirect (seek_cb). The file is
+   * opened on curl's first read, so a transfer queued for a connection
+   * holds no descriptor; upload_fd is -1 until then. upload_size is its
+   * size when the request was made, the Content-Length, and upload_pos
+   * where the next read starts. upload_path is NULL when the body is
+   * post_data. */
+  char *upload_path;
+  int upload_fd;
+  curl_off_t upload_size;
+  curl_off_t upload_pos;
+  /* Why the port failed the upload, or CURLE_OK. The read callback then
+   * aborts, and complete_conn reports this and upload_msg rather than
+   * what curl saw. upload_msg has room for a path as long as Linux allows
+   * and the reason, which curl's CURL_ERROR_SIZE does not. */
+  CURLcode upload_error;
+  char upload_msg[4096 + 256];
   /* Streaming (stream => true): body bytes are forwarded as they arrive
    * instead of being buffered in `body`. headers_sent tracks the one-time
    * headers message that precedes the first chunk (or the done message for
@@ -656,8 +676,11 @@ static void send_error_to_erlang(CURLcode curl_code, ConnInfo *conn) {
   const char *error_msg;
 
   error_code = curl_error_code(curl_code);
-  /* Use ERRORBUFFER if available, otherwise fall back to curl_easy_strerror */
-  error_msg = conn->error[0] ? conn->error : curl_easy_strerror(curl_code);
+  /* The port's own reason for failing the upload, else ERRORBUFFER if
+   * available, else curl_easy_strerror. */
+  error_msg = conn->upload_error != CURLE_OK ? conn->upload_msg
+              : conn->error[0] ? conn->error
+              : curl_easy_strerror(curl_code);
   error_msg_len = strlen(error_msg);
 
   begin_msg(&result, "error", conn->pid, conn->ref);
@@ -704,6 +727,10 @@ static void free_conn(GlobalInfo *global, ConnInfo *conn) {
   free(conn->ref);
   evbuffer_free(conn->body);
   free(conn->post_data);
+  free(conn->upload_path);
+  if (conn->upload_fd >= 0) {
+    close(conn->upload_fd);
+  }
   curl_slist_free_all(conn->req_cookies);
   curl_slist_free_all(conn->req_headers);
   ei_x_free(&conn->resp_headers);
@@ -776,6 +803,10 @@ static void complete_conn(GlobalInfo *global, ConnInfo *conn, CURLcode res) {
   curl_easy_getinfo(easy, CURLINFO_REDIRECT_TIME, &conn->redirect_time);
   curl_easy_getinfo(easy, CURLINFO_STARTTRANSFER_TIME, &conn->starttransfer_time);
 
+  /* Even if curl finished: whatever it sent is not the body asked for. */
+  if (conn->upload_error != CURLE_OK) {
+    res = conn->upload_error;
+  }
   if (res == CURLE_OK) {
     if (conn->stream) {
       /* A bodyless response never entered write_cb, so the headers
@@ -1011,6 +1042,113 @@ static size_t header_cb(void *ptr, size_t size, size_t nmemb, void *data) {
   return realsize;
 }
 
+/* Fail the upload with code, unless it has failed already. See
+ * upload_error. */
+static void fail_upload(ConnInfo *conn, CURLcode code, const char *fmt, ...) {
+  va_list ap;
+
+  if (conn->upload_error != CURLE_OK) {
+    return;
+  }
+  conn->upload_error = code;
+  va_start(ap, fmt);
+  vsnprintf(conn->upload_msg, sizeof(conn->upload_msg), fmt, ap);
+  va_end(ap);
+}
+
+/* body => {file, Path}: take the file's size, for Content-Length, when
+ * the request is made. stat, unlike open, cannot block on a fifo. As
+ * curl's file:// reports a file it cannot read. */
+static int stat_upload(ConnInfo *conn) {
+  struct stat st;
+
+  if (stat(conn->upload_path, &st) != 0) {
+    fail_upload(conn, CURLE_FILE_COULDNT_READ_FILE, "Couldn't open %s: %s",
+                conn->upload_path, strerror(errno));
+    return 0;
+  }
+  if (!S_ISREG(st.st_mode)) {
+    fail_upload(conn, CURLE_FILE_COULDNT_READ_FILE,
+                "Couldn't open %s: not a regular file", conn->upload_path);
+    return 0;
+  }
+  conn->upload_size = (curl_off_t)st.st_size;
+  return 1;
+}
+
+/* Open the file on curl's first read or seek. It may have been replaced
+ * since stat_upload, so open it without blocking (a fifo would block the
+ * port's one thread until a writer came) or becoming the port's
+ * controlling terminal (a tty), then check it is still a regular file, for
+ * which O_NONBLOCK makes no difference. */
+static int open_upload(ConnInfo *conn) {
+  struct stat st;
+
+  conn->upload_fd = open(conn->upload_path, O_RDONLY | O_NONBLOCK | O_NOCTTY);
+  if (conn->upload_fd < 0 || fstat(conn->upload_fd, &st) != 0) {
+    fail_upload(conn, CURLE_FILE_COULDNT_READ_FILE, "Couldn't open %s: %s",
+                conn->upload_path, strerror(errno));
+    return 0;
+  }
+  if (!S_ISREG(st.st_mode)) {
+    fail_upload(conn, CURLE_FILE_COULDNT_READ_FILE,
+                "Couldn't open %s: not a regular file", conn->upload_path);
+    return 0;
+  }
+  return 1;
+}
+
+/* Send the size the request declared: no more if the file has grown
+ * since, which curl before 8.7 would put on the wire past the body, and
+ * fail if it has shrunk, which would leave the server waiting. */
+static size_t read_cb(char *buffer, size_t size, size_t nitems, void *data) {
+  ConnInfo *conn = (ConnInfo *)data;
+  curl_off_t left = conn->upload_size - conn->upload_pos;
+  size_t want = size * nitems;
+  ssize_t n;
+
+  if (conn->upload_error != CURLE_OK ||
+      (conn->upload_fd < 0 && !open_upload(conn))) {
+    return CURL_READFUNC_ABORT;
+  }
+  if ((curl_off_t)want > left) {
+    want = (size_t)left;
+  }
+  if (want == 0) {
+    return 0;
+  }
+  do {
+    n = read(conn->upload_fd, buffer, want);
+  } while (n < 0 && errno == EINTR);
+  if (n <= 0) {
+    if (n < 0) {
+      fail_upload(conn, CURLE_READ_ERROR, "Couldn't read %s: %s",
+                  conn->upload_path, strerror(errno));
+    } else {
+      fail_upload(conn, CURLE_READ_ERROR, "%s shrank while it was being sent",
+                  conn->upload_path);
+    }
+    return CURL_READFUNC_ABORT;
+  }
+  conn->upload_pos += n;
+  return (size_t)n;
+}
+
+static int seek_cb(void *data, curl_off_t offset, int origin) {
+  ConnInfo *conn = (ConnInfo *)data;
+  off_t pos;
+
+  if (conn->upload_fd < 0 && !open_upload(conn)) {
+    return CURL_SEEKFUNC_FAIL;
+  }
+  pos = lseek(conn->upload_fd, (off_t)offset, origin);
+  if (pos < 0) {
+    return CURL_SEEKFUNC_FAIL;
+  }
+  conn->upload_pos = (curl_off_t)pos;
+  return CURL_SEEKFUNC_OK;
+}
+
 static void set_method(long method, ConnInfo *conn) {
   switch (method) {
     case KATIPO_GET:
@@ -1045,13 +1183,26 @@ static void set_method(long method, ConnInfo *conn) {
    * body. POST, PUT and PATCH always declare one, if only Content-Length:
    * 0; GET, DELETE and OPTIONS send an empty body as none at all, so a
    * bodyless request is what it always was. */
+  curl_off_t size = conn->upload_path != NULL ? conn->upload_size
+                                              : (curl_off_t)conn->post_data_size;
   if (method == KATIPO_HEAD ||
-      (conn->post_data_size == 0 && method != KATIPO_POST &&
+      (size == 0 && method != KATIPO_POST &&
        method != KATIPO_PUT && method != KATIPO_PATCH)) {
     return;
   }
-  curl_easy_setopt(conn->easy, CURLOPT_POSTFIELDS, conn->post_data);
-  curl_easy_setopt(conn->easy, CURLOPT_POSTFIELDSIZE, conn->post_data_size);
+  if (conn->upload_path != NULL) {
+    /* POST semantics with a read callback, as POSTFIELDS gives for a body
+     * in memory; CUSTOMREQUEST keeps the method's name. */
+    curl_easy_setopt(conn->easy, CURLOPT_POST, 1L);
+    curl_easy_setopt(conn->easy, CURLOPT_POSTFIELDSIZE_LARGE, size);
+    curl_easy_setopt(conn->easy, CURLOPT_READFUNCTION, read_cb);
+    curl_easy_setopt(conn->easy, CURLOPT_READDATA, conn);
+    curl_easy_setopt(conn->easy, CURLOPT_SEEKFUNCTION, seek_cb);
+    curl_easy_setopt(conn->easy, CURLOPT_SEEKDATA, conn);
+  } else {
+    curl_easy_setopt(conn->easy, CURLOPT_POSTFIELDS, conn->post_data);
+    curl_easy_setopt(conn->easy, CURLOPT_POSTFIELDSIZE, conn->post_data_size);
+  }
   /* curl handles any POSTFIELDS request as a POST, and on a followed 301,
    * 302 or 303 it drops a POST's body. For POST that is the usual switch to
    * GET; for any other method the CUSTOMREQUEST name survives the redirect,
@@ -1065,8 +1216,8 @@ static void free_eopts(EasyOpts *eopts);
 
 static void new_conn(long method, char *url, struct curl_slist *req_headers,
                      struct curl_slist *req_cookies, char *post_data,
-                     long post_data_size, EasyOpts eopts, erlang_pid *pid,
-                     erlang_ref *ref, GlobalInfo *global) {
+                     long post_data_size, char *upload_path, EasyOpts eopts,
+                     erlang_pid *pid, erlang_ref *ref, GlobalInfo *global) {
   ConnInfo *conn;
   CURLMcode rc;
   struct curl_slist *nc;
@@ -1094,6 +1245,14 @@ static void new_conn(long method, char *url, struct curl_slist *req_headers,
   conn->post_data_size = post_data_size;
   conn->stream = eopts.curlopt_stream != 0;
   conn->window = eopts.curlopt_stream_window;
+  conn->upload_path = upload_path;
+  conn->upload_fd = -1;
+  if (upload_path != NULL && !stat_upload(conn)) {
+    send_error_to_erlang(conn->upload_error, conn);
+    free_eopts(&eopts);
+    free_conn(global, conn);
+    return;
+  }
 
   #if LIBCURL_VERSION_NUM >= 0x075500 /* 7.85.0 */
     curl_easy_setopt(conn->easy, CURLOPT_PROTOCOLS_STR, "http,https");
@@ -1285,13 +1444,37 @@ static int parse_slist(char *buf, int *index, struct curl_slist **out) {
   return 0;
 }
 
-static int parse_body(char *buf, int *index, char **out_data, int *out_size) {
+/* The body: iodata, flattened into out_data, or {file, Path}, whose path
+ * goes to out_path instead. */
+static int parse_body(char *buf, int *index, char **out_data, int *out_size,
+                      char **out_path) {
   int erl_type;
   int size;
   int index_prev;
 
   if (ei_get_type(buf, index, &erl_type, &size)) {
     return -1;
+  }
+  if (erl_type == ERL_SMALL_TUPLE_EXT) {
+    char tag[MAXATOMLEN];
+    int arity;
+    long len;
+
+    if (ei_decode_tuple_header(buf, index, &arity) || arity != 2 ||
+        ei_decode_atom(buf, index, tag) || strcmp(tag, "file") != 0 ||
+        ei_get_type(buf, index, &erl_type, &size) ||
+        erl_type != ERL_BINARY_EXT) {
+      return -1;
+    }
+    *out_path = (char *)malloc(size + 1);
+    if (*out_path == NULL || ei_decode_binary(buf, index, *out_path, &len)) {
+      free(*out_path);
+      *out_path = NULL;
+      return -1;
+    }
+    (*out_path)[size] = '\0';
+    *out_size = 0;
+    return 0;
   }
   index_prev = *index;
   if (ei_decode_iodata(buf, index, out_size, NULL)) {
@@ -1504,6 +1687,7 @@ static void handle_frame(GlobalInfo *global, char *buf) {
   struct curl_slist *req_cookies = NULL;
   char *post_data = NULL;
   int post_data_size = 0;
+  char *upload_path = NULL;
   EasyOpts eopts = {0};
 
   index = 0;
@@ -1582,7 +1766,7 @@ static void handle_frame(GlobalInfo *global, char *buf) {
     goto cleanup;
   }
 
-  if (parse_body(buf, &index, &post_data, &post_data_size) != 0) {
+  if (parse_body(buf, &index, &post_data, &post_data_size, &upload_path) != 0) {
     goto cleanup;
   }
 
@@ -1604,7 +1788,7 @@ static void handle_frame(GlobalInfo *global, char *buf) {
   }
 
   new_conn(method, url, req_headers, req_cookies, post_data,
-           post_data_size, eopts, pid, ref, global);
+           post_data_size, upload_path, eopts, pid, ref, global);
 
   return;
 
@@ -1618,6 +1802,7 @@ cleanup:
   free(ref);
   free(url);
   free(post_data);
+  free(upload_path);
   curl_slist_free_all(req_headers);
   curl_slist_free_all(req_cookies);
   free_eopts(&eopts);

@@ -6,6 +6,15 @@ All notable changes to this project are documented here. This project follows
 ## [Unreleased]
 
 ### Added
+- `body => {file, Path}` uploads a file: the C port reads it as it sends
+  it, so a large body is never held in memory, with `Content-Length` from
+  the file's size when the request is made, and seeks back to its start
+  to send it again after a redirect. A file the port cannot open, or one
+  that is not a regular file, fails the request with
+  `file_couldnt_read_file`, saying why; one that shrinks before it is sent
+  fails it with `read_error`, and of one that grows only the declared
+  length is sent. A relative path is taken from the VM's working
+  directory. A `head` request refuses a file as it does any other body.
 - `unix_socket_path` accepts a string as well as a binary, like the other
   path options, and like them fails with `bad_opts` for a path holding a
   NUL byte.

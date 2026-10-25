@@ -158,7 +158,11 @@ has_content_type(Headers) ->
 ascii_lowercase(Bin) ->
     << <<(case C of _ when C >= $A, C =< $Z -> C + 32; _ -> C end)>> || <<C>> <= Bin >>.
 
-%% Whether a body has any bytes. The body has been validated (opt/3).
+%% Whether a body has any bytes. The body has been validated (opt/3). A
+%% file's size is the port's to find out, when it opens it, so a file
+%% counts as a body even if it turns out empty.
+sends_body({file, _}) ->
+    true;
 sends_body(Body) ->
     iolist_size(Body) > 0.
 
@@ -217,10 +221,18 @@ method_to_int(options) -> ?OPTIONS;
 method_to_int(patch)   -> ?PATCH;
 method_to_int(delete)  -> ?DELETE.
 
-%% A form (a key/value list) is encoded; anything else must be iodata, so
-%% a bad body is named here rather than failing in the C port. A list body
-%% is not echoed in the error, as it may be large.
--spec encode_body(term()) -> {ok, iodata()} | {error, {atom(), term()}}.
+%% A form (a key/value list) is encoded, and a file's path converted as a
+%% path option is; anything else must be iodata, so a bad body is named
+%% here rather than failing in the C port. A list body is not echoed in
+%% the error, as it may be large.
+-spec encode_body(term()) ->
+          {ok, iodata() | {file, binary()}} | {error, {atom(), term()}}.
+encode_body({file, Path}) ->
+    case path_to_binary(Path) of
+        %% The port's working directory is the VM's when it started.
+        {ok, Bin} -> {ok, {file, filename:absname(Bin)}};
+        error -> {error, {invalid_body, {file, Path}}}
+    end;
 encode_body([{_, _} | _] = KVs) ->
     try uri_string:compose_query(KVs) of
         {error, Reason, Message} ->
