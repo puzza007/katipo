@@ -224,6 +224,7 @@ groups() ->
        request_header_invalid,
        path_opts_not_text,
        int_opts_out_of_range,
+       bad_opts_names_everything,
        body_frame_shares_large_body,
        body_frame_copies_small_body,
        body_frame_chunk]},
@@ -458,7 +459,8 @@ bad_method(_) ->
     Message = [{method, toast}],
     BinaryMessage = iolist_to_binary(io_lib:format("~p", [Message])),
     {error, #{code := bad_opts, message := BinaryMessage}} =
-        katipo:req(?POOL, #{method => toast,
+        katipo:req(?POOL, #{url => <<"http://192.0.2.1">>,
+                            method => toast,
                             headers => [{<<"Content-Type">>, <<"application/json">>}],
                             body => <<"!@#$%^&*()">>}).
 
@@ -1289,6 +1291,34 @@ int_opts_out_of_range(_) ->
         katipo:get(?POOL, <<"http://127.0.0.1:1/">>,
                    #{dns_cache_timeout => Max, connecttimeout_ms => 1000}),
     true = Code =/= bad_opts,
+    ok.
+
+%% A body that is not iodata or a form, a form with a bad pair, and the
+%% rules between options are all named with every other invalid option,
+%% by check_opts/2 as by the request itself.
+bad_opts_names_everything(_) ->
+    {error, #{code := bad_opts}} = katipo:check_opts(#{body => [foo]}, sync),
+    {error, #{code := bad_opts}} =
+        katipo:check_opts(#{method => post, body => [{<<"a">>, <<"b">>}, foo]}, sync),
+    Opts = #{method => head, body => <<"x">>, timeout_ms => 0},
+    {error, #{code := bad_opts, message := Message} = Error} = katipo:check_opts(Opts, sync),
+    {error, Error} = katipo:req(?POOL, Opts#{url => <<"http://192.0.2.1">>}),
+    {match, _} = re:run(Message, <<"timeout_ms">>),
+    {match, _} = re:run(Message, <<"not_allowed_with_head">>),
+    {error, #{code := bad_opts, message := Both}} =
+        katipo:req(?POOL, #{timeout_ms => 0}),
+    {match, _} = re:run(Both, <<"url">>),
+    {match, _} = re:run(Both, <<"timeout_ms">>),
+    %% A list body, which may be large, is not echoed.
+    {error, #{message := <<"[{body,{invalid_body,not_iodata}}]">>}} =
+        katipo:check_opts(#{body => [binary:copy(<<"a">>, 100000), foo]}, sync),
+    {error, #{message := <<"[{body,{invalid_body,not_a_form}}]">>}} =
+        katipo:check_opts(#{method => post, body => [{<<"a">>, <<"b">>}, foo]}, sync),
+    %% A rule is not broken by an option that is itself invalid.
+    {error, #{message := <<"[{url,\"http://x\"}]">>}} =
+        katipo:req(?POOL, #{url => "http://x"}),
+    {error, #{message := <<"[{stream,yes}]">>}} =
+        katipo:check_opts(#{stream => yes, stream_window => 8}, async),
     ok.
 
 %% Strings that are not valid text: unicode:characters_to_binary/1 returns
