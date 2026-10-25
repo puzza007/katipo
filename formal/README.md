@@ -180,6 +180,7 @@ design check, and kept in step with it.
 | `KatipoUploadEarly.cfg` | demanding as curl drains the buffer, not shipped: still safe, with the guard? | pass |
 | `KatipoUploadNoGuardEarly.cfg` | that, without the guard | **fails**, as expected: the early demand needs the guard |
 | `KatipoUploadEager.cfg` | a caller that sends without demand: more than one chunk buffered? | **fails**, as expected (the body still arrives whole) |
+| `KatipoUploadLeanInv.cfg`, `KatipoUploadLeanInvChunked.cfg`, `KatipoUploadLeanLen.cfg` | the Lean proofs' invariants, mirrored, at one size larger | pass |
 
 **Found.** `curl_easy_pause` sets the whole pause state, so plain
 `CURLPAUSE_CONT` resuming one direction also resumes the other. That is
@@ -353,6 +354,41 @@ every config the proof covers lists it, so `check-configs.sh` checks it.
 Counting the refresh as safe with a lagging clock breaks the proof at the
 case where the timer fires before the deadline was due.
 
+### Streaming request bodies: any body and response size
+
+`Upload/Model.lean` transcribes `KatipoUpload.tla` without its bounds: any
+number of body chunks, any window, any response length, chunked or with the
+length declared, with the demand sent only on an empty read (the
+shipped setting; the spec's `EarlyDemand` is not transcribed). Headline
+statements are in `Upload/Statements.lean`; the honest-caller ones assume
+`P.liar = false`.
+
+| theorem | says |
+|---|---|
+| `body_conserved` | while both sides hold the request, every chunk sent is read by curl or on its way to it |
+| `complete_body` | curl finishes the upload only after every chunk, and after the caller's eof unless the length was declared |
+| `one_chunk_in_flight` | a caller that waits for demand has at most one chunk between it and curl (either safeguard) |
+| `one_demand` | at most one demand outstanding, given either safeguard: the guard or the masked resume |
+| `length_held` | whatever the caller sends, curl never gets more than the declared length |
+| `length_complete` | whatever the caller sends, curl finishes the upload only with exactly the declared length |
+| `pause_flags_agree` | with the masked resume, both pause flags always equal curl's, inside `curl_easy_pause` too |
+| `protocol_order` | nothing reaches the caller after its terminal message |
+| `no_safeguard_two_demands` | one safeguard is necessary (explicit trace) |
+| `eager_two_chunks` | waiting for demand is necessary for the bound (explicit trace) |
+| `cont_flags_drift` | the mask is necessary for the flags to agree (explicit trace) |
+
+Each invariant is mirrored in `KatipoUpload.tla` (`LeanEof`, `LeanHon`,
+`LeanDem`, `LeanOrd`, `LeanAgree`, `LeanLen`), which
+`KatipoUploadLeanInv.cfg`, `KatipoUploadLeanInvChunked.cfg` and, for a
+lying caller, `KatipoUploadLeanLen.cfg` check. Weakening any of four
+guards in the model (`read_stream_cb` without a chunk, a send without a
+demand, the worker forwarding after letting go, eof before the last chunk)
+breaks a proof at the step that needs it, and so do dropping the length
+check or buffering a chunk the check refused. Taking a chunk
+after eof breaks none: with a declared length the check refuses it anyway,
+and a chunked body's lying caller is left to `KatipoUploadLiarChunked.cfg`.
+Liveness is TLC-checked only.
+
 ## Trace validation
 
 ```sh
@@ -426,6 +462,14 @@ as separate attempts.
   The clocks (libevent 2.1 `evutil_time.c`, curl `lib/timeval.c`) are read
   from source; the model assumes their difference is bounded by `ClockLag`
   ticks.
+
+- libcurl's read pause contract: `CURL_READFUNC_PAUSE` pauses sending until
+  `curl_easy_pause` resumes it, after which the read callback is called again, and
+  `curl_easy_pause` sets both directions' pause state at once.
+- libcurl's upload length: with a declared length (`POSTFIELDSIZE_LARGE`)
+  curl stops calling the read callback once it has sent that many bytes,
+  and reads no eof. It does not hold the callback to the length (before
+  8.7 the excess goes on the wire), which is why the port does.
 
 If you change the worker dispatch/delivery logic or the C flow-control path,
 update the matching spec and Lean transcription and re-run everything above.

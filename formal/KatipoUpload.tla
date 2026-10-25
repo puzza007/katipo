@@ -423,4 +423,58 @@ WitnessDemandAfterTimeout == ~(seenError /\ CountIn(toW, "demand") > 0)
 WitnessEarlyDemand == ~(demanded /\ ~curlSendPaused /\ ~unpausing /\ live) \* EarlyDemand
 WitnessLieFails == ~(upFailed /\ seenError)
 
+(* ------------------ the Lean proof's invariants, mirrored -----------------*)
+(* One operator per field of the structures in                             *)
+(* lean/KatipoProofs/Upload/Proofs.lean, so TLC can confirm the invariants *)
+(* the proofs rest on hold of this spec too (KatipoUploadLeanInv.cfg).     *)
+
+CntBody(q, t) == CountT(q, t)
+RECURSIVE EofLastB(_)
+EofLastB(q) == q = <<>> \/ ((Head(q) = "eof" => Tail(q) = <<>>) /\ EofLastB(Tail(q)))
+RECURSIVE EofLastP(_)
+EofLastP(q) == q = <<>> \/
+  ((Head(q).t = "eof" => CntBody(Tail(q), "data") = 0 /\ CntBody(Tail(q), "eof") = 0)
+   /\ EofLastP(Tail(q)))
+
+LeanEof ==
+  /\ sentN <= Total
+  /\ sentEof => sentN = Total
+  /\ ~sentEof => CountIn(bodyQ, "eof") = 0 /\ CntBody(pQ, "eof") = 0 /\ ~eofIn
+  /\ EofLastB(bodyQ)
+  /\ EofLastP(pQ)
+  /\ CntBody(pQ, "eof") > 0 => CountIn(bodyQ, "data") = 0 /\ CountIn(bodyQ, "eof") = 0
+  /\ eofIn => CountIn(bodyQ, "data") = 0 /\ CountIn(bodyQ, "eof") = 0
+              /\ CntBody(pQ, "data") = 0 /\ CntBody(pQ, "eof") = 0
+  /\ live /\ (CntBody(pQ, "eof") > 0 \/ eofIn) => readN + CntBody(pQ, "data") + buf = Total
+  /\ uploadDone => readN = Total /\ (Length \/ sentEof)
+
+LeanHon ==
+  /\ lateN = 0
+  /\ readN + buf + CntBody(pQ, "data") + CountIn(bodyQ, "data") <= sentN
+  /\ ~upFailed
+  /\ Length /\ readN = Total => uploadDone
+
+Answerable == pending + CountIn(toC, "demand") + (IF inReqs THEN CountIn(toW, "demand") ELSE 0)
+Tokens == Answerable + CountIn(bodyQ, "data") + CountIn(bodyQ, "eof")
+          + CntBody(pQ, "data") + CntBody(pQ, "eof")
+LeanDem ==
+  /\ Tokens + buf <= 1
+  /\ inReqs /\ live /\ ~demanded => Tokens = 0
+  /\ MaskedResume /\ live /\ demanded => curlSendPaused
+
+\* Any caller, Liar included.
+LeanLen ==
+  /\ Length => readN + buf <= Total
+  /\ Length /\ eofIn /\ ~upFailed => readN + buf = Total
+  /\ Length /\ uploadDone => readN = Total
+
+RECURSIVE TermLast(_)
+TermLast(q) == q = <<>> \/ ((Head(q) \in {"done", "error"} => Tail(q) = <<>>) /\ TermLast(Tail(q)))
+LeanOrd ==
+  /\ ~orderBad
+  /\ Terminal => toC = <<>>
+  /\ (CountIn(toC, "done") + CountIn(toC, "error") > 0 \/ Terminal) => ~inReqs
+  /\ TermLast(toC)
+
+LeanAgree == upPaused = curlSendPaused /\ paused = curlRecvPaused
 =============================================================================
