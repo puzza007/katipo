@@ -18,7 +18,9 @@ jobs:
       - name: Start httpbin server
         run: |
           cd test/http3-httpbin
-          docker compose up -d
+          # A registry can refuse a pull from a shared runner now and then;
+          # retry rather than fail the job before any test runs.
+          for i in 1 2 3 4 5; do docker compose up -d && break; [ "$i" = 5 ] && exit 1; sleep $((i * 10)); done
           # Wait until httpbin actually serves through Caddy. `curl -s` exits 0
           # on any response, including a 502 while the Python httpbin behind
           # Caddy is still starting, so gate on a real 200 to avoid a race.
@@ -98,7 +100,9 @@ jobs:
       - name: Start httpbin server
         run: |
           cd test/http3-httpbin
-          docker compose up -d
+          # A registry can refuse a pull from a shared runner now and then;
+          # retry rather than fail the job before any test runs.
+          for i in 1 2 3 4 5; do docker compose up -d && break; [ "$i" = 5 ] && exit 1; sleep $((i * 10)); done
           # Wait until httpbin actually serves through Caddy. `curl -s` exits 0
           # on any response, including a 502 while the Python httpbin behind
           # Caddy is still starting, so gate on a real 200 to avoid a race.
@@ -166,7 +170,9 @@ jobs:
       - name: Start HTTP/3 httpbin server
         run: |
           cd test/http3-httpbin
-          docker compose up -d
+          # A registry can refuse a pull from a shared runner now and then;
+          # retry rather than fail the job before any test runs.
+          for i in 1 2 3 4 5; do docker compose up -d && break; [ "$i" = 5 ] && exit 1; sleep $((i * 10)); done
           # Wait until httpbin actually serves through Caddy. `curl -s` exits 0
           # on any response, including a 502 while the Python httpbin behind
           # Caddy is still starting, so gate on a real 200 to avoid a race.
