@@ -290,15 +290,9 @@ handle_info({cancel, Ref}, State = #state{port = Port, reqs = Reqs}) ->
                 Reqs
         end,
     {noreply, State#state{reqs = Reqs2}};
-handle_info({flow, Ref, N}, State = #state{port = Port, reqs = Reqs}) ->
+handle_info({flow, Ref, N}, State) ->
     %% Sent directly to the request's alias by katipo:update_flow/3.
-    Self = self(),
-    From = {Self, Ref},
-    _ = case is_map_key(From, Reqs) of
-            true -> port_cmd(Port, {Self, Ref, flow, N});
-            false -> ok
-        end,
-    {noreply, State};
+    relay(Ref, flow, N, State);
 handle_info({'EXIT', Port, Reason}, State = #state{port = Port}) ->
     logger:error("Port ~p died with reason: ~p", [Port, Reason]),
     {stop, port_died, State}.
@@ -327,14 +321,24 @@ notify_worker_died(_From, {_Tref, sync}) ->
 %% Ask the C port to abort the in-flight transfer identified by {Pid, Ref}
 %% (a no-op there if it already completed).
 abort_transfer(Port, {Pid, Ref}) ->
-    port_cmd(Port, {Pid, Ref, cancel}).
+    port_cmd(Port, term_to_binary({Pid, Ref, cancel})).
+
+%% Pass a caller's command for one of our requests to the port; one for a
+%% request that has finished is dropped.
+relay(Ref, Tag, Arg, State = #state{port = Port, reqs = Reqs}) ->
+    Self = self(),
+    _ = case is_map_key({Self, Ref}, Reqs) of
+            true -> port_cmd(Port, term_to_binary({Self, Ref, Tag, Arg}));
+            false -> ok
+        end,
+    {noreply, State}.
 
 %% Best-effort port write: port_command raises badarg if the port died and
 %% its 'EXIT' message is still queued behind us; whatever we were telling the
 %% port is moot then, and crashing here would let terminate/2 message callers
 %% that have already been dealt with.
-port_cmd(Port, Tuple) ->
-    try port_command(Port, term_to_binary(Tuple))
+port_cmd(Port, Frame) ->
+    try port_command(Port, Frame)
     catch error:badarg -> ok
     end,
     ok.
