@@ -33,6 +33,13 @@ All notable changes to this project are documented here. This project follows
   take them. An invalid `reply_to` is reported with any other invalid
   option, named with its value, rather than as `[{reply_to,invalid}]` on
   its own.
+- A `bad_opts` error now names every invalid option and every broken
+  rule between options at once: a missing `url`, a body on a `head`
+  request and a `stream_window` without `stream` used to be reported only
+  once everything else was valid. A body that is neither iodata nor a
+  form is named as the `body` option, where before `check_opts` passed it
+  and the request failed in the C port, and a form with a pair that is
+  not a key and value no longer crashes the caller.
 
 ### Fixed
 - With libcurl 8.10.0 to 8.11.0, a request's timeout could fire late,

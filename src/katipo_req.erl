@@ -28,10 +28,9 @@
 -spec build_req(katipo:request(), sync | async) ->
           {ok, req()} | {error, katipo:error()}.
 build_req(Opts, Mode) ->
-    case validate(Opts, Mode) of
-        {ok, #req{url = undefined}} ->
-            {error, error_map(bad_opts, <<"[{url,undefined}]">>)};
-        {ok, Req} ->
+    case validate(Opts, Mode, url) of
+        {ok, Req0} ->
+            Req = content_type(Req0, Opts),
             {ok, Req#req{timeout = ?MODULE:get_timeout(Req)}};
         {error, _} = Error ->
             Error
@@ -42,45 +41,48 @@ build_req(Opts, Mode) ->
 -spec check_opts(katipo:partial_request(), sync | async) ->
           ok | {error, katipo:error()}.
 check_opts(Opts, Mode) when is_map(Opts) ->
-    case validate(Opts, Mode) of
+    case validate(Opts, Mode, no_url) of
         {ok, _} -> ok;
         {error, _} = Error -> Error
     end.
 
-validate(Opts, Mode) ->
-    case process_opts(Opts, Mode) of
-        {ok, Req} ->
-            case cross_field_error(Req) of
-                ok -> {ok, Req};
-                {error, _} = Error -> Error
-            end;
-        {error, _} = Error ->
-            Error
+%% Every invalid option, and every rule between options that is broken, is
+%% named in the one error, so fixing a request takes one round. A rule is
+%% checked only on options that were valid: one that was not is left at its
+%% default in Req, and is named already.
+validate(Opts, Mode, Url) ->
+    {Req, Errors} = process_opts(Opts, Mode),
+    Invalid = [K || {K, _} <- Errors],
+    case Errors ++ cross_field_errors(Req, Url, Invalid) of
+        [] -> {ok, Req};
+        All -> {error, error_map(bad_opts, All)}
     end.
 
-cross_field_error(Req) ->
-    case head_body_error(Req) of
-        ok -> stream_opts_error(Req);
-        {error, _} = Error -> Error
-    end.
+cross_field_errors(Req, Url, Invalid) ->
+    url_error(Req, Url, Invalid) ++ head_body_error(Req) ++
+        stream_opts_error(Req, Invalid).
+
+url_error(#req{url = undefined}, url, Invalid) ->
+    [{url, undefined} || not lists:member(url, Invalid)];
+url_error(#req{}, _, _) -> [].
 
 %% A HEAD request cannot carry a body (curl's NOBODY), so one given is a
 %% mistake to report rather than drop. The message names the rule, not the
 %% body, which may be large.
 head_body_error(#req{method = ?HEAD, body = Body}) ->
     case sends_body(Body) of
-        true -> {error, error_map(bad_opts, <<"[{body,not_allowed_with_head}]">>)};
-        false -> ok
+        true -> [{body, not_allowed_with_head}];
+        false -> []
     end;
 head_body_error(#req{}) ->
-    ok.
+    [].
 
 %% A stream_window only means something on a streaming request.
-stream_opts_error(#req{stream = ?STREAM_FALSE, stream_window = W})
+stream_opts_error(#req{stream = ?STREAM_FALSE, stream_window = W}, Invalid)
   when W =/= ?STREAM_WINDOW_UNLIMITED ->
-    {error, error_map(bad_opts, [{stream_window, W}])};
-stream_opts_error(#req{}) ->
-    ok.
+    [{stream_window, W} || not lists:member(stream, Invalid)];
+stream_opts_error(#req{}, _) ->
+    [].
 
 -spec get_timeout(req()) -> pos_integer().
 get_timeout(#req{connecttimeout_ms = ConnMs, timeout_ms = ReqMs}) ->
@@ -95,18 +97,19 @@ method_int_to_binary(?OPTIONS) -> <<"OPTIONS">>;
 method_int_to_binary(?PATCH) -> <<"PATCH">>;
 method_int_to_binary(?DELETE) -> <<"DELETE">>.
 
-%% Every invalid option is reported at once. The sync API acts on none of
+%% The request so far and the options that were invalid. The sync API acts
+%% on none of
 %% the async-only options, so it takes only the values that change nothing
 %% there (the reply goes to the caller, the body is not streamed) and
 %% rejects the rest, rather than ignoring a mistake.
 -spec process_opts(katipo:partial_request(), sync | async) ->
-          {ok, req()} | {error, katipo:error()}.
+          {req(), [{atom(), term()}]}.
 process_opts(Opts, async) ->
-    fold_opts(Opts, []);
+    maps:fold(fun opt/3, {#req{}, []}, Opts);
 process_opts(Opts, sync) ->
     {SyncOpts, Rejected} = lists:foldl(fun take_sync_noop/2, {Opts, []},
                                        ?KATIPO_ASYNC_OPTS),
-    fold_opts(SyncOpts, Rejected).
+    maps:fold(fun opt/3, {#req{}, Rejected}, SyncOpts).
 
 take_sync_noop(Key, {Opts, Rejected}) ->
     case maps:take(Key, Opts) of
@@ -122,14 +125,6 @@ sync_noop(reply_to, Pid) -> Pid =:= self();
 sync_noop(stream, false) -> true;
 sync_noop(stream_window, infinity) -> true;
 sync_noop(_, _) -> false.
-
-fold_opts(Opts, Rejected) ->
-    case maps:fold(fun opt/3, {#req{}, Rejected}, Opts) of
-        {Req = #req{}, []} ->
-            {ok, content_type(Req, Opts)};
-        {#req{}, Errors} ->
-            {error, error_map(bad_opts, Errors)}
-    end.
 
 %% curl sends any body it is given as a form POST would, adding
 %% Content-Type: application/x-www-form-urlencoded unless the caller set
@@ -163,12 +158,9 @@ has_content_type(Headers) ->
 ascii_lowercase(Bin) ->
     << <<(case C of _ when C >= $A, C =< $Z -> C + 32; _ -> C end)>> || <<C>> <= Bin >>.
 
-%% Whether a body has any bytes. Malformed iodata counts as a body: the C
-%% port rejects it with bad_opts, as it always has.
+%% Whether a body has any bytes. The body has been validated (opt/3).
 sends_body(Body) ->
-    try iolist_size(Body) > 0
-    catch error:badarg -> true
-    end.
+    iolist_size(Body) > 0.
 
 %% A path option as a binary: given as one, or converted from a string as
 %% UTF-8. Text that is not valid makes unicode:characters_to_binary/1
@@ -225,17 +217,27 @@ method_to_int(options) -> ?OPTIONS;
 method_to_int(patch)   -> ?PATCH;
 method_to_int(delete)  -> ?DELETE.
 
--spec encode_body(katipo:req_body()) -> {ok, iodata()} | {error, {atom(), term()}}.
+%% A form (a key/value list) is encoded; anything else must be iodata, so
+%% a bad body is named here rather than failing in the C port. A list body
+%% is not echoed in the error, as it may be large.
+-spec encode_body(term()) -> {ok, iodata()} | {error, {atom(), term()}}.
 encode_body([{_, _} | _] = KVs) ->
-    case uri_string:compose_query(KVs) of
+    try uri_string:compose_query(KVs) of
         {error, Reason, Message} ->
             {error, {Reason, Message}};
         Body ->
             {ok, Body}
+    catch error:_ ->
+            {error, {invalid_body, not_a_form}}
     end;
-%% iodata
-encode_body(Body) when is_binary(Body) orelse is_list(Body) ->
+encode_body(Body) when is_binary(Body) ->
     {ok, Body};
+encode_body(Body) when is_list(Body) ->
+    try iolist_size(Body) of
+        _ -> {ok, Body}
+    catch error:badarg ->
+            {error, {invalid_body, not_iodata}}
+    end;
 encode_body(Body) ->
     {error, {invalid_body, Body}}.
 
