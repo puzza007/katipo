@@ -3,6 +3,7 @@ import KatipoProofs.Flow.Executable
 import KatipoProofs.Admission.Statements
 import KatipoProofs.Admission.Trace
 import KatipoProofs.Timer.Statements
+import KatipoProofs.Upload.Statements
 
 /-!
 # Axiom pins
@@ -109,3 +110,36 @@ open KatipoProofs
 
 /-- info: 'KatipoProofs.Timer.Statements.refresh_only_late' depends on axioms: [propext, Quot.sound] -/
 #guard_msgs (whitespace := lax) in #print axioms Timer.Statements.refresh_only_late
+
+/-- info: 'KatipoProofs.Upload.Statements.body_conserved' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms Upload.Statements.body_conserved
+
+/-- info: 'KatipoProofs.Upload.Statements.complete_body' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms Upload.Statements.complete_body
+
+/-- info: 'KatipoProofs.Upload.Statements.one_chunk_in_flight' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms Upload.Statements.one_chunk_in_flight
+
+/-- info: 'KatipoProofs.Upload.Statements.one_demand' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms Upload.Statements.one_demand
+
+/-- info: 'KatipoProofs.Upload.Statements.pause_flags_agree' depends on axioms: [propext] -/
+#guard_msgs (whitespace := lax) in #print axioms Upload.Statements.pause_flags_agree
+
+/-- info: 'KatipoProofs.Upload.Statements.protocol_order' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms Upload.Statements.protocol_order
+
+/-- info: 'KatipoProofs.Upload.Statements.no_safeguard_two_demands' does not depend on any axioms -/
+#guard_msgs (whitespace := lax) in #print axioms Upload.Statements.no_safeguard_two_demands
+
+/-- info: 'KatipoProofs.Upload.Statements.length_held' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms Upload.Statements.length_held
+
+/-- info: 'KatipoProofs.Upload.Statements.length_complete' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms Upload.Statements.length_complete
+
+/-- info: 'KatipoProofs.Upload.Statements.eager_two_chunks' does not depend on any axioms -/
+#guard_msgs (whitespace := lax) in #print axioms Upload.Statements.eager_two_chunks
+
+/-- info: 'KatipoProofs.Upload.Statements.cont_flags_drift' does not depend on any axioms -/
+#guard_msgs (whitespace := lax) in #print axioms Upload.Statements.cont_flags_drift
