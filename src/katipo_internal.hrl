@@ -98,6 +98,12 @@
 %% The largest integer option value the C port can read: parse_eopts
 %% decodes only SMALL_INTEGER_EXT and INTEGER_EXT, a signed 32-bit int.
 -define(MAX_INT_OPT, 2147483647).
+%% The largest declared length of a streamed body: the port reads it as a
+%% signed 64-bit curl_off_t.
+-define(MAX_STREAM_LENGTH, 16#7fffffffffffffff).
+%% The largest chunk send_body/3 takes: a port frame's 4-byte length, less
+%% room for the term in front of the chunk.
+-define(MAX_BODY_CHUNK, 16#ffffff00).
 -define(IS_INT_OPT(X, Min),
         (is_integer(X) andalso X >= Min andalso X =< ?MAX_INT_OPT)).
 %% Bound on the admission gen_server:call into a pool worker. Admission is a
@@ -167,7 +173,7 @@
           url :: undefined | binary(),
           headers = [] :: [binary()],
           cookiejar = [] :: [binary()],
-          body = <<>> :: iodata() | {file, binary()},
+          body = <<>> :: iodata() | {file, binary()} | {stream, -1 | non_neg_integer()},
           connecttimeout_ms = ?DEFAULT_REQ_TIMEOUT :: pos_integer(),
           followlocation = ?FOLLOWLOCATION_FALSE :: integer(),
           ssl_verifyhost = ?SSL_VERIFYHOST_TRUE :: integer(),

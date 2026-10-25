@@ -108,6 +108,7 @@ worker failure arrives.
 -export([await/2]).
 -export([cancel/2]).
 -export([update_flow/3]).
+-export([send_body/3]).
 
 -export([check_opts/1]).
 -export([check_opts/2]).
@@ -387,6 +388,30 @@ update_flow(_PoolName, Ref, N) when is_reference(Ref) andalso
                                     is_integer(N) andalso N > 0 ->
     %% The port reads a grant as a C long, which may be 32 bits.
     Ref ! {flow, Ref, min(N, ?MAX_INT_OPT)},
+    ok.
+
+-doc """
+Sends the next chunk of the streamed request body of `Ref` (started with
+`body => {stream, _}`), or `eof` once the whole body is sent. Send one
+chunk for each `{katipo_body_demand, Ref}` message: the C port asks for the
+next chunk only once curl has sent the last, so at most one is buffered.
+A chunk sent without a demand is buffered too, without bound. With a
+declared `length`, no demand comes once that many bytes are sent, and no
+eof is needed; a body longer or shorter fails the request with
+`read_error`. Anything sent after `eof` is ignored. Routed like `cancel/2`
+and equally best-effort: sending to an unknown or completed request is a
+harmless no-op. `Data` must be iodata of at most 4 GiB, which one port
+frame carries; anything else raises `badarg`. An empty chunk sends nothing
+and is answered with another demand.
+""".
+-spec send_body(katipo_pool:name(), reference(), iodata() | eof) -> ok.
+send_body(_PoolName, Ref, eof) when is_reference(Ref) ->
+    Ref ! {send_body, Ref, eof},
+    ok;
+send_body(_PoolName, Ref, Data) when is_reference(Ref) andalso
+                                    (is_binary(Data) orelse is_list(Data)) ->
+    iolist_size(Data) =< ?MAX_BODY_CHUNK orelse error(badarg),
+    Ref ! {send_body, Ref, Data},
     ok.
 
 -doc #{equiv => await/2}.

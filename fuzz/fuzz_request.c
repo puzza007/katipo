@@ -49,7 +49,7 @@ static void run_frame(ei_x_buff *x) {
 
   FUZZ_ASSERT(buf != NULL);
   memcpy(buf, x->buff, x->index);
-  handle_frame(&global, buf);
+  handle_frame(&global, buf, x->index);
   free(buf);
   if (evbuffer_get_length(out) != 0) {
     char *term = NULL;

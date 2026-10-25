@@ -143,15 +143,27 @@ one space, and a CR, LF or NUL inside it is replaced with a space.
 -opaque cookiejar() :: [binary()].
 -type qs_vals() :: [{unicode:chardata(), unicode:chardata() | true}].
 -doc """
-A request body: iodata, sent as given; a form, sent form-urlencoded; or
+A request body: iodata, sent as given; a form, sent form-urlencoded;
 `{file, Path}`, a file the C port reads as it sends it, so it is never
 held in memory, and seeks back to its start to send it again after a
-redirect. A relative `Path` is taken from the VM's working directory when
-the request is made. `Content-Length` is the file's size then: if the file
+redirect; or, for the async API only, `{stream, #{length => N}}`, a body
+the caller sends with `katipo:send_body/3`, one chunk per
+`{katipo_body_demand, Ref}` message.
+
+A relative `Path` is taken from the VM's working directory when the
+request is made. `Content-Length` is the file's size then: if the file
 grows, no more is sent, and if it shrinks the request fails with
 `read_error`.
+
+A streamed body with `length` goes with that `Content-Length`, and one
+longer or shorter fails the request with `read_error`; without, it is
+sent chunked (or as HTTP/2 or 3 frames). It cannot be sent again, so a
+redirect, an auth retry (digest, NTLM, Negotiate) or curl's retry on a
+reused connection the server had closed, any of which would need to,
+fails with `send_fail_rewind`.
 """.
--type req_body() :: iodata() | qs_vals() | {file, unicode:chardata()}.
+-type req_body() :: iodata() | qs_vals() | {file, unicode:chardata()} |
+                    {stream, #{length => non_neg_integer()}}.
 -type body() :: binary().
 -type connecttimeout_ms() :: 1..?MAX_INT_OPT.
 %% See [https://curl.haxx.se/libcurl/c/CURLOPT_CONNECTTIMEOUT.html]
@@ -289,7 +301,8 @@ killed outright, so keep a timeout on the receive.
         {katipo_error, reference(), error()} |
         {katipo_headers, reference(), #{status := status(), headers := resp_headers()}} |
         {katipo_chunk, reference(), binary()} |
-        {katipo_done, reference(), #{status := status(), cookiejar := cookiejar()}}.
+        {katipo_done, reference(), #{status := status(), cookiejar := cookiejar()}} |
+        {katipo_body_demand, reference()}.
 -type http_auth() :: basic | digest | ntlm | negotiate.
 -type pipelining() :: nothing | http1 | multiplex.
 -type curlopt_http_version() :: curl_http_version_none |

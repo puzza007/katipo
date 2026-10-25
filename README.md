@@ -107,6 +107,44 @@ least once every `N` chunks, or the transfer stays paused until
 With HTTP/2 or HTTP/3 multiplexing, use a recent libcurl: older versions
 can stall other streams on the connection while one is paused.
 
+### Streaming a request body
+
+`body => {stream, #{}}` sends a body you produce as the request goes, for
+proxying or for data too big to hold in memory. The C port asks for each
+chunk with `{katipo_body_demand, Ref}` once curl has sent the last, and
+`send_body/3` answers with the next chunk or `eof`, so at most one chunk
+waits in the port:
+
+```erlang
+upload(Url, Fd) ->
+    {ok, Ref} = katipo:async_put(api, Url, #{body => {stream, #{}}}),
+    send(Ref, Fd).
+
+send(Ref, Fd) ->
+    receive
+        {katipo_body_demand, Ref} ->
+            case file:read(Fd, 65536) of
+                {ok, Data} -> ok = katipo:send_body(api, Ref, Data);
+                eof -> ok = katipo:send_body(api, Ref, eof)
+            end,
+            send(Ref, Fd);
+        {katipo_response, Ref, Response} -> {ok, Response};
+        {katipo_error, Ref, Error} -> {error, Error}
+    end.
+```
+
+Without `length` the body goes chunked (or as HTTP/2 or 3 frames), sent
+straight away rather than behind `Expect: 100-continue` unless you set that
+header yourself. With `#{length => N}` it goes with that `Content-Length`:
+no demand comes once `N` bytes are sent, so no `eof` is needed, and a body
+longer or shorter fails the request with `read_error`. Anything sent after
+`eof` is ignored. The request timer runs while the port waits for a chunk.
+A streamed body cannot be sent twice, so a redirect, an auth retry
+(digest, NTLM, Negotiate) or curl's retry on a reused connection the server
+had closed fails with `send_fail_rewind`. For a body that is already in a
+file, `body => {file, Path}` needs no messages at all. It combines with
+`stream => true` for the response. Async only.
+
 ## Pools
 
 `katipo_pool:start(Name, Size, Opts)` starts `Size` workers, each owning
@@ -128,7 +166,7 @@ another, and fails fast with `overload` when every worker is full.
 |:------------------------|:------------------------------------|:------------|:------------------------------------------------------------------------------------|
 | `headers`               | `[{iodata(), iodata()}]`            | `[]`        |                                                                                     |
 | `cookiejar`             | opaque (returned in response)       | `[]`        |                                                                                     |
-| `body`                  | `iodata()` \| `{file, Path}`        | `<<>>`      | sent with every method but `head` (an error there); a key/value list is form-encoded, and `{file, Path}` is read from the file as it is sent, never held in memory. Without a `content-type` header, only POST and form bodies get `application/x-www-form-urlencoded` |
+| `body`                  | `iodata()` \| `{file, Path}` \| `{stream, #{length => N}}` | `<<>>`      | sent with every method but `head` (an error there); a key/value list is form-encoded, `{file, Path}` is read from the file as it is sent, never held in memory, and `{stream, _}` is sent on demand (async only; see Streaming a request body). Without a `content-type` header, only POST and form bodies get `application/x-www-form-urlencoded` |
 | `connecttimeout_ms`     | `1..2147483647`                     | 30000       | [docs](https://curl.se/libcurl/c/CURLOPT_CONNECTTIMEOUT.html)                  |
 | `followlocation`        | `boolean()`                         | `false`     | [docs](https://curl.se/libcurl/c/CURLOPT_FOLLOWLOCATION.html)                  |
 | `ssl_verifyhost`        | `boolean()`                         | `true`      | [docs](https://curl.se/libcurl/c/CURLOPT_SSL_VERIFYHOST.html)                  |

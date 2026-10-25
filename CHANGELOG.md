@@ -6,6 +6,17 @@ All notable changes to this project are documented here. This project follows
 ## [Unreleased]
 
 ### Added
+- `body => {stream, #{}}` (async only) sends a request body the caller
+  produces as the request goes: the C port asks for each chunk with a
+  `{katipo_body_demand, Ref}` message once curl has sent the last, and
+  `katipo:send_body/3` answers with the next chunk or `eof`, so at most
+  one chunk waits in the port. With `#{length => N}` the body goes
+  with that `Content-Length`, and one longer or shorter fails the request
+  with `read_error`; without, it goes chunked, without `Expect:
+  100-continue`. Anything after `eof` is ignored. A redirect or auth retry
+  that would have to resend it fails with `send_fail_rewind`. The protocol
+  is modelled in `formal/KatipoUpload.tla` and its safety proved for every
+  size in `formal/lean/KatipoProofs/Upload`.
 - `body => {file, Path}` uploads a file: the C port reads it as it sends
   it, so a large body is never held in memory, with `Content-Length` from
   the file's size when the request is made, and seeks back to its start

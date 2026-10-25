@@ -319,7 +319,23 @@ groups() ->
        streaming_error_mid_body,
        streaming_timeout_mid_body,
        streaming_cancel_mid_stream,
-       streaming_worker_death_mid_body]},
+       streaming_worker_death_mid_body,
+       stream_body_chunked,
+       stream_body_length,
+       stream_body_large,
+       stream_body_http2,
+       stream_body_streamed_response,
+       stream_body_one_demand,
+       stream_body_invalid,
+       stream_body_cancel,
+       stream_body_timeout,
+       stream_body_redirect,
+       stream_body_http1_chunked,
+       stream_body_http1_length,
+       stream_body_expect,
+       stream_body_longer,
+       stream_body_shorter,
+       stream_body_after_eof]},
      {otel, [],
       [otel_span_created,
        otel_metrics_recorded,
@@ -1733,6 +1749,266 @@ sync_rejects_async_opts(_Config) ->
     ok = katipo:check_opts(#{reply_to => Other, stream => true}, async),
     ok = katipo:check_opts(#{reply_to => Other, stream => true}),
     ok = katipo:check_opts(#{method => post, body => <<"x">>}, sync).
+
+%% -- streamed request bodies ---------------------------------------------
+
+%% Answer each demand for Ref with the next chunk, then eof, and return
+%% the buffered response.
+send_on_demand(Ref, Chunks) ->
+    receive
+        {katipo_body_demand, Ref} ->
+            case Chunks of
+                [C | Cs] -> ok = katipo:send_body(?POOL, Ref, C), send_on_demand(Ref, Cs);
+                [] -> ok = katipo:send_body(?POOL, Ref, eof), send_on_demand(Ref, done)
+            end;
+        {katipo_response, Ref, Response} -> {ok, Response};
+        {katipo_error, Ref, Error} -> {error, Error}
+    after 30000 ->
+            ct:fail({no_demand_or_response, mailbox()})
+    end.
+
+%% Without a length the body goes chunked: iolists, and an empty chunk,
+%% which sends nothing and is answered with another demand.
+stream_body_chunked(Config) ->
+    {req_opts, Opts} = lists:keyfind(req_opts, 1, Config),
+    {ok, Ref} = katipo:async_put(?POOL, httpbin_url(Config, <<"/put">>),
+                                 Opts#{body => {stream, #{}}}),
+    {ok, #{status := 200, body := Body}} =
+        send_on_demand(Ref, [<<"hello ">>, ["wor", <<"ld">>], <<>>, <<"!">>]),
+    Json = json:decode(Body),
+    ?assertEqual(<<"hello world!">>, maps:get(<<"data">>, Json)),
+    ?assertEqual(<<"chunked">>,
+                 maps:get(<<"Transfer-Encoding">>, maps:get(<<"headers">>, Json))).
+
+%% With a length, that is the Content-Length.
+stream_body_length(Config) ->
+    {req_opts, Opts} = lists:keyfind(req_opts, 1, Config),
+    Headers = [{<<"Content-Type">>, <<"text/plain">>}],
+    {ok, Ref} = katipo:async_post(?POOL, httpbin_url(Config, <<"/post">>),
+                                  Opts#{headers => Headers,
+                                        body => {stream, #{length => 11}}}),
+    {ok, #{status := 200, body := Body}} = send_on_demand(Ref, [<<"hello ">>, <<"world">>]),
+    Json = json:decode(Body),
+    ?assertEqual(<<"hello world">>, maps:get(<<"data">>, Json)),
+    ?assertEqual(<<"11">>, maps:get(<<"Content-Length">>, maps:get(<<"headers">>, Json))).
+
+%% Many chunks larger than curl's upload buffer, so the upload pauses and
+%% resumes over and over.
+stream_body_large(Config) ->
+    {req_opts, Opts} = lists:keyfind(req_opts, 1, Config),
+    Chunks = [binary:copy(<<(I rem 26 + $a)>>, 100000) || I <- lists:seq(1, 40)],
+    Headers = [{<<"Content-Type">>, <<"text/plain">>}],
+    {ok, Ref} = katipo:async_post(?POOL, httpbin_url(Config, <<"/post">>),
+                                  Opts#{headers => Headers, timeout_ms => 60000,
+                                        body => {stream, #{}}}),
+    {ok, #{status := 200, body := Body}} = send_on_demand(Ref, Chunks),
+    ?assertEqual(iolist_to_binary(Chunks), maps:get(<<"data">>, json:decode(Body))).
+
+stream_body_http2(Config) ->
+    {req_opts, Opts} = lists:keyfind(req_opts, 1, Config),
+    {ok, Ref} = katipo:async_put(?POOL, httpbin_url(Config, <<"/put">>),
+                                 Opts#{http_version => curl_http_version_2_prior_knowledge,
+                                       body => {stream, #{}}}),
+    {ok, #{status := 200, body := Body}} = send_on_demand(Ref, [<<"over ">>, <<"h2">>]),
+    ?assertEqual(<<"over h2">>, maps:get(<<"data">>, json:decode(Body))).
+
+%% A streamed body with a streamed response under a window of one: the
+%% upload's pause and the response's share one curl handle.
+stream_body_streamed_response(Config) ->
+    {req_opts, Opts} = lists:keyfind(req_opts, 1, Config),
+    Chunks = [binary:copy(<<"x">>, 50000) || _ <- lists:seq(1, 4)],
+    {ok, Ref} = katipo:async_put(?POOL, httpbin_url(Config, <<"/put">>),
+                                 Opts#{body => {stream, #{}}, stream => true,
+                                       stream_window => 1}),
+    Received = both_ways(Ref, Chunks, []),
+    ?assertEqual(iolist_to_binary(Chunks), maps:get(<<"data">>, json:decode(Received))).
+
+both_ways(Ref, Chunks, Acc) ->
+    receive
+        {katipo_body_demand, Ref} ->
+            case Chunks of
+                [C | Cs] -> ok = katipo:send_body(?POOL, Ref, C), both_ways(Ref, Cs, Acc);
+                [] -> ok = katipo:send_body(?POOL, Ref, eof), both_ways(Ref, done, Acc)
+            end;
+        {katipo_headers, Ref, #{status := 200}} -> both_ways(Ref, Chunks, Acc);
+        {katipo_chunk, Ref, Bin} ->
+            ok = katipo:update_flow(?POOL, Ref, 1),
+            both_ways(Ref, Chunks, [Acc, Bin]);
+        {katipo_done, Ref, _} -> iolist_to_binary(Acc);
+        {katipo_error, Ref, Error} -> ct:fail({stream_body_error, Error})
+    after 30000 ->
+            ct:fail({stalled, mailbox()})
+    end.
+
+%% One demand at a time: none follows until the first is answered.
+stream_body_one_demand(Config) ->
+    {req_opts, Opts} = lists:keyfind(req_opts, 1, Config),
+    {ok, Ref} = katipo:async_put(?POOL, httpbin_url(Config, <<"/put">>),
+                                 Opts#{body => {stream, #{}}}),
+    receive {katipo_body_demand, Ref} -> ok after 10000 -> ct:fail(no_demand) end,
+    receive {katipo_body_demand, Ref} -> ct:fail(second_demand) after 500 -> ok end,
+    {ok, #{status := 200}} = send_on_demand_answered(Ref, [<<"a">>]).
+
+%% As send_on_demand/2, with the first demand already received.
+send_on_demand_answered(Ref, [C | Cs]) ->
+    ok = katipo:send_body(?POOL, Ref, C),
+    send_on_demand(Ref, Cs).
+
+%% Only the async API streams a body, a HEAD refuses one, and the length
+%% must be a non-negative integer.
+stream_body_invalid(_Config) ->
+    Url = <<"http://192.0.2.1">>,
+    {error, #{code := bad_opts, message := <<"[{body,stream_requires_async}]">>}} =
+        katipo:put(?POOL, Url, #{body => {stream, #{}}}),
+    {error, #{code := bad_opts}} = katipo:check_opts(#{body => {stream, #{}}}, sync),
+    ok = katipo:check_opts(#{body => {stream, #{length => 5}}}),
+    {error, #{message := <<"[{body,not_allowed_with_head}]">>}} =
+        katipo:check_opts(#{method => head, body => {stream, #{}}}),
+    [{error, #{code := bad_opts}} = katipo:check_opts(#{body => {stream, O}})
+     || O <- [#{length => -1}, #{length => 1.5}, #{length => 1 bsl 63}, #{other => 1}, []]],
+    ?assertError(badarg, katipo:send_body(?POOL, make_ref(), [foo])),
+    %% More than one port frame carries: 4097 references to one MiB.
+    ?assertError(badarg, katipo:send_body(?POOL, make_ref(),
+                                          lists:duplicate(4097, <<0:(8 * 1048576)>>))),
+    ok.
+
+%% A cancel mid-upload ends it with nothing more delivered.
+stream_body_cancel(Config) ->
+    {req_opts, Opts} = lists:keyfind(req_opts, 1, Config),
+    {ok, Ref} = katipo:async_put(?POOL, httpbin_url(Config, <<"/put">>),
+                                 Opts#{body => {stream, #{}}}),
+    receive {katipo_body_demand, Ref} -> ok after 10000 -> ct:fail(no_demand) end,
+    ok = katipo:cancel(?POOL, Ref),
+    ok = katipo:send_body(?POOL, Ref, <<"late">>),
+    receive
+        {katipo_body_demand, Ref} -> ct:fail(demand_after_cancel);
+        {katipo_response, Ref, R} -> ct:fail({response_after_cancel, R});
+        {katipo_error, Ref, E} -> ct:fail({error_after_cancel, E})
+    after 1000 -> ok
+    end.
+
+%% A caller that never answers: the request times out, and no demand
+%% arrives after the error.
+stream_body_timeout(Config) ->
+    {req_opts, Opts} = lists:keyfind(req_opts, 1, Config),
+    {ok, Ref} = katipo:async_put(?POOL, httpbin_url(Config, <<"/put">>),
+                                 Opts#{body => {stream, #{}}, timeout_ms => 500}),
+    receive {katipo_body_demand, Ref} -> ok after 10000 -> ct:fail(no_demand) end,
+    receive
+        {katipo_error, Ref, #{code := operation_timedout}} -> ok
+    after 5000 -> ct:fail({no_timeout, mailbox()})
+    end,
+    receive
+        {katipo_body_demand, Ref} -> ct:fail(demand_after_error)
+    after 500 -> ok
+    end.
+
+%% A streamed body cannot be sent twice, so a redirect that would resend
+%% it fails rather than sending an empty or partial body. The server reads
+%% the whole body before it redirects, so curl has always sent it.
+stream_body_redirect(_Config) ->
+    {Server, Port} = upload_server(
+                       #{response => <<"HTTP/1.1 307 Temporary Redirect\r\n"
+                                       "location: /again\r\ncontent-length: 0\r\n"
+                                       "connection: close\r\n\r\n">>}),
+    {ok, Ref} = katipo:async_put(?POOL, katipo_upload_server:url(Port),
+                                 #{body => {stream, #{length => 4}},
+                                   followlocation => true}),
+    {error, #{code := send_fail_rewind}} = send_on_demand(Ref, [<<"once">>]),
+    receive {upload_body, Server, <<"once">>} -> ok end,
+    ok = katipo_upload_server:stop(Server).
+
+%% What curl puts on the wire over HTTP/1.1, which the proxy in front of
+%% httpbin re-frames: chunked encoding, without Expect: 100-continue, which
+%% would hold back the first demand until the server answered or a second
+%% passed.
+stream_body_http1_chunked(_Config) ->
+    {Server, Port} = upload_server(#{}),
+    T0 = erlang:monotonic_time(millisecond),
+    {ok, Ref} = katipo:async_put(?POOL, katipo_upload_server:url(Port),
+                                 #{body => {stream, #{}},
+                                   http_version => curl_http_version_1_1}),
+    receive {katipo_body_demand, Ref} -> ok after 10000 -> ct:fail(no_demand) end,
+    ?assert(erlang:monotonic_time(millisecond) - T0 < 500),
+    {ok, #{status := 200}} =
+        send_on_demand_answered(Ref, [<<"hello ">>, ["wor", <<"ld">>], <<>>, <<"!">>]),
+    receive
+        {upload_head, Server, Head} ->
+            Lower = string:lowercase(Head),
+            {match, _} = re:run(Lower, <<"\r\ntransfer-encoding: chunked">>),
+            nomatch = re:run(Lower, <<"\r\nexpect:">>)
+    end,
+    receive {upload_body, Server, Body} -> ?assertEqual(<<"hello world!">>, Body) end,
+    ok = katipo_upload_server:stop(Server).
+
+%% With a length: that Content-Length, no eof asked for, nothing more.
+stream_body_http1_length(_Config) ->
+    {Server, Port} = upload_server(#{}),
+    {ok, Ref} = katipo:async_put(?POOL, katipo_upload_server:url(Port),
+                                 #{body => {stream, #{length => 11}},
+                                   http_version => curl_http_version_1_1}),
+    {ok, #{status := 200}} = send_on_demand(Ref, [<<"hello ">>, <<"world">>]),
+    receive
+        {upload_head, Server, Head} ->
+            {match, _} = re:run(string:lowercase(Head), <<"\r\ncontent-length: 11\\b">>)
+    end,
+    receive {upload_body, Server, Body} -> ?assertEqual(<<"hello world">>, Body) end,
+    ok = katipo_upload_server:stop(Server).
+
+%% A caller that asks for Expect: 100-continue gets it: no demand until
+%% the server says to go on.
+stream_body_expect(_Config) ->
+    {Server, Port} = upload_server(#{continue => ask}),
+    {ok, Ref} = katipo:async_put(?POOL, katipo_upload_server:url(Port),
+                                 #{body => {stream, #{}},
+                                   headers => [{<<"Expect">>, <<"100-continue">>}],
+                                   http_version => curl_http_version_1_1}),
+    receive {upload_head, Server, _} -> ok end,
+    receive {katipo_body_demand, Ref} -> ct:fail(demand_before_continue) after 300 -> ok end,
+    Server ! continue,
+    {ok, #{status := 200}} = send_on_demand(Ref, [<<"go">>]),
+    receive {upload_body, Server, Body} -> ?assertEqual(<<"go">>, Body) end,
+    ok = katipo_upload_server:stop(Server).
+
+%% The port holds a body to its declared length, as curl before 8.7 does
+%% not: a chunk past it fails the request before any of it is sent...
+stream_body_longer(_Config) ->
+    {Server, Port} = upload_server(#{}),
+    {ok, Ref} = katipo:async_put(?POOL, katipo_upload_server:url(Port),
+                                 #{body => {stream, #{length => 4}},
+                                   http_version => curl_http_version_1_1}),
+    {error, #{code := read_error, message := Message}} =
+        send_on_demand(Ref, [<<"too long">>]),
+    {match, _} = re:run(Message, <<"longer than its declared 4 bytes">>),
+    receive {upload_closed, Server, Partial} -> ?assertEqual(<<>>, Partial) end,
+    ok = katipo_upload_server:stop(Server).
+
+%% ...and so does eof short of it, rather than leave the server waiting.
+stream_body_shorter(_Config) ->
+    {Server, Port} = upload_server(#{}),
+    {ok, Ref} = katipo:async_put(?POOL, katipo_upload_server:url(Port),
+                                 #{body => {stream, #{length => 10}},
+                                   http_version => curl_http_version_1_1}),
+    {error, #{code := read_error, message := Message}} =
+        send_on_demand(Ref, [<<"short">>]),
+    {match, _} = re:run(Message, <<"ended after 5 of its declared 10 bytes">>),
+    receive {upload_closed, Server, Partial} -> ?assertEqual(<<"short">>, Partial) end,
+    ok = katipo_upload_server:stop(Server).
+
+%% A chunk sent after eof is no part of the body, even if it reaches the
+%% port before curl has read the eof. (Sent without waiting, eof may cross
+%% the demand the port sends when curl, done with the first chunk, finds
+%% nothing more.)
+stream_body_after_eof(_Config) ->
+    {Server, Port} = upload_server(#{}),
+    {ok, Ref} = katipo:async_put(?POOL, katipo_upload_server:url(Port),
+                                 #{body => {stream, #{}},
+                                   http_version => curl_http_version_1_1}),
+    receive {katipo_body_demand, Ref} -> ok after 10000 -> ct:fail(no_demand) end,
+    [ok = katipo:send_body(?POOL, Ref, C) || C <- [<<"body">>, eof, <<"stray">>]],
+    {ok, #{status := 200}} = send_on_demand(Ref, []),
+    receive {upload_body, Server, Body} -> ?assertEqual(<<"body">>, Body) end,
+    ok = katipo_upload_server:stop(Server).
 
 %% The request timer keeps running while a transfer is paused awaiting
 %% credits: a consumer that stops granting eventually gets the same
