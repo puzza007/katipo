@@ -3,8 +3,9 @@
 -moduledoc false.
 
 %% The gen_server that owns a single libcurl C port. wpool runs one of these per
-%% pool worker. At init it parses the pool's curl-multi options (get_mopts) into
-%% the port's spawn arguments. Thereafter it marshals a validated #req{} to the
+%% pool worker. At init it spawns the port with the pool's curl-multi options,
+%% which katipo_pool has turned into arguments (curl_args/1). Thereafter it
+%% marshals a validated #req{} to the
 %% port, tracks in-flight requests, and delivers responses/timeouts/errors back
 %% to sync callers and async reply_to processes. Factored out of katipo.
 %%
@@ -24,6 +25,8 @@
 -export([code_change/3]).
 %% For the raw-port tests, which read the C port without a worker.
 -export([decode/1]).
+%% For katipo_pool, which validates the curl-multi options at start.
+-export([curl_args/1]).
 
 -include("katipo_internal.hrl").
 
@@ -51,27 +54,15 @@
                 ids = #{} :: #{port_id() => port_id()},
                 max_in_flight = infinity :: pos_integer() | infinity}).
 
--type curlmopt() ::
-        max_total_connections |
-        max_concurrent_streams |
-        maxconnects |
-        max_host_connections |
-        pipelining.
+start_link([MaxInFlight, CurlArgs]) when is_list(CurlArgs) ->
+    gen_server:start_link(?MODULE, [MaxInFlight, CurlArgs], []).
 
-start_link([MaxInFlight, CurlOpts]) when is_list(CurlOpts) ->
-    gen_server:start_link(?MODULE, [MaxInFlight, CurlOpts], []).
-
-init([MaxInFlight, CurlOpts]) ->
+init([MaxInFlight, CurlArgs]) ->
     process_flag(trap_exit, true),
-    case get_mopts(CurlOpts) of
-        {ok, Args} ->
-            Prog = filename:join([code:priv_dir(katipo), "katipo"]),
-            Port = open_port({spawn, Prog ++ " " ++ Args}, [{packet, 4}, binary]),
-            ?TRACE(start),
-            {ok, #state{port = Port, reqs = #{}, max_in_flight = MaxInFlight}};
-        {error, Error} ->
-            {stop, Error}
-    end.
+    Prog = filename:join([code:priv_dir(katipo), "katipo"]),
+    Port = open_port({spawn, Prog ++ " " ++ CurlArgs}, [{packet, 4}, binary]),
+    ?TRACE(start),
+    {ok, #state{port = Port, reqs = #{}, max_in_flight = MaxInFlight}}.
 
 %% Admission is gated on max_in_flight: a full worker replies
 %% {overload, self()} without registering anything, and pool_call in katipo
@@ -565,34 +556,29 @@ rtrim_ows(V, N) when N > 0 ->
 rtrim_ows(_V, 0) ->
     <<>>.
 
-get_mopts(Opts) ->
-    L = lists:filtermap(fun mopt_supported/1, Opts),
-    LengthOpts = length(Opts),
-    case length(L) of
-        LengthOpts ->
-            {ok, string:join(L, " ")};
-        _ ->
-            {error, {bad_opts, Opts}}
+%% The port's arguments for the curl-multi options, or every option that is
+%% not one, or has a value curl cannot take.
+-spec curl_args([term()]) -> {ok, string()} | {error, [term()]}.
+curl_args(Opts) ->
+    case [Opt || Opt <- Opts, mopt_supported(Opt) =:= error] of
+        [] -> {ok, string:join([Arg || Opt <- Opts, {ok, Arg} <- [mopt_supported(Opt)]], " ")};
+        Bad -> {error, Bad}
     end.
 
--spec mopt_supported({curlmopt(), any()}) -> false | {true, string()}.
+-spec mopt_supported(term()) -> {ok, string()} | error.
 mopt_supported({pipelining, nothing}) ->
-    {true, "--pipelining 0"};
+    {ok, "--pipelining 0"};
 mopt_supported({pipelining, http1}) ->
-    {true, "--pipelining 1"};
+    {ok, "--pipelining 1"};
 mopt_supported({pipelining, multiplex}) ->
-    {true, "--pipelining 2"};
-mopt_supported({max_total_connections, Val})
-  when is_integer(Val) andalso Val >= 0 ->
-    {true, "--max-total-connections " ++ integer_to_list(Val)};
-mopt_supported({max_concurrent_streams, Val})
-  when is_integer(Val) andalso Val >= 0 ->
-    {true, "--max-concurrent-streams " ++ integer_to_list(Val)};
-mopt_supported({maxconnects, Val})
-  when is_integer(Val) andalso Val >= 0 ->
-    {true, "--maxconnects " ++ integer_to_list(Val)};
-mopt_supported({max_host_connections, Val})
-  when is_integer(Val) andalso Val >= 0 ->
-    {true, "--max-host-connections " ++ integer_to_list(Val)};
-mopt_supported({_, _}) ->
-    false.
+    {ok, "--pipelining 2"};
+mopt_supported({max_total_connections, Val}) when ?IS_INT_OPT(Val, 0) ->
+    {ok, "--max-total-connections " ++ integer_to_list(Val)};
+mopt_supported({max_concurrent_streams, Val}) when ?IS_INT_OPT(Val, 0) ->
+    {ok, "--max-concurrent-streams " ++ integer_to_list(Val)};
+mopt_supported({maxconnects, Val}) when ?IS_INT_OPT(Val, 0) ->
+    {ok, "--maxconnects " ++ integer_to_list(Val)};
+mopt_supported({max_host_connections, Val}) when ?IS_INT_OPT(Val, 0) ->
+    {ok, "--max-host-connections " ++ integer_to_list(Val)};
+mopt_supported(_) ->
+    error.

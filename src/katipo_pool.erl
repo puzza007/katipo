@@ -19,6 +19,8 @@ curl multi options plus `{max_in_flight, N | infinity}` (default
 `infinity`), a per-worker cap on concurrently in-flight requests. When
 every worker is at its cap, requests fail fast with
 `{error, #{code => overload}}` instead of accumulating without bound.
+An option that is not one of these, or has a value it cannot take, fails
+the start with `bad_opts` naming it.
 """.
 -spec start(name(), pos_integer(), katipo:pool_opts()) ->
                    supervisor:startchild_ret() | {error, katipo:error()}.
@@ -34,12 +36,17 @@ start(PoolName, PoolSize, WorkerOpts)
         {error, _} = Error ->
             Error;
         {MaxInFlight, CurlOpts} ->
-            Args = [MaxInFlight, CurlOpts],
-            PoolOpts = [{worker, {katipo_worker, Args}},
-                        {workers, PoolSize},
-                        {pool_sup_shutdown, infinity}],
-            wpool:start_sup_pool(PoolName, PoolOpts)
+            start_pool(PoolName, PoolSize, MaxInFlight, katipo_worker:curl_args(CurlOpts))
     end.
+
+start_pool(_PoolName, _PoolSize, _MaxInFlight, {error, Bad}) ->
+    {error, katipo_req:error_map(bad_opts, Bad)};
+start_pool(PoolName, PoolSize, MaxInFlight, {ok, CurlArgs}) ->
+    Args = [MaxInFlight, CurlArgs],
+    PoolOpts = [{worker, {katipo_worker, Args}},
+                {workers, PoolSize},
+                {pool_sup_shutdown, infinity}],
+    wpool:start_sup_pool(PoolName, PoolOpts).
 
 take_max_in_flight(Opts) ->
     case lists:keytake(max_in_flight, 1, Opts) of

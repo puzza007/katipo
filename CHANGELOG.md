@@ -73,6 +73,9 @@ All notable changes to this project are documented here. This project follows
   `{error, map()}`.
 
 ### Changed
+- Pool options curl cannot take, including integers above 2147483647, now
+  fail `katipo_pool:start/3` with `bad_opts` naming them, as
+  `max_in_flight` does, rather than crashing each worker as it starts.
 - The synchronous API now rejects a `reply_to` other than the calling
   process with `bad_opts`, naming it, where before it ignored it and
   replied to the caller anyway; a bounded `stream_window` and
