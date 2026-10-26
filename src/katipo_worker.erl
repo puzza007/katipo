@@ -27,6 +27,11 @@
 
 -include("katipo_internal.hrl").
 
+%% A request in flight: the timer that bounds it, and where its outcome
+%% goes (sync, or {async, ReplyTo, Obs}).
+-record(inflight, {tref :: reference(),
+                   kind :: sync | {async, pid(), katipo_span:obs()}}).
+
 -record(state, {port :: port(),
                 reqs = #{} :: map(),
                 max_in_flight = infinity :: pos_integer() | infinity}).
@@ -123,7 +128,7 @@ at_capacity(#state{reqs = Reqs, max_in_flight = Max}) ->
 %% either the ok/response reply or a worker_died notification.
 register_req(From, Kind, #req{timeout = Timeout}, State = #state{reqs = Reqs}) ->
     Tref = erlang:start_timer(Timeout, self(), {req_timeout, From}),
-    State#state{reqs = Reqs#{From => {Tref, Kind}}}.
+    State#state{reqs = Reqs#{From => #inflight{tref = Tref, kind = Kind}}}.
 
 handle_cast(Msg, State) ->
     logger:error("Unexpected cast: ~p", [Msg]),
@@ -195,7 +200,7 @@ own_body(Body, _Frame) ->
 %% will be sent.
 forward_progress(From = {_Self, UserRef}, Reqs, BuildMsg) ->
     _ = case maps:find(From, Reqs) of
-            {ok, {_Tref, {async, ReplyTo, _Obs}}} ->
+            {ok, #inflight{kind = {async, ReplyTo, _Obs}}} ->
                 ReplyTo ! BuildMsg(UserRef),
                 ?TRACE({progress, From, forwarded});
             _ ->
@@ -206,7 +211,7 @@ forward_progress(From = {_Self, UserRef}, Reqs, BuildMsg) ->
 %% Resolve a request with its terminal result, if it is still in flight.
 finish_req(From, Result, Response, Reqs) ->
     case maps:take(From, Reqs) of
-        {{Tref, Kind}, Rest} ->
+        {#inflight{tref = Tref, kind = Kind}, Rest} ->
             _ = erlang:cancel_timer(Tref),
             deliver(Kind, From, Result, Response),
             deactivate(From, Kind),
@@ -261,7 +266,7 @@ handle_info({timeout, Tref, {req_timeout, From}},
             State = #state{port = Port, reqs = Reqs}) ->
     Reqs2 =
         case maps:take(From, Reqs) of
-            {{Tref, Kind}, Rest} ->
+            {#inflight{tref = Tref, kind = Kind}, Rest} ->
                 _ = deliver_timeout(Kind, From),
                 deactivate(From, Kind),
                 %% Abort the transfer still running in the C port: its
@@ -281,7 +286,7 @@ handle_info({cancel, Ref}, State = #state{port = Port, reqs = Reqs}) ->
     From = {self(), Ref},
     Reqs2 =
         case maps:take(From, Reqs) of
-            {{Tref, Kind = {async, _ReplyTo, Obs}}, Rest} ->
+            {#inflight{tref = Tref, kind = Kind = {async, _ReplyTo, Obs}}, Rest} ->
                 ?TRACE({cancel, From, effective}),
                 _ = erlang:cancel_timer(Tref),
                 deactivate(From, Kind),
@@ -319,9 +324,9 @@ terminate(_Reason, #state{port = Port, reqs = Reqs}) ->
     end,
     ok.
 
-notify_worker_died(From, {_Tref, {async, _, _} = Kind}) ->
+notify_worker_died(From, #inflight{kind = {async, _, _} = Kind}) ->
     deliver_error(Kind, From, katipo_req:error_map(worker_died, <<>>));
-notify_worker_died(_From, {_Tref, sync}) ->
+notify_worker_died(_From, #inflight{kind = sync}) ->
     ok.
 
 %% Ask the C port to abort the in-flight transfer identified by {Pid, Ref}
