@@ -94,6 +94,9 @@ theorem aux_reach {P : Params} {s : St} (h : Reach P s) : Aux s := by
       rcases hout h with h0 | h0 | h0 <;> simp_all
     | portDies _ hp => exact ⟨fun _ => .inr (.inr rfl), fun _ => rfl, fun _ => rfl⟩
     | unpauseReturn => exact ⟨hout, fun _ => rfl, herr⟩
+    | writeFailEvent _ _ _ _ _ _ hu =>
+      exact ⟨fun _ => .inr (.inl rfl), fun _ => hu, fun _ => rfl⟩
+    | unpauseFail => exact ⟨fun _ => .inr (.inl rfl), fun _ => rfl, fun _ => rfl⟩
     | _ => exact ⟨hout, hunp, herr⟩
 
 /-- `s` with `ex` extra grants behind everything else queued for the port. -/
@@ -161,9 +164,16 @@ theorem reachF_reach {P : Params} {s : St} (h : ReachF P s) :
           ∃ s'', Reach P s'' ∧ RelF u s'' := fun _ t' st ht =>
         ⟨t', .step hr st, ex, ht, hx, relF_side hin (inReqs_mono st)⟩
       cases hs with
-      | writePause h1 h2 h3 h4 => exact same _ _ (.writePause s' h1 h2 h3 h4) (by ext_eq)
-      | writeChunk h1 h2 h3 h4 => exact same _ _ (.writeChunk s' h1 h2 h3 h4) (by ext_eq)
-      | unpauseReturn h1 => exact same _ _ (.unpauseReturn s' h1) (by ext_eq)
+      | writePause h1 h2 h3 h4 h5 =>
+        exact same _ _ (.writePause s' h1 h2 h3 h4 h5) (by ext_eq)
+      | writeChunk h1 h2 h3 h4 h5 =>
+        exact same _ _ (.writeChunk s' h1 h2 h3 h4 h5) (by ext_eq)
+      | writeFailEvent h1 h2 h3 h4 h5 h6 h7 =>
+        exact same _ _ (.writeFailEvent s' h1 h2 h3 h4 h5 h6 h7) (by ext_eq)
+      | writeFailSync h1 h2 h3 h4 h5 h6 h7 =>
+        exact same _ _ (.writeFailSync s' h1 h2 h3 h4 h5 h6 h7) (by ext_eq)
+      | unpauseReturn h1 h2 => exact same _ _ (.unpauseReturn s' h1 h2) (by ext_eq)
+      | unpauseFail h1 h2 h3 => exact same _ _ (.unpauseFail s' h1 h2 h3) (by ext_eq)
       | complete h1 h2 h3 h4 => exact same _ _ (.complete s' h1 h2 h3 h4) (by ext_eq)
       | fail h1 h2 h3 => exact same _ _ (.fail s' h1 h2 h3) (by ext_eq)
       | workerFwd m rest h1 h2 h3 => exact same _ _ (.workerFwd s' m rest h1 h2 h3) (by ext_eq)
@@ -250,11 +260,16 @@ theorem reach_reachF {P : Params} {s' : St} (h : Reach P s') :
       · have := exNil hi
         subst this
         exact ⟨_, .step hf st, [], by cases s'; simp_all [ext], by simp, by simp⟩
-    | writePause h1 h2 h3 h4 =>
-      exact same _ (.writePause _ h1 h2 h3 h4) (by simp [ext]) (by ext_eq)
-    | writeChunk h1 h2 h3 h4 =>
-      exact same _ (.writeChunk _ h1 h2 h3 h4) (by simp [ext]) (by ext_eq)
-    | unpauseReturn h1 => exact same _ (.unpauseReturn _ h1) (by simp [ext]) (by ext_eq)
+    | writePause h1 h2 h3 h4 h5 =>
+      exact same _ (.writePause _ h1 h2 h3 h4 h5) (by simp [ext]) (by ext_eq)
+    | writeChunk h1 h2 h3 h4 h5 =>
+      exact same _ (.writeChunk _ h1 h2 h3 h4 h5) (by simp [ext]) (by ext_eq)
+    | writeFailEvent h1 h2 h3 h4 h5 h6 h7 =>
+      exact same _ (.writeFailEvent _ h1 h2 h3 h4 h5 h6 h7) (by simp [ext]) (by ext_eq)
+    | writeFailSync h1 h2 h3 h4 h5 h6 h7 =>
+      exact same _ (.writeFailSync _ h1 h2 h3 h4 h5 h6 h7) (by simp [ext]) (by ext_eq)
+    | unpauseReturn h1 h2 => exact same _ (.unpauseReturn _ h1 h2) (by simp [ext]) (by ext_eq)
+    | unpauseFail h1 h2 h3 => exact same _ (.unpauseFail _ h1 h2 h3) (by simp [ext]) (by ext_eq)
     | complete h1 h2 h3 h4 =>
       exact same _ (.complete _ h1 h2 h3 h4) (by simp [ext]) (by ext_eq)
     | fail h1 h2 h3 => exact same _ (.fail _ h1 h2 h3) (by simp [ext]) (by ext_eq)

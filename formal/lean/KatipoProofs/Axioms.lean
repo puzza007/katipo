@@ -5,6 +5,7 @@ import KatipoProofs.Admission.Trace
 import KatipoProofs.Timer.Statements
 import KatipoProofs.Upload.Statements
 import KatipoProofs.Retry.Statements
+import KatipoProofs.Limit.Statements
 
 /-!
 # Axiom pins
@@ -33,6 +34,12 @@ open KatipoProofs
 
 /-- info: 'KatipoProofs.Flow.Statements.stuck_is_good' depends on axioms: [propext, Quot.sound] -/
 #guard_msgs (whitespace := lax) in #print axioms Flow.Statements.stuck_is_good
+
+/-- info: 'KatipoProofs.Flow.Statements.fail_ends' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms Flow.Statements.fail_ends
+
+/-- info: 'KatipoProofs.Flow.Statements.swallowed_failure_stalls' depends on axioms: [propext] -/
+#guard_msgs (whitespace := lax) in #print axioms Flow.Statements.swallowed_failure_stalls
 
 /-- info: 'KatipoProofs.Flow.Statements.batch_gt_window_stalls' depends on axioms: [propext] -/
 #guard_msgs (whitespace := lax) in #print axioms Flow.Statements.batch_gt_window_stalls
@@ -171,3 +178,21 @@ open KatipoProofs
 
 /-- info: 'KatipoProofs.Retry.Statements.no_tref_spurious' does not depend on any axioms -/
 #guard_msgs (whitespace := lax) in #print axioms Retry.Statements.no_tref_spurious
+
+/-- info: 'KatipoProofs.Limit.Statements.fails_iff' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms Limit.Statements.fails_iff
+
+/-- info: 'KatipoProofs.Limit.Statements.forwarded_le' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms Limit.Statements.forwarded_le
+
+/-- info: 'KatipoProofs.Limit.Statements.forwarded_is_prefix' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms Limit.Statements.forwarded_is_prefix
+
+/-- info: 'KatipoProofs.Limit.Statements.forwarded_all' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms Limit.Statements.forwarded_all
+
+/-- info: 'KatipoProofs.Limit.Statements.refused_overflows' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms Limit.Statements.refused_overflows
+
+/-- info: 'KatipoProofs.Limit.Statements.upfront_only_sooner' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms Limit.Statements.upfront_only_sooner

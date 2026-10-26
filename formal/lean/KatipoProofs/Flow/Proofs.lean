@@ -88,9 +88,15 @@ structure Inv (P : Params) (s : St) : Prop where
   /-- a stopped worker read everything and let go of the request -/
   workerDead : s.wAlive = false →
     s.toW = [] ∧ s.inReqs = false ∧ s.exitQ = false ∧ s.pAlive = false
+  /-- `curl_easy_pause` only runs on a live conn -/
+  unpLive : s.unpausing = true → s.live = true
+  /-- `FailEnds`: a transfer `write_cb` failed inside `curl_easy_pause` is
+  over once it returns (shipped `resume_conn`) -/
+  failedEnds : P.completeOnFail = true → s.failed = true →
+    s.unpausing = true ∨ s.live = false
 
 theorem inv_init (P : Params) : Inv P (init P) := by
-  refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩ <;>
+  refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩ <;>
     simp [init, credits, outstanding]
 
 section Steps
@@ -164,15 +170,22 @@ theorem inv_flowUnpause (n : Nat) (rest : List Nat) (hq : s.pQ = n :: rest)
     pausedAgree := fun hc => by simp [hc]
     pausedWin := fun _ h => by simp at h
     cancelOut := fun h => hI.cancelOut (by simp [hq, h])
-    portDead := fun h => by simp [(hI.portDead h).1] at hl }
+    portDead := fun h => by simp [(hI.portDead h).1] at hl
+    unpLive := fun _ => hl
+    failedEnds := fun _ _ => Or.inl rfl }
 
-theorem inv_unpauseReturn :
+theorem inv_unpauseReturn (hg : (P.completeOnFail && s.failed) = false) :
     Inv P { s with unpausing := false,
                    paused := if P.clearFirst then s.paused else false } :=
   { hI with pausedAgree := fun hc => by simpa [hc] using hI.pausedAgree hc
-            portDead := fun h => ⟨(hI.portDead h).1, rfl, (hI.portDead h).2.2⟩ }
+            portDead := fun h => ⟨(hI.portDead h).1, rfl, (hI.portDead h).2.2⟩
+            unpLive := fun h => by simp at h
+            failedEnds := fun hc hf => by simp only at hf; simp [hc, hf] at hg }
 
-theorem inv_complete (hl : s.live = true) (hr : s.remaining = 0) :
+theorem inv_writeFailSync (hu : s.unpausing = true) : Inv P { s with failed := true } :=
+  { hI with failedEnds := fun _ _ => Or.inl hu }
+
+theorem inv_complete (hl : s.live = true) (hu : s.unpausing = false) (hr : s.remaining = 0) :
     Inv P { s with toW := s.toW ++ hdrs s ++ [.done], headersSent := true,
                    live := false } := by
   have c1 := hI.creditsLe; have c3 := hI.chunksEq; have c4 := hI.doneW
@@ -181,14 +194,16 @@ theorem inv_complete (hl : s.live = true) (hr : s.remaining = 0) :
   refine { hI with creditsLe := ?_, creditsEq := fun _ h => by simp at h,
                    chunksEq := ?_, doneW := ?_, deadPort := fun _ _ => by simp,
                    portDead := fun h => ⟨rfl, (hI.portDead h).2⟩,
-                   workerDead := fun h => by simp [(alive_of_live hI hl).2] at h }
+                   workerDead := fun h => by simp [(alive_of_live hI hl).2] at h,
+                   unpLive := fun h => by simp [hu] at h,
+                   failedEnds := fun _ _ => Or.inr rfl }
   · simp only [credits, outstanding, cnt_append, cnt_hdrs_chunk]; simp; omega
   · intro h1; have := c3 h1; simp only [cnt_append, cnt_hdrs_chunk]; simp; omega
   · intro _
     refine ⟨hr, rfl, s.toW ++ hdrs s, by simp, ?_⟩
     simp only [List.mem_append, not_or]; exact ⟨hnd, done_not_mem_hdrs s⟩
 
-theorem inv_fail (hl : s.live = true) :
+theorem inv_fail (hl : s.live = true) (hu : s.unpausing = false) :
     Inv P { s with toW := s.toW ++ [.error], live := false } := by
   have c1 := hI.creditsLe; have c3 := hI.chunksEq; have c4 := hI.doneW
   have hnd : Msg.done ∉ s.toW := fun h => by simp [(c4 h).2.1] at hl
@@ -196,12 +211,30 @@ theorem inv_fail (hl : s.live = true) :
   refine { hI with creditsLe := ?_, creditsEq := fun _ h => by simp at h,
                    chunksEq := ?_, doneW := ?_, deadPort := fun _ _ => by simp,
                    portDead := fun h => ⟨rfl, (hI.portDead h).2⟩,
-                   workerDead := fun h => by simp [(alive_of_live hI hl).2] at h }
+                   workerDead := fun h => by simp [(alive_of_live hI hl).2] at h,
+                   unpLive := fun h => by simp [hu] at h,
+                   failedEnds := fun _ _ => Or.inr rfl }
   · simp only [credits, outstanding, cnt_append]; simp; omega
   · intro h1; have := c3 h1; simp only [cnt_append]; simp; omega
   · intro h; simp at h; exact absurd h hnd
 
-theorem inv_portCancel (rest : List Nat) (hq : s.pQ = 0 :: rest) :
+theorem inv_unpauseFail (hu : s.unpausing = true) :
+    Inv P { s with unpausing := false, toW := s.toW ++ [.error], live := false } := by
+  have hl := hI.unpLive hu
+  have c1 := hI.creditsLe; have c3 := hI.chunksEq; have c4 := hI.doneW
+  have hnd : Msg.done ∉ s.toW := fun h => by simp [(c4 h).2.1] at hl
+  simp only [credits, outstanding] at c1
+  refine { hI with creditsLe := ?_, creditsEq := fun _ h => by simp at h,
+                   chunksEq := ?_, doneW := ?_, deadPort := fun _ _ => by simp,
+                   portDead := fun h => ⟨rfl, rfl, (hI.portDead h).2.2⟩,
+                   workerDead := fun h => by simp [(alive_of_live hI hl).2] at h,
+                   unpLive := fun h => by simp at h,
+                   failedEnds := fun _ _ => Or.inr rfl }
+  · simp only [credits, outstanding, cnt_append]; simp; omega
+  · intro h1; have := c3 h1; simp only [cnt_append]; simp; omega
+  · intro h; simp at h; exact absurd h hnd
+
+theorem inv_portCancel (rest : List Nat) (hq : s.pQ = 0 :: rest) (hu : s.unpausing = false) :
     Inv P { s with pQ := rest, live := false } := by
   have c1 := hI.creditsLe
   have hout := hI.cancelOut (by simp [hq])
@@ -212,7 +245,9 @@ theorem inv_portCancel (rest : List Nat) (hq : s.pQ = 0 :: rest) :
     doneW := fun h => ⟨(hI.doneW h).1, rfl, (hI.doneW h).2.2⟩
     deadPort := fun h => by simp [hout] at h
     cancelOut := fun h => hI.cancelOut (by simp [hq, h])
-    portDead := fun h => ⟨rfl, (hI.portDead h).2⟩ }
+    portDead := fun h => ⟨rfl, (hI.portDead h).2⟩
+    unpLive := fun h => by simp [hu] at h
+    failedEnds := fun _ _ => Or.inr rfl }
 
 /-- Shared by the two steps that pop the port -> worker pipe. -/
 theorem doneW_tail {m : Msg} {rest : List Msg} (hq : s.toW = m :: rest)
@@ -353,7 +388,9 @@ theorem inv_portDies (hp : s.pAlive = true) :
     deadPort := fun _ _ => by simp
     portLife := fun h => by simp at h
     portDead := fun _ => ⟨rfl, rfl, Or.inl rfl⟩
-    workerDead := fun h => by simp [(hI.portLife hp).1] at h }
+    workerDead := fun h => by simp [(hI.portLife hp).1] at h
+    unpLive := fun h => by simp at h
+    failedEnds := fun _ _ => Or.inr rfl }
 
 theorem inv_workerExit (hx : s.exitQ = true) (hW : s.toW = []) :
     Inv P { s with wAlive := false, exitQ := false, inReqs := false,
@@ -452,13 +489,16 @@ theorem inv_step {P : Params} {s t : St} (hI : Inv P s) (h : Step P s t) : Inv P
   cases h with
   | writePause _ _ _ hw => exact inv_writePause hI hw
   | writeChunk hl hc hr hw => exact inv_writeChunk hI hl hc hr hw
+  | writeFailEvent _ hl _ _ _ _ hu => exact inv_fail hI hl hu
+  | writeFailSync _ _ _ _ _ _ hu => exact inv_writeFailSync hI hu
+  | unpauseFail hu => exact inv_unpauseFail hI hu
   | flowDead n rest _ hq _ hl => exact inv_flowDead hI n rest hq hl
   | flowRun n rest _ hq _ _ hp => exact inv_flowRun hI n rest hq hp
   | flowUnpause n rest _ hq _ hl => exact inv_flowUnpause hI n rest hq hl
-  | unpauseReturn => exact inv_unpauseReturn hI
-  | complete hl _ hr => exact inv_complete hI hl hr
-  | fail _ hl => exact inv_fail hI hl
-  | portCancel rest _ hq => exact inv_portCancel hI rest hq
+  | unpauseReturn _ hg => exact inv_unpauseReturn hI hg
+  | complete hl hu hr => exact inv_complete hI hl hu hr
+  | fail _ hl hu => exact inv_fail hI hl hu
+  | portCancel rest hu hq => exact inv_portCancel hI rest hq hu
   | workerFwd m rest hq hr hw => exact inv_workerFwd hI m rest hq hr hw
   | workerDrop m rest hq hr hw => exact inv_workerDrop hI m rest hq hr hw
   | workerFlow n rest hq => exact inv_workerFlow hI n rest hq
@@ -490,6 +530,10 @@ theorem no_lost_chunks_proof (P : Params) (s : St) (h : Reach P s)
     (hd : s.seenDone = true) : s.chunksSeen = P.total :=
   ((inv_reach h).seenDoneAll hd).2.2
 
+theorem fail_ends_proof (P : Params) (hf : P.completeOnFail = true) (s : St)
+    (h : Reach P s) (hfl : s.failed = true) (hu : s.unpausing = false) : s.live = false := by
+  rcases (inv_reach h).failedEnds hf hfl with h' | h' <;> simp_all
+
 theorem paused_agrees_proof (P : Params) (hc : P.clearFirst = true) (s : St)
     (h : Reach P s) : s.paused = s.curlPaused :=
   (inv_reach h).pausedAgree hc
@@ -500,21 +544,24 @@ theorem paused_agrees_proof (P : Params) (hc : P.clearFirst = true) (s : St)
 owed 5 > grant 4 > port command 3), a body chunk outweighs the two
 messages it can produce, and each one-way flag pays for what flipping it
 enqueues. A port death costs 3 (`P.deaths` only) and queues an `'EXIT'`
-worth 1. -/
+worth 1; a `write_cb` failure inside `curl_easy_pause` costs 1
+(`P.limits` only). -/
 def pot (P : Params) (s : St) : Nat :=
   15 * s.remaining + 7 * s.toW.length + 6 * s.toC.length + 5 * s.owed
     + 4 * s.flowQ.length + 3 * s.pQ.length + 4 * s.cancelQ.toNat
     + 15 * s.live.toNat + (1 - s.curlPaused.toNat) + s.unpausing.toNat
     + 10 * s.inReqs.toNat + 5 * (1 - s.cancelled.toNat)
-    + 3 * (P.deaths && s.pAlive).toNat + s.exitQ.toNat
+    + 3 * (P.deaths && s.pAlive).toNat + s.exitQ.toNat + (P.limits && !s.failed).toNat
 
 theorem hdrs_length (s : St) : (hdrs s).length ≤ 1 := by
   unfold hdrs; split <;> simp
 
-theorem pot_init (P : Params) : pot P (init P) = 15 * P.total + 31 + 3 * P.deaths.toNat := by
+theorem pot_init (P : Params) :
+    pot P (init P) = 15 * P.total + 31 + 3 * P.deaths.toNat + P.limits.toNat := by
   simp [pot, init]
 
-theorem pot_step {P : Params} {s t : St} (h : Step P s t) : pot P t < pot P s := by
+theorem pot_step {P : Params} {s t : St} (hI : Inv P s) (h : Step P s t) :
+    pot P t < pot P s := by
   have hb := P.batch_pos
   have hh := hdrs_length s
   have := Bool.toNat_le s.cancelQ; have := Bool.toNat_le s.live; have := Bool.toNat_le s.curlPaused
@@ -527,6 +574,15 @@ theorem pot_step {P : Params} {s t : St} (h : Step P s t) : pot P t < pot P s :=
   | flowRun _ _ _ hq => simp only [pot, hq, List.length_cons]; omega
   | flowUnpause _ _ hu hq => simp only [pot, hq, hu, List.length_cons, Bool.toNat_true, Bool.toNat_false]; omega
   | unpauseReturn hu => simp only [pot, hu, Bool.toNat_true, Bool.toNat_false]; omega
+  | writeFailEvent _ hl =>
+    simp only [pot, hl, List.length_append, List.length_cons, List.length_nil,
+      Bool.toNat_true, Bool.toNat_false]; omega
+  | writeFailSync hlim _ _ _ _ hf =>
+    simp only [pot, hlim, hf, Bool.not_false, Bool.not_true, Bool.and_true, Bool.and_false,
+      Bool.toNat_true, Bool.toNat_false]; omega
+  | unpauseFail hu =>
+    simp only [pot, hu, hI.unpLive hu, List.length_append, List.length_cons, List.length_nil,
+      Bool.toNat_true, Bool.toNat_false]; omega
   | complete hl =>
     simp only [pot, hl, List.length_append, List.length_cons, List.length_nil,
       Bool.toNat_true, Bool.toNat_false] at *; omega
@@ -563,14 +619,19 @@ theorem pot_step {P : Params} {s t : St} (h : Step P s t) : pot P t < pot P s :=
 
 theorem steps_bounded_proof (P : Params) (f : Nat → St) (n : Nat) (h0 : f 0 = init P)
     (hs : ∀ i, i < n → Step P (f i) (f (i + 1))) :
-    n ≤ 15 * P.total + 31 + 3 * P.deaths.toNat := by
+    n ≤ 15 * P.total + 31 + 3 * P.deaths.toNat + P.limits.toNat := by
+  have reach : ∀ i, i ≤ n → Reach P (f i) := by
+    intro i
+    induction i with
+    | zero => intro _; rw [h0]; exact .init
+    | succ k ih => intro hk; exact .step (ih (by omega)) (hs k (by omega))
   have key : ∀ i, i ≤ n → pot P (f i) + i ≤ pot P (f 0) := by
     intro i
     induction i with
     | zero => intro _; omega
     | succ k ih =>
       intro hk
-      have := pot_step (hs k (by omega))
+      have := pot_step (inv_reach (reach k (by omega))) (hs k (by omega))
       have := ih (by omega)
       omega
   have := key n (Nat.le_refl n)
@@ -580,7 +641,8 @@ theorem steps_bounded_proof (P : Params) (f : Nat → St) (n : Nat) (h0 : f 0 = 
 /-! ## Stuck states are good -/
 
 theorem stuck_is_good_proof (P : Params) (hc : P.clearFirst = true)
-    (hb : P.batch ≤ P.W) (s : St) (h : Reach P s) (hs : Stuck P s) :
+    (hf : P.completeOnFail = true) (hb : P.batch ≤ P.W) (s : St) (h : Reach P s)
+    (hs : Stuck P s) :
     Good s := by
   have hI := inv_reach h
   have hC : s.toC = [] := by
@@ -613,7 +675,9 @@ theorem stuck_is_good_proof (P : Params) (hc : P.clearFirst = true)
   have hU : s.unpausing = false := by
     cases hq : s.unpausing
     · rfl
-    · exact absurd (Step.unpauseReturn s hq) (hs _)
+    · cases hfl : s.failed
+      · exact absurd (Step.unpauseReturn s hq (by simp [hfl])) (hs _)
+      · exact absurd (Step.unpauseFail s hq hf hfl) (hs _)
   have hQ : s.pQ = [] := by
     cases hq : s.pQ with
     | nil => rfl
@@ -632,13 +696,17 @@ theorem stuck_is_good_proof (P : Params) (hc : P.clearFirst = true)
       cases hl : s.live
       · rcases hI.deadPort hr hl with h' | h' | h' <;> simp_all
       · rfl
+    have hfl : s.failed = false := by
+      cases hfl : s.failed
+      · rfl
+      · rcases hI.failedEnds hf hfl with h' | h' <;> simp_all
     have hcp : s.curlPaused = true := by
       cases hcp : s.curlPaused
       · by_cases hrem : s.remaining = 0
         · exact absurd (Step.complete s hl hU hrem hcp) (hs _)
         · by_cases hw : s.window = 0
-          · exact absurd (Step.writePause s hl hcp (by omega) hw) (hs _)
-          · exact absurd (Step.writeChunk s hl hcp (by omega) hw) (hs _)
+          · exact absurd (Step.writePause s hl hcp (by omega) hw hfl) (hs _)
+          · exact absurd (Step.writeChunk s hl hcp (by omega) hw hfl) (hs _)
       · rfl
     have hw := hI.pausedWin hc hcp
     have hcr := hI.creditsEq hr hl

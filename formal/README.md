@@ -74,6 +74,9 @@ re-pause), the worker relay, and a consumer granting credits back through
 time, and so can the C port dying (`PortDeathsOn`: the worker reads the
 port's `'EXIT'` after everything the port sent, stops, and `terminate/2`
 sends `worker_died`) or the worker being killed outright (`KillsOn`).
+With `LimitOn`, `write_cb` may fail any chunk for `max_body_size`, from the
+socket or as curl re-delivers it inside `curl_easy_pause`; `CompleteOnFail`
+is whether `resume_conn` then completes the transfer itself.
 
 | config | question | result |
 |---|---|---|
@@ -84,15 +87,26 @@ sends `worker_died`) or the worker being killed outright (`KillsOn`).
 | `KatipoFlowCrash.cfg` | everything above, with the port dying at any moment (even inside `curl_easy_pause`) | pass (13,375 states) |
 | `KatipoFlowCrashLiveness.cfg` | port death the only hostile event: a granting consumer still always gets a terminal | pass |
 | `KatipoFlowKill.cfg` | the worker killed outright | **fails** as expected: nothing ever arrives (the documented caveat) |
+| `KatipoFlowLimit.cfg` | everything above, with `max_body_size` able to fail any chunk; a failure inside `curl_easy_pause` ends the transfer when it returns (`FailEnds`) | pass (14,541 states) |
+| `KatipoFlowLimitLiveness.cfg` | `max_body_size` the only way to fail: a granting consumer still always gets a terminal | pass |
+| `KatipoFlowLimitSwallowed.cfg` | sabotage: `resume_conn` ignores `curl_easy_pause`'s result, as it first shipped | **fails** as expected: the chunk re-delivered on resume fails and nothing ends the transfer but the request timer |
 
 `KatipoFlowPausedLate.cfg` shows that the ordering comment in `flow_conn`
 is load-bearing. With `-inv WitnessPaused`, `WitnessRepause`,
 `WitnessFullWindow` and (on the crash config) `WitnessDiedMidBody`, TLC
 reports each of those states as reachable, so the passing configs are not
-vacuous. Dropping `terminate/2`'s `worker_died` makes
+vacuous; so is `WitnessFailOnResume` on the limit config. Dropping `terminate/2`'s `worker_died` makes
 `KatipoFlowCrashLiveness.cfg` fail. `streaming_worker_death_mid_body` in
 `katipo_SUITE` checks the same thing against the real code: headers, a
 chunk, a port kill, then exactly one `worker_died` and silence.
+
+**Found:** `KatipoFlowLimitSwallowed.cfg` is the hang a review reproduced on
+libcurl 8.7.1: with `stream_window => 1`, the chunk that takes the body past
+`max_body_size` was the one curl re-delivers inside `curl_easy_pause`, whose
+error `resume_conn` dropped, so the error only came at `timeout_ms`.
+`resumed_over_limit` in `katipo_limits_SUITE` reproduces it (fails on 8.7.1
+before the fix, passes after), and `fuzz_transfer` now re-delivers a held
+chunk inside a stand-in `curl_easy_pause` and checks the transfer ends then.
 
 
 ### Body handoff in the C port
@@ -254,13 +268,15 @@ theorem to the standard axioms with `#guard_msgs`, so a `sorry`,
 `native_decide` or new `axiom` breaks the build. The script also re-runs the
 TLC ↔ Lean state-graph cross-check.
 
-Headline statements live in `Flow/Statements.lean` and
-`Admission/Statements.lean`; proofs only delegate to them.
+Headline statements live in each topic's `Statements.lean`; proofs only
+delegate to them.
 
 ### Flow control: every window and body size
 
 With `P.deaths`, every theorem below also covers the C port dying at any
-moment, the worker then reading its `'EXIT'` and stopping.
+moment, the worker then reading its `'EXIT'` and stopping. With `P.limits`,
+it also covers `write_cb` failing any chunk for `max_body_size`, from the
+socket or inside `curl_easy_pause`.
 
 | theorem | says |
 |---|---|
@@ -268,10 +284,17 @@ moment, the worker then reading its `'EXIT'` and stopping.
 | `bounded_buffering` | at most `W` chunks are ever buffered between the C port and the consumer |
 | `no_lost_chunks` | `done` implies every body chunk arrived |
 | `paused_agrees` | katipo's `paused` flag always equals libcurl's pause state, including inside `curl_easy_pause` |
-| `steps_bounded` | every execution, fair or not, ends within `15·total + 31` steps (3 more if the port may die) |
-| `stuck_is_good` | with `batch ≤ W`, any state with no enabled step has delivered a terminal message or was cancelled, port death included |
+| `fail_ends` | a transfer `write_cb` failed inside `curl_easy_pause` is over once it returns |
+| `steps_bounded` | every execution, fair or not, ends within `15·total + 31` steps (3 more if the port may die, 1 more with `max_body_size`) |
+| `stuck_is_good` | with `batch ≤ W` and the shipped `resume_conn`, any state with no enabled step has delivered a terminal message or was cancelled, port death and `max_body_size` included |
 | `batch_gt_window_stalls` | `batch ≤ W` is necessary (explicit trace) |
 | `clear_late_stalls` | the `flow_conn` ordering is necessary (explicit trace) |
+| `swallowed_failure_stalls` | `resume_conn` completing a failed transfer is necessary (explicit trace) |
+
+The statements were re-frozen for `max_body_size`: the earlier model is the
+case `P.limits = false`, `steps_bounded`'s bound gained `P.limits`, and
+`stuck_is_good` gained the `resume_conn` hypothesis, which
+`swallowed_failure_stalls` shows it cannot do without.
 
 Together, `steps_bounded` and `stuck_is_good` say every run of the shipped
 protocol ends well, with no fairness assumption. TLC needed weak fairness for
@@ -279,12 +302,26 @@ the same conclusion.
 
 **Cross-check.** `Flow/Executable.lean` defines a computable `succs`, proved
 equal to `Step` (`succs_iff`). `scripts/FlowGraph.lean` enumerates its
-reachable graph for `KatipoFlow.cfg`'s instance and for
-`KatipoFlowCrash.cfg`'s, and `scripts/crosscheck_flow.py` diffs each against
-TLC's `-dump dot`. Both pairs are identical: 7,777 states and 23,546 edges,
-and 13,375 states and 42,894 edges. Mutating one TLA+ action
+reachable graph for the instances of `KatipoFlow.cfg`, `KatipoFlowCrash.cfg`
+and `KatipoFlowLimit.cfg`, and `scripts/crosscheck_flow.py` diffs each
+against TLC's `-dump dot`. All three pairs are identical: 7,777 states and
+23,546 edges, 13,375 states and 42,894 edges, and 14,541 states and 45,986
+edges. Mutating one TLA+ action
 (the timeout no longer aborts the port) makes the diff report 2,028 / 4,056
 unmatched states.
+
+### `max_body_size`: any limit and any chunk sizes
+
+`Limit/Model.lean` transcribes `body_too_large` and `write_cb`'s use of it
+over the chunks curl hands it, with any Content-Length or none.
+
+| theorem | says |
+|---|---|
+| `fails_iff` | without a usable Content-Length, the transfer fails exactly when the decoded body is over the limit |
+| `forwarded_le` | whatever the Content-Length, no more than the limit is ever forwarded |
+| `forwarded_is_prefix`, `forwarded_all` | what is forwarded is the body's first chunks, in order, and all of them unless the transfer failed |
+| `refused_overflows` | the chunk refused is the one that would have gone over: nothing that fits is refused |
+| `upfront_only_sooner` | with an honest Content-Length, the up-front check changes no verdict, and a failure forwards nothing |
 
 ### Admission and delivery: any number of requests and crashes
 

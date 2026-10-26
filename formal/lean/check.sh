@@ -12,8 +12,12 @@ if grep -rnE '\bsorry\b|native_decide|^axiom ' KatipoProofs --include=*.lean \
 fi
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
-for cfg in KatipoFlow KatipoFlowCrash; do
-  arg=$([ "$cfg" = KatipoFlowCrash ] && echo crash || true)
+for cfg in KatipoFlow KatipoFlowCrash KatipoFlowLimit; do
+  case "$cfg" in
+    KatipoFlowCrash) arg=crash ;;
+    KatipoFlowLimit) arg=limit ;;
+    *) arg= ;;
+  esac
   (cd .. && tlc -workers 1 -deadlock -config "$cfg.cfg" \
      -dump dot,actionlabels "$tmp/$cfg.dot" KatipoFlow.tla >/dev/null)
   lake env lean --run scripts/FlowGraph.lean $arg > "$tmp/$cfg.txt"

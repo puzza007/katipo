@@ -21,6 +21,9 @@ after it. `EventWrite` and `SyncWrite` differ only in a guard on
 * The worker's one mailbox is split into per-sender FIFO queues read in any
   order, which is exactly Erlang's guarantee.
 
+* With `P.limits`, `write_cb` may fail any chunk it has a credit for
+  (`max_body_size`), from the socket or inside `curl_easy_pause`.
+
 * With `P.deaths`, the C port may die at any moment, even inside
   `curl_easy_pause`. The worker reads the port's `'EXIT'` after everything
   the port sent before it (`exitQ`), then stops; `terminate/2` sends
@@ -44,6 +47,8 @@ after it. `EventWrite` and `SyncWrite` differ only in a guard on
 | `batch`      | consumer grants once this many credits are owed   |
 | `deaths`     | the C port may die mid-transfer                   |
 | `clearFirst` | `flow_conn` clears `paused` before `curl_easy_pause` (shipped: `true`) |
+| `limits`     | `max_body_size` may fail a chunk                  |
+| `completeOnFail` | `resume_conn` completes a transfer whose `curl_easy_pause` failed (shipped: `true`) |
 -/
 
 namespace KatipoProofs.Flow
@@ -61,6 +66,8 @@ structure Params where
   failures : Bool
   deaths : Bool
   clearFirst : Bool
+  limits : Bool
+  completeOnFail : Bool
   W_pos : 0 < W
   batch_pos : 0 < batch
 
@@ -89,6 +96,8 @@ structure St where
   pAlive : Bool
   wAlive : Bool
   exitQ : Bool
+  /-- `write_cb` failed the transfer inside `curl_easy_pause` -/
+  failed : Bool
   deriving DecidableEq, Repr
 
 /-- `Init`. -/
@@ -116,6 +125,7 @@ def init (P : Params) : St where
   pAlive := true
   wAlive := true
   exitQ := false
+  failed := false
 
 /-- `HeadersIfOwed`. -/
 def hdrs (s : St) : List Msg := if s.headersSent then [] else [.headers]
@@ -139,11 +149,11 @@ def recv (s : St) (m : Msg) (rest : List Msg) : St :=
 inductive Step (P : Params) : St → St → Prop
   /-- `write_cb` out of credits: pause, curl keeps the data. -/
   | writePause (s : St) : s.live = true → s.curlPaused = false →
-      0 < s.remaining → s.window = 0 →
+      0 < s.remaining → s.window = 0 → s.failed = false →
       Step P s { s with paused := true, curlPaused := true }
   /-- `write_cb` with a credit: headers (once) and a chunk. -/
   | writeChunk (s : St) : s.live = true → s.curlPaused = false →
-      0 < s.remaining → s.window ≠ 0 →
+      0 < s.remaining → s.window ≠ 0 → s.failed = false →
       Step P s { s with toW := s.toW ++ hdrs s ++ [.chunk], headersSent := true,
                         window := s.window - 1, remaining := s.remaining - 1 }
   /-- `flow_conn` on a freed conn (`find_conn` returns NULL). -/
@@ -160,10 +170,23 @@ inductive Step (P : Params) : St → St → Prop
       Step P s { s with pQ := rest, window := s.window + n, curlPaused := false,
                         unpausing := true,
                         paused := if P.clearFirst then false else s.paused }
+  /-- `write_cb` failing a chunk from the socket (`WriteFail`): curl ends
+  the transfer and `check_multi_info` reports the port's error at once. -/
+  | writeFailEvent (s : St) : P.limits = true → s.live = true → s.curlPaused = false →
+      0 < s.remaining → s.window ≠ 0 → s.failed = false → s.unpausing = false →
+      Step P s { s with toW := s.toW ++ [.error], live := false }
+  /-- `write_cb` failing a chunk inside `curl_easy_pause` (`WriteFail`). -/
+  | writeFailSync (s : St) : P.limits = true → s.live = true → s.curlPaused = false →
+      0 < s.remaining → s.window ≠ 0 → s.failed = false → s.unpausing = true →
+      Step P s { s with failed := true }
   /-- `curl_easy_pause` returns. -/
-  | unpauseReturn (s : St) : s.unpausing = true →
+  | unpauseReturn (s : St) : s.unpausing = true → (P.completeOnFail && s.failed) = false →
       Step P s { s with unpausing := false,
                         paused := if P.clearFirst then s.paused else false }
+  /-- `curl_easy_pause` returns `write_cb`'s failure, and `resume_conn`
+  completes the transfer with it (`UnpauseFail`). -/
+  | unpauseFail (s : St) : s.unpausing = true → P.completeOnFail = true → s.failed = true →
+      Step P s { s with unpausing := false, toW := s.toW ++ [.error], live := false }
   /-- `check_multi_info`, `CURLE_OK`. -/
   | complete (s : St) : s.live = true → s.unpausing = false → s.remaining = 0 →
       s.curlPaused = false →
