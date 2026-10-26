@@ -6,6 +6,18 @@ All notable changes to this project are documented here. This project follows
 ## [Unreleased]
 
 ### Added
+- `retry => true | #{...}` sends a request again when an attempt fails:
+  by default an idempotent request (GET, HEAD, OPTIONS, PUT, DELETE),
+  up to 3 more times, after a connection error, a timeout, or a 429 or
+  503. Each wait is a random time up to 100 ms doubled for each retry
+  already sent, capped at 5 s, or as long as a `Retry-After` header asks
+  (in seconds or as a date); a `Retry-After` past the cap returns the
+  response. The methods, statuses, error codes, limit and delays are all
+  settable. Retries happen in the worker, so an async request keeps one
+  `Ref` and `cancel/2` works during a backoff. A streamed body or response
+  cannot be retried, so `retry` with either is `bad_opts`. The protocol is
+  modelled in `formal/KatipoRetry.tla` and its safety proved for any
+  number of requests and retries in `formal/lean/KatipoProofs/Retry`.
 - `body => {stream, #{}}` (async only) sends a request body the caller
   produces as the request goes: the C port asks for each chunk with a
   `{katipo_body_demand, Ref}` message once curl has sent the last, and

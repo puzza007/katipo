@@ -91,6 +91,9 @@
 
 -define(DEFAULT_REQ_TIMEOUT, 30000).
 
+%% calendar:datetime_to_gregorian_seconds({{1970, 1, 1}, {0, 0, 0}}).
+-define(UNIX_EPOCH_GREGORIAN, 62167219200).
+
 %% The keys of ?KATIPO_ASYNC_OPTS_FIELDS (katipo_types.hrl): the options
 %% only the async API acts on. Keep the two in step.
 -define(KATIPO_ASYNC_OPTS, [reply_to, stream, stream_window]).
@@ -203,7 +206,8 @@
           ca_cache_timeout = 86400 :: integer(),
           pipewait = ?PIPEWAIT_TRUE :: ?PIPEWAIT_FALSE | ?PIPEWAIT_TRUE,
           stream = ?STREAM_FALSE :: ?STREAM_FALSE | ?STREAM_TRUE,
-          stream_window = ?STREAM_WINDOW_UNLIMITED :: integer()
+          stream_window = ?STREAM_WINDOW_UNLIMITED :: integer(),
+          retry = undefined :: undefined | katipo_retry:policy()
          }).
 
 -endif.

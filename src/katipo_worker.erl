@@ -27,13 +27,28 @@
 
 -include("katipo_internal.hrl").
 
-%% A request in flight: the timer that bounds it, and where its outcome
-%% goes (sync, or {async, ReplyTo, Obs}).
+%% The {Pid, Ref} a transfer is known by in the C port.
+-type port_id() :: {pid(), reference()}.
+
+%% A request in flight, under the key its caller knows it by: From for a
+%% sync request, {self(), Alias} for an async one. It holds the timer that
+%% bounds the current attempt, or the backoff before the next; where its
+%% outcome goes (sync, or {async, ReplyTo, Obs}); the port_id of its
+%% current transfer, or `backoff' between attempts; and, only for a
+%% request with a retry policy, the request itself and the number of
+%% retries sent so far. The first transfer's port_id is the key itself;
+%% each retry's is fresh, so that output from an attempt that was given up
+%% on can never be taken for the current one's.
 -record(inflight, {tref :: reference(),
-                   kind :: sync | {async, pid(), katipo_span:obs()}}).
+                   kind :: sync | {async, pid(), katipo_span:obs()},
+                   port_id :: port_id() | backoff,
+                   req :: undefined | #req{},
+                   retries = 0 :: non_neg_integer()}).
 
 -record(state, {port :: port(),
                 reqs = #{} :: map(),
+                %% The key of each request whose port_id is not the key.
+                ids = #{} :: #{port_id() => port_id()},
                 max_in_flight = infinity :: pos_integer() | infinity}).
 
 -type curlmopt() ::
@@ -69,7 +84,7 @@ handle_call(Msg, From, State) ->
     end.
 
 admit_call(Req = #req{}, From, State = #state{port = Port}) ->
-    send_to_port(Port, From, Req),
+    true = port_command(Port, command(From, Req)),
     {noreply, register_req(From, sync, Req, State)};
 admit_call({async_req, ReplyTo, Req = #req{}, Obs, Deadline}, _From,
            State = #state{port = Port}) ->
@@ -95,7 +110,7 @@ admit_call({async_req, ReplyTo, Req = #req{}, Obs, Deadline}, _From,
             ?TRACE(sending),
             Alias = alias(),
             From = {self(), Alias},
-            send_to_port(Port, From, Req),
+            true = port_command(Port, command(From, Req)),
             ?TRACE({clock, Deadline}),
             case past(Deadline) of
                 true ->
@@ -119,52 +134,65 @@ at_capacity(#state{reqs = Reqs, max_in_flight = Max}) ->
     maps:size(Reqs) >= Max.
 
 %% Register a request already handed to the port: arm its timer, record it
-%% in Reqs. send_to_port runs BEFORE this on purpose: if the port is already
+%% in Reqs. The port_command runs BEFORE this on purpose: if the port is already
 %% closed, port_command's badarg crashes us while this request is still
 %% unregistered, so terminate/2 sends nothing for it and the caller's call
 %% monitor reports the death instead. Registering first would make terminate
 %% AND the call monitor both report it. The insert and the reply have no
 %% crash point between them, so an admitted request is always exactly-once:
 %% either the ok/response reply or a worker_died notification.
-register_req(From, Kind, #req{timeout = Timeout}, State = #state{reqs = Reqs}) ->
+register_req(From, Kind, Req = #req{timeout = Timeout, retry = Retry},
+             State = #state{reqs = Reqs}) ->
     Tref = erlang:start_timer(Timeout, self(), {req_timeout, From}),
-    State#state{reqs = Reqs#{From => #inflight{tref = Tref, kind = Kind}}}.
+    Kept = case Retry of undefined -> undefined; _ -> Req end,
+    State#state{reqs = Reqs#{From => #inflight{tref = Tref, kind = Kind,
+                                               port_id = From, req = Kept}}}.
 
 handle_cast(Msg, State) ->
     logger:error("Unexpected cast: ~p", [Msg]),
     {noreply, State}.
 
-%% One decoded message from the C port. Terminal messages ({ok, ...},
-%% {error, ...}, {done, ...}) resolve the request: cancel its timer, deliver,
-%% and drop it from Reqs. Streaming progress messages ({headers, ...},
-%% {chunk, ...}) are forwarded to the async reply_to and leave the request in
-%% flight. Any message whose From is no longer in Reqs is dropped silently --
-%% the request timed out, was cancelled, or already completed.
-handle_port_msg({ok, {From, {Status, Headers, CookieJar, Body, Metrics}}}, Reqs) ->
+%% One decoded message from the C port, for the transfer it names.
+%% Terminal messages ({ok, ...}, {error, ...}, {done, ...}) end the
+%% attempt: the request is retried or resolved (attempt_ended/4).
+%% Streaming progress messages ({headers, ...}, {chunk, ...}) are forwarded
+%% to the async reply_to and leave the request in flight. Any message for a
+%% transfer that is not a request's current one is dropped silently -- the
+%% request timed out, was cancelled, already completed, or has moved on to
+%% another attempt.
+handle_port_msg({ok, {PortId, {Status, Headers, CookieJar, Body, Metrics}}}, State) ->
     R = #{status => Status,
           headers => parse_headers(Headers),
           cookiejar => CookieJar,
           body => Body},
-    finish_req(From, ok, {R, Metrics}, Reqs);
-handle_port_msg({error, {From, {Code, Message, Metrics}}}, Reqs) ->
+    attempt_ended(PortId, ok, {R, Metrics}, State);
+handle_port_msg({error, {PortId, {Code, Message, Metrics}}}, State) ->
     Error = #{code => Code, message => Message},
-    finish_req(From, error, {Error, Metrics}, Reqs);
-handle_port_msg({headers, {From, {Status, Headers}}}, Reqs) ->
-    forward_progress(From, Reqs,
+    attempt_ended(PortId, error, {Error, Metrics}, State);
+handle_port_msg({headers, {PortId, {Status, Headers}}}, State) ->
+    forward_progress(PortId, State,
                      fun(UserRef) ->
                              {katipo_headers, UserRef,
                               #{status => Status,
                                 headers => parse_headers(Headers)}}
                      end);
-handle_port_msg({demand, {From, []}}, Reqs) ->
-    forward_progress(From, Reqs,
+handle_port_msg({demand, {PortId, []}}, State) ->
+    forward_progress(PortId, State,
                      fun(UserRef) -> {katipo_body_demand, UserRef} end);
-handle_port_msg({chunk, {From, Body}}, Reqs) ->
-    forward_progress(From, Reqs,
+handle_port_msg({chunk, {PortId, Body}}, State) ->
+    forward_progress(PortId, State,
                      fun(UserRef) -> {katipo_chunk, UserRef, Body} end);
-handle_port_msg({done, {From, {Status, CookieJar, Metrics}}}, Reqs) ->
+handle_port_msg({done, {PortId, {Status, CookieJar, Metrics}}}, State) ->
     Done = #{status => Status, cookiejar => CookieJar},
-    finish_req(From, done, {Done, Metrics}, Reqs).
+    attempt_ended(PortId, done, {Done, Metrics}, State).
+
+%% The request whose current transfer is PortId, as {Key, Entry}.
+current(PortId, #state{reqs = Reqs, ids = Ids}) ->
+    Key = maps:get(PortId, Ids, PortId),
+    case Reqs of
+        #{Key := Entry = #inflight{port_id = PortId}} -> {Key, Entry};
+        _ -> error
+    end.
 
 %% Decode one port frame. An ok or chunk frame is a body frame: its term
 %% has an empty-binary placeholder for the body, whose raw bytes follow the
@@ -194,32 +222,86 @@ own_body(Body, Frame) when byte_size(Body) * 2 >= byte_size(Frame) ->
 own_body(Body, _Frame) ->
     binary:copy(Body).
 
-%% Progress messages forward to the async reply_to iff the request is still
-%% in flight; otherwise they are dropped silently (the request timed out,
-%% was cancelled, or already completed). The message is only built when it
-%% will be sent.
-forward_progress(From = {_Self, UserRef}, Reqs, BuildMsg) ->
-    _ = case maps:find(From, Reqs) of
-            {ok, #inflight{kind = {async, ReplyTo, _Obs}}} ->
+%% Progress messages forward to the async reply_to iff the transfer is
+%% its request's current one; otherwise they are dropped silently (the
+%% request timed out, was cancelled, or already completed). The message is
+%% only built when it will be sent.
+forward_progress(PortId, State, BuildMsg) ->
+    _ = case current(PortId, State) of
+            {Key = {_Self, UserRef}, #inflight{kind = {async, ReplyTo, _Obs}}} ->
                 ReplyTo ! BuildMsg(UserRef),
-                ?TRACE({progress, From, forwarded});
+                ?TRACE({progress, Key, forwarded});
             _ ->
-                ?TRACE({progress, From, dropped})
+                ?TRACE({progress, PortId, dropped})
         end,
-    Reqs.
+    State.
 
-%% Resolve a request with its terminal result, if it is still in flight.
-finish_req(From, Result, Response, Reqs) ->
-    case maps:take(From, Reqs) of
-        {#inflight{tref = Tref, kind = Kind}, Rest} ->
+%% A transfer ended with its terminal result. If it is its request's
+%% current one, the request is retried or resolved.
+attempt_ended(PortId, Result, Response, State) ->
+    case current(PortId, State) of
+        {Key, Entry = #inflight{tref = Tref}} ->
             _ = erlang:cancel_timer(Tref),
-            deliver(Kind, From, Result, Response),
-            deactivate(From, Kind),
-            Rest;
+            retry_or_resolve(Key, Entry, Result, Response, State);
         error ->
-            ?TRACE({terminal, From, dropped}),
-            Reqs
+            ?TRACE({terminal, PortId, dropped}),
+            State
     end.
+
+%% Wait and send the request again if its retry policy says to, else
+%% resolve it with this result.
+retry_or_resolve(Key, Entry = #inflight{kind = Kind, port_id = PortId},
+                 Result, Response, State = #state{reqs = Reqs, ids = Ids}) ->
+    Ids2 = maps:remove(PortId, Ids),
+    case retry_delay(Entry, Result, Response) of
+        {ok, Delay} ->
+            Tref = erlang:start_timer(Delay, self(), {retry, Key}),
+            State#state{reqs = Reqs#{Key := Entry#inflight{tref = Tref,
+                                                           port_id = backoff}},
+                        ids = Ids2};
+        none ->
+            deliver(Kind, Key, Result, Response),
+            deactivate(Key, Kind),
+            State#state{reqs = maps:remove(Key, Reqs), ids = Ids2}
+    end.
+
+retry_delay(#inflight{req = undefined}, _Result, _Response) ->
+    none;
+retry_delay(#inflight{req = #req{retry = Policy}, retries = Retries},
+            Result, {ResponseMap, _Metrics}) ->
+    katipo_retry:delay(Policy, Retries, Result, ResponseMap, os:system_time(second)).
+
+%% Send the request in backoff under Key again, as a fresh transfer. A
+%% failed write means the port has died, and its 'EXIT' will stop us.
+retry(Key, State = #state{port = Port, reqs = Reqs, ids = Ids}) ->
+    Entry = #inflight{req = Req, retries = Retries} = maps:get(Key, Reqs),
+    PortId = {self(), make_ref()},
+    port_cmd(Port, command(PortId, Req)),
+    Tref = erlang:start_timer(Req#req.timeout, self(), {req_timeout, Key}),
+    State#state{reqs = Reqs#{Key := Entry#inflight{tref = Tref, port_id = PortId,
+                                                   retries = Retries + 1}},
+                ids = Ids#{PortId => Key}}.
+
+%% Drop the request in backoff under Key, whose outcome would go to a
+%% process that has died: there is nobody to send it again for.
+drop(Key, State = #state{reqs = Reqs}) ->
+    {#inflight{kind = Kind}, Rest} = maps:take(Key, Reqs),
+    ?TRACE({retry, Key, owner_dead}),
+    deactivate(Key, Kind),
+    _ = case Kind of
+            {async, _ReplyTo, Obs} -> katipo_span:end_async(Obs);
+            sync -> ok
+        end,
+    State#state{reqs = Rest}.
+
+%% The process a request's outcome goes to.
+owner({Caller, _Tag}, sync) -> Caller;
+owner(_Key, {async, ReplyTo, _Obs}) -> ReplyTo.
+
+%% is_process_alive/1 only answers for a local process; a remote one is
+%% taken to be alive.
+alive(Pid) when node(Pid) =:= node() -> is_process_alive(Pid);
+alive(_Pid) -> true.
 
 %% Deactivate a resolved async request's alias (the ref in its From key) so
 %% late cancel/flow sends are dropped by the runtime instead of landing in
@@ -246,58 +328,56 @@ deliver({async, ReplyTo, Obs}, From = {_Self, UserRef}, Result, {ResponseMap, Me
     ?TRACE({delivered, From}),
     katipo_span:finish_async(Obs, Result, ResponseMap, Metrics).
 
-%% Deliver a request timeout to a sync caller or an async ReplyTo.
-deliver_timeout(Kind, From) ->
-    deliver_error(Kind, From, #{code => operation_timedout, message => <<>>}).
-
-%% Deliver an error map to a sync caller (as a gen_server reply) or an async
-%% reply_to (as a katipo_error message).
-deliver_error(sync, From, Error) ->
-    gen_server:reply(From, {error, {Error, []}});
+%% Deliver an error map to an async reply_to as a katipo_error message.
 deliver_error({async, ReplyTo, Obs}, From = {_Self, UserRef}, Error) ->
     ReplyTo ! {katipo_error, UserRef, Error},
     ?TRACE({delivered, From}),
     katipo_span:finish_async(Obs, error, Error, []).
 
-handle_info({Port, {data, Data}}, State = #state{port = Port, reqs = Reqs}) ->
-    Reqs2 = handle_port_msg(decode(Data), Reqs),
-    {noreply, State#state{reqs = Reqs2}};
-handle_info({timeout, Tref, {req_timeout, From}},
+handle_info({Port, {data, Data}}, State = #state{port = Port}) ->
+    {noreply, handle_port_msg(decode(Data), State)};
+handle_info({timeout, Tref, {req_timeout, Key}},
             State = #state{port = Port, reqs = Reqs}) ->
-    Reqs2 =
-        case maps:take(From, Reqs) of
-            {#inflight{tref = Tref, kind = Kind}, Rest} ->
-                _ = deliver_timeout(Kind, From),
-                deactivate(From, Kind),
-                %% Abort the transfer still running in the C port: its
-                %% eventual output would be dropped anyway now that the
-                %% request is out of Reqs.
-                abort_transfer(Port, From),
-                Rest;
-            error ->
-                ?TRACE({terminal, From, dropped}),
-                Reqs
-        end,
-    {noreply, State#state{reqs = Reqs2}};
-handle_info({cancel, Ref}, State = #state{port = Port, reqs = Reqs}) ->
+    case Reqs of
+        #{Key := Entry = #inflight{tref = Tref, port_id = PortId}} ->
+            %% Abort the transfer still running in the C port: its eventual
+            %% output would be dropped anyway, as the request no longer has
+            %% it as its current transfer.
+            abort_transfer(Port, PortId),
+            Timeout = #{code => operation_timedout, message => <<>>},
+            {noreply, retry_or_resolve(Key, Entry, error, {Timeout, []}, State)};
+        _ ->
+            ?TRACE({terminal, Key, dropped}),
+            {noreply, State}
+    end;
+handle_info({timeout, Tref, {retry, Key}}, State = #state{reqs = Reqs}) ->
+    case Reqs of
+        #{Key := #inflight{tref = Tref, kind = Kind}} ->
+            case alive(owner(Key, Kind)) of
+                true -> {noreply, retry(Key, State)};
+                false -> {noreply, drop(Key, State)}
+            end;
+        _ ->
+            {noreply, State}
+    end;
+handle_info({cancel, Ref}, State = #state{port = Port, reqs = Reqs, ids = Ids}) ->
     %% Sent directly to the request's alias by katipo:cancel/2; a stale or
     %% foreign Ref cannot match a live entry. Async entries are keyed by
     %% {self(), Alias}, so this is a straight lookup.
-    From = {self(), Ref},
-    Reqs2 =
-        case maps:take(From, Reqs) of
-            {#inflight{tref = Tref, kind = Kind = {async, _ReplyTo, Obs}}, Rest} ->
-                ?TRACE({cancel, From, effective}),
-                _ = erlang:cancel_timer(Tref),
-                deactivate(From, Kind),
-                abort_transfer(Port, From),
-                katipo_span:end_async(Obs),
-                Rest;
-            error ->
-                ?TRACE({cancel, From, noop}),
-                Reqs
-        end,
-    {noreply, State#state{reqs = Reqs2}};
+    Key = {self(), Ref},
+    case maps:take(Key, Reqs) of
+        {#inflight{tref = Tref, kind = Kind = {async, _ReplyTo, Obs},
+                   port_id = PortId}, Rest} ->
+            ?TRACE({cancel, Key, effective}),
+            _ = erlang:cancel_timer(Tref),
+            deactivate(Key, Kind),
+            abort_transfer(Port, PortId),
+            katipo_span:end_async(Obs),
+            {noreply, State#state{reqs = Rest, ids = maps:remove(PortId, Ids)}};
+        error ->
+            ?TRACE({cancel, Key, noop}),
+            {noreply, State}
+    end;
 handle_info({flow, Ref, N}, State) ->
     %% Sent directly to the request's alias by katipo:update_flow/3.
     relay(Ref, flow, N, State);
@@ -330,9 +410,11 @@ notify_worker_died(_From, #inflight{kind = sync}) ->
     ok.
 
 %% Ask the C port to abort the in-flight transfer identified by {Pid, Ref}
-%% (a no-op there if it already completed).
+%% (a no-op there if it already completed). Between attempts there is none.
 abort_transfer(Port, {Pid, Ref}) ->
-    port_cmd(Port, term_to_binary({Pid, Ref, cancel})).
+    port_cmd(Port, term_to_binary({Pid, Ref, cancel}));
+abort_transfer(_Port, backoff) ->
+    ok.
 
 %% Pass a caller's command for one of our requests to the port; one for a
 %% request that has finished is dropped. A body chunk goes after the term,
@@ -363,41 +445,42 @@ port_cmd(Port, Frame) ->
 code_change(_OldVsn, State, _Extra) ->
     {ok, State}.
 
-send_to_port(Port, {Self, Ref},
-             #req{method = Method,
-                  url = Url,
-                  headers = Headers,
-                  cookiejar = CookieJar,
-                  body = Body,
-                  connecttimeout_ms = ConnTimeoutMs,
-                  followlocation = FollowLocation,
-                  ssl_verifyhost = SslVerifyHost,
-                  ssl_verifypeer = SslVerifyPeer,
-                  capath = CAPath,
-                  cacert = CACert,
-                  timeout_ms = TimeoutMs,
-                  maxredirs = MaxRedirs,
-                  http_auth = HTTPAuth,
-                  username = Username,
-                  password = Password,
-                  proxy = Proxy,
-                  tcp_fastopen = TCPFastOpen,
-                  interface = Interface,
-                  unix_socket_path = UnixSocketPath,
-                  doh_url = DOHURL,
-                  http_version = HTTPVersion,
-                  sslversion = SSLVersion,
-                  verbose = Verbose,
-                  sslcert = SSLCert,
-                  sslkey = SSLKey,
-                  sslkey_blob = SSLKeyBlob,
-                  keypasswd = KeyPasswd,
-                  userpwd = UserPwd,
-                  dns_cache_timeout = DNSCacheTimeout,
-                  ca_cache_timeout = CACacheTimeout,
-                  pipewait = Pipewait,
-                  stream = Stream,
-                  stream_window = StreamWindow}) ->
+%% The port command that starts a transfer of Req under {Self, Ref}.
+command({Self, Ref},
+        #req{method = Method,
+             url = Url,
+             headers = Headers,
+             cookiejar = CookieJar,
+             body = Body,
+             connecttimeout_ms = ConnTimeoutMs,
+             followlocation = FollowLocation,
+             ssl_verifyhost = SslVerifyHost,
+             ssl_verifypeer = SslVerifyPeer,
+             capath = CAPath,
+             cacert = CACert,
+             timeout_ms = TimeoutMs,
+             maxredirs = MaxRedirs,
+             http_auth = HTTPAuth,
+             username = Username,
+             password = Password,
+             proxy = Proxy,
+             tcp_fastopen = TCPFastOpen,
+             interface = Interface,
+             unix_socket_path = UnixSocketPath,
+             doh_url = DOHURL,
+             http_version = HTTPVersion,
+             sslversion = SSLVersion,
+             verbose = Verbose,
+             sslcert = SSLCert,
+             sslkey = SSLKey,
+             sslkey_blob = SSLKeyBlob,
+             keypasswd = KeyPasswd,
+             userpwd = UserPwd,
+             dns_cache_timeout = DNSCacheTimeout,
+             ca_cache_timeout = CACacheTimeout,
+             pipewait = Pipewait,
+             stream = Stream,
+             stream_window = StreamWindow}) ->
     Opts = [{?CONNECTTIMEOUT_MS, ConnTimeoutMs},
             {?FOLLOWLOCATION, FollowLocation},
             {?SSL_VERIFYHOST, SslVerifyHost},
@@ -427,8 +510,7 @@ send_to_port(Port, {Self, Ref},
             {?PIPEWAIT, Pipewait},
             {?STREAM, Stream},
             {?STREAM_WINDOW, StreamWindow}],
-    Command = {Self, Ref, Method, Url, Headers, CookieJar, Body, Opts},
-    true = port_command(Port, term_to_binary(Command)).
+    term_to_binary({Self, Ref, Method, Url, Headers, CookieJar, Body, Opts}).
 
 -spec parse_headers([binary()]) -> katipo:resp_headers().
 parse_headers([]) ->

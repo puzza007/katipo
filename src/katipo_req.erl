@@ -12,6 +12,8 @@
 -export([get_timeout/1]).
 -export([method_int_to_binary/1]).
 -export([error_map/2]).
+-export([method_to_int/1]).
+-export([ascii_lowercase/1]).
 
 -include("katipo_internal.hrl").
 
@@ -51,7 +53,8 @@ check_opts(Opts, Mode) when is_map(Opts) ->
 %% checked only on options that were valid: one that was not is left at its
 %% default in Req, and is named already.
 validate(Opts, Mode, Url) ->
-    {Req, Errors} = process_opts(Opts, Mode),
+    {Req0, Errors} = process_opts(Opts, Mode),
+    Req = retry_method(Req0),
     Invalid = [K || {K, _} <- Errors],
     case Errors ++ cross_field_errors(Req, Url, Invalid) ++ stream_body_error(Req, Mode) of
         [] -> {ok, Req};
@@ -60,7 +63,7 @@ validate(Opts, Mode, Url) ->
 
 cross_field_errors(Req, Url, Invalid) ->
     url_error(Req, Url, Invalid) ++ head_body_error(Req) ++
-        stream_opts_error(Req, Invalid).
+        stream_opts_error(Req, Invalid) ++ retry_error(Req).
 
 url_error(#req{url = undefined}, url, Invalid) ->
     [{url, undefined} || not lists:member(url, Invalid)];
@@ -87,6 +90,28 @@ stream_opts_error(#req{stream = ?STREAM_FALSE, stream_window = W}, Invalid)
   when W =/= ?STREAM_WINDOW_UNLIMITED ->
     [{stream_window, W} || not lists:member(stream, Invalid)];
 stream_opts_error(#req{}, _) ->
+    [].
+
+%% A policy that does not retry the request's method is no policy for it,
+%% so the request is neither kept nor checked for it.
+retry_method(Req = #req{method = Method, retry = #{methods := Methods}}) ->
+    case lists:member(Method, Methods) of
+        true -> Req;
+        false -> Req#req{retry = undefined}
+    end;
+retry_method(Req = #req{}) ->
+    Req.
+
+%% A retry sends the request again from the start, which a streamed body
+%% cannot be, and a streamed response has already delivered the failed
+%% attempt's headers and chunks by the time it ends.
+retry_error(#req{retry = undefined}) ->
+    [];
+retry_error(#req{body = {stream, _}}) ->
+    [{retry, not_allowed_with_stream}];
+retry_error(#req{stream = ?STREAM_TRUE}) ->
+    [{retry, not_allowed_with_stream}];
+retry_error(#req{}) ->
     [].
 
 -spec get_timeout(req()) -> pos_integer().
@@ -160,6 +185,7 @@ has_content_type(Headers) ->
                           ascii_lowercase(iolist_to_binary(K)) =:= <<"content-type">>
               end, Headers).
 
+-spec ascii_lowercase(binary()) -> binary().
 ascii_lowercase(Bin) ->
     << <<(case C of _ when C >= $A, C =< $Z -> C + 32; _ -> C end)>> || <<C>> <= Bin >>.
 
@@ -406,6 +432,11 @@ opt(stream_window, infinity, {Req, Errors}) ->
     {Req#req{stream_window = ?STREAM_WINDOW_UNLIMITED}, Errors};
 opt(stream_window, N, {Req, Errors}) when ?IS_INT_OPT(N, 1) ->
     {Req#req{stream_window = N}, Errors};
+opt(retry, Retry, {Req, Errors}) ->
+    case katipo_retry:policy(Retry) of
+        {ok, Policy} -> {Req#req{retry = Policy}, Errors};
+        error -> {Req, [{retry, Retry} | Errors]}
+    end;
 opt(reply_to, Pid, {Req, Errors}) when is_pid(Pid) ->
     {Req, Errors};
 opt(K, V, {Req, Errors}) ->

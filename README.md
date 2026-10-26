@@ -145,6 +145,27 @@ had closed fails with `send_fail_rewind`. For a body that is already in a
 file, `body => {file, Path}` needs no messages at all. It combines with
 `stream => true` for the response. Async only.
 
+### Retries
+
+`retry => true` sends a request again when an attempt fails with a
+connection error, a timeout, or a 429 or 503, waiting a random backoff
+between attempts, or as long as a `Retry-After` header asks:
+
+```erlang
+{ok, #{status := 200}} = katipo:get(api, Url, #{retry => true}).
+{ok, _} = katipo:post(api, Url, #{body => Body,
+                                  retry => #{methods => [post], max_retries => 5,
+                                             statuses => [429, 502, 503, 504]}}).
+```
+
+By default only the idempotent methods (GET, HEAD, OPTIONS, PUT, DELETE)
+are retried, up to 3 times, with waits of up to 100 ms doubled each retry
+and capped at 5 s. A `Retry-After` longer than that cap returns the
+response as it is. The caller sees only the last attempt; each attempt has
+the whole `timeout_ms`, so give `await/2` a timeout that covers them all. A streamed body or response cannot be sent again,
+so `retry` with either is `bad_opts`. See `t:katipo:retry/0` for every
+setting.
+
 ## Pools
 
 `katipo_pool:start(Name, Size, Opts)` starts `Size` workers, each owning
@@ -197,6 +218,7 @@ another, and fails fast with `overload` when every worker is full.
 | `userpwd`               | `binary()`                          | `undefined` | [docs](https://curl.se/libcurl/c/CURLOPT_USERPWD.html)                         |
 | `verbose`               | `boolean()`                         | `false`     | [docs](https://curl.se/libcurl/c/CURLOPT_VERBOSE.html)                         |
 | `reply_to`              | `pid()`                             | `self()`    | async only (sync takes only the caller); process that receives the response message |
+| `retry`                 | `boolean()` \| map (see Retries)    | `false`     | send the request again after a failed attempt, with backoff                          |
 
 Some options depend on how libcurl was built. Check at runtime with
 `katipo:http3_available/0`, `doh_url_available/0`,
