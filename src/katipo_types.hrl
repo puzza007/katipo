@@ -225,7 +225,8 @@ fails with `send_fail_rewind`.
         userpwd => userpwd(),
         dns_cache_timeout => -1..?MAX_INT_OPT,
         ca_cache_timeout => -1..?MAX_INT_OPT,
-        pipewait => boolean()).
+        pipewait => boolean(),
+        retry => retry()).
 %% The options only the async API acts on: where to deliver the response,
 %% and whether to stream it. ?KATIPO_ASYNC_OPTS (katipo_internal.hrl) lists
 %% the same keys for katipo_req; keep the two in step.
@@ -303,6 +304,42 @@ killed outright, so keep a timeout on the receive.
         {katipo_chunk, reference(), binary()} |
         {katipo_done, reference(), #{status := status(), cookiejar := cookiejar()}} |
         {katipo_body_demand, reference()}.
+-doc """
+Whether and how to send a request again when an attempt fails: `false`
+(the default) never; `true` with the defaults below; or a map overriding
+any of them.
+
+- `max_retries` (3): the most times the request is sent again. 0 is the
+  same as `false`.
+- `methods` (`[get, head, options, put, delete]`, the idempotent ones):
+  the methods that are retried; a request with any other is never.
+- `statuses` (`[429, 503]`): the response statuses that are retried.
+- `errors`: the error codes that are retried. By default
+  `couldnt_connect`, `operation_timedout`, `got_nothing`, `send_error`,
+  `recv_error`, `partial_file`, `http2`, `http2_stream`, `http3` and
+  `quic_connect_error`: the connection could not be made or broke, the
+  server sent nothing or not all of it, or the attempt ran out of time.
+- `base_delay_ms` (100) and `max_delay_ms` (5000): the wait before each
+  retry is a random time up to `base_delay_ms` doubled for each retry
+  already sent, capped at `max_delay_ms`.
+
+A retried status waits instead as long as its `Retry-After` header asks,
+in seconds or as an HTTP-date, if it has one. If that is longer than
+`max_delay_ms`, the response is returned as it is.
+
+The caller sees only the last attempt's response or error. Each attempt
+has the whole `timeout_ms`, so with retries a request can take
+`max_retries + 1` times as long, plus the waits. A retry is sent from the
+start: a body is sent again, and a file body is read again. A streamed
+body or response cannot be, so `retry` with either is `bad_opts`.
+""".
+-type retry() :: boolean() |
+                 #{max_retries => 0..?MAX_INT_OPT,
+                   methods => [method()],
+                   statuses => [100..599],
+                   errors => [error_code()],
+                   base_delay_ms => 0..?MAX_INT_OPT,
+                   max_delay_ms => 0..?MAX_INT_OPT}.
 -type http_auth() :: basic | digest | ntlm | negotiate.
 -type pipelining() :: nothing | http1 | multiplex.
 -type curlopt_http_version() :: curl_http_version_none |
@@ -351,6 +388,7 @@ killed outright, so keep a timeout on the receive.
 -export_type([metrics/0]).
 -export_type([response/0]).
 -export_type([http_auth/0]).
+-export_type([retry/0]).
 -export_type([curlmopts/0]).
 -export_type([pool_opts/0]).
 -export_type([connecttimeout_ms/0]).

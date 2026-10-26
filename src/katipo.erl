@@ -59,7 +59,13 @@ Handing an async request to a worker is itself bounded (5s): a wedged or
 deeply backed-up worker yields
 `{error, #{code => admission_timeout}}` rather than blocking the caller.
 (Sync requests are bounded by the request timeout instead -- their single
-call carries the whole response.)
+call carries the whole response -- or, with `retry`, by one request timeout
+per attempt plus the waits between them.)
+
+With `retry` (see `t:retry/0`), a failed attempt is sent again in the
+worker, after a backoff: the caller gets one `Ref` and one terminal
+message, for the last attempt, and `cancel/2` also stops a request that is
+waiting to be retried.
 
 With `stream => true` the body is delivered incrementally as
 `{katipo_headers, Ref, _}`, `{katipo_chunk, Ref, _}`* and a terminal
@@ -424,6 +430,10 @@ Blocks until an async response for `Ref` arrives or the timeout expires.
 Only for buffered async requests: a streamed response (`stream => true`)
 arrives as a message sequence, which `await` does not understand -- receive
 those messages directly.
+
+`await/1` waits as long as one attempt's default `timeout_ms`; with
+`retry`, give `await/2` a timeout that covers every attempt and the waits
+between them.
 
 `await_timeout` only ends the wait: the request is still in flight and its
 response or error will still be delivered, so a later `await/2` on the same

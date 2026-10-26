@@ -172,8 +172,8 @@ timeout_aborts_transfer_in_port(Config) ->
     %% so the only timeout that can fire is the one we send by hand.
     {ok, Ref} = katipo:async_req(Pool, blackhole_req()),
     RealPort = worker_port(WorkerPid),
-    %% The entry is the worker's #inflight{tref, kind} record.
-    [{From, {inflight, Tref, _Kind}}] = maps:to_list(worker_reqs(WorkerPid)),
+    %% The entry is the worker's #inflight{} record.
+    [{From, {inflight, Tref, _Kind, _PortId, _Req, _Retries}}] = maps:to_list(worker_reqs(WorkerPid)),
 
     FakePort = open_port({spawn, "/bin/cat"}, [{packet, 4}, binary]),
     ok = swap_port(WorkerPid, FakePort),
@@ -262,13 +262,13 @@ worker_port(WorkerPid) ->
 %% wpool_process's wrapper (same idiom as katipo_SUITE's worker_state/1;
 %% fails loudly if the wrapper shape changes).
 worker_reqs(WorkerPid) ->
-    {state, _, _, {state, _Port, Reqs, _MaxInFlight}, _} = sys:get_state(WorkerPid),
+    {state, _, _, {state, _Port, Reqs, _Ids, _MaxInFlight}, _} = sys:get_state(WorkerPid),
     Reqs.
 
 swap_port(WorkerPid, NewPort) ->
     _ = sys:replace_state(
           WorkerPid,
-          fun(S = {state, _, _, {state, _, Reqs, MaxInFlight}, _}) ->
-                  setelement(4, S, {state, NewPort, Reqs, MaxInFlight})
+          fun(S = {state, _, _, {state, _, Reqs, Ids, MaxInFlight}, _}) ->
+                  setelement(4, S, {state, NewPort, Reqs, Ids, MaxInFlight})
           end, 1000),
     ok.

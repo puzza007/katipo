@@ -28,6 +28,7 @@
            "src/katipo_internal.hrl",
            "src/katipo_metrics.erl",
            "src/katipo_req.erl",
+           "src/katipo_retry.erl",
            "src/katipo_span.erl",
            "src/katipo_types.hrl",
            "src/katipo_worker.erl",
