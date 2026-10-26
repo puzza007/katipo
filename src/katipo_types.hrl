@@ -365,13 +365,15 @@ body or response cannot be, so `retry` with either is `bad_opts`.
 -type curlmopts() :: [{pipelining, pipelining()} |
                       {max_total_connections, non_neg_integer()} |
                       {max_concurrent_streams, non_neg_integer()} |
-                      {maxconnects, non_neg_integer()}].
+                      {maxconnects, non_neg_integer()} |
+                      {max_host_connections, non_neg_integer()}].
 %% Pool options: the curl-multi options above plus katipo's own Erlang-side
 %% per-worker admission cap.
 -type pool_opts() :: [{pipelining, pipelining()} |
                       {max_total_connections, non_neg_integer()} |
                       {max_concurrent_streams, non_neg_integer()} |
                       {maxconnects, non_neg_integer()} |
+                      {max_host_connections, non_neg_integer()} |
                       {max_in_flight, pos_integer() | infinity}].
 
 -export_type([method/0]).

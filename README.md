@@ -176,12 +176,22 @@ one curl multi handle. `katipo_pool:stop(Name)` stops them.
 | `pipelining`            | `nothing` <br> `http1` <br> `multiplex` | `nothing`    | HTTP pipelining [CURLMOPT_PIPELINING](https://curl.se/libcurl/c/CURLMOPT_PIPELINING.html) |
 | `max_total_connections` | `non_neg_integer()`           | 0 (no limit) | [docs](https://curl.se/libcurl/c/CURLMOPT_MAX_TOTAL_CONNECTIONS.html)                     |
 | `max_concurrent_streams`| `non_neg_integer()`           | 100          | [docs](https://curl.se/libcurl/c/CURLMOPT_MAX_CONCURRENT_STREAMS.html) curl >= 7.67.0     |
-| `maxconnects`           | `non_neg_integer()`           | curl default | idle-connection cache size [docs](https://curl.se/libcurl/c/CURLMOPT_MAXCONNECTS.html)    |
+| `maxconnects`           | `non_neg_integer()`           | 0 (curl's default) | per worker, connections curl keeps, in use or idle [docs](https://curl.se/libcurl/c/CURLMOPT_MAXCONNECTS.html)    |
+| `max_host_connections`  | `non_neg_integer()`           | 0 (no limit) | per worker, connections to one host; more requests wait for one [docs](https://curl.se/libcurl/c/CURLMOPT_MAX_HOST_CONNECTIONS.html) |
 | `max_in_flight`         | `pos_integer()` \| `infinity` | `infinity`   | katipo's own: per-worker cap on in-flight requests                                             |
 
-Size `maxconnects` above peak concurrent connections: an undersized cache
-defeats connection reuse, and the resulting churn accumulates half-closed
-sockets faster than curl's lazy reaping retires them.
+`maxconnects` counts every connection a worker's curl holds, busy or idle,
+and closes the oldest idle one when a finished transfer takes it over the
+limit; 0 leaves curl's default, four times the transfers in flight. Size it
+above peak concurrent connections: an undersized cache defeats connection
+reuse, and the resulting churn accumulates half-closed sockets faster than
+curl's lazy reaping retires them.
+
+`max_host_connections` holds a request to a host whose connections on its
+worker are all busy until one frees up, or its `timeout_ms` runs out.
+Requests go to a random worker and stay there, so with several workers a
+request can wait on a busy one while another has a free connection to the
+same host: the pool as a whole may hold up to the cap on every worker.
 
 With `max_in_flight`, a request that finds its worker full spills over to
 another, and fails fast with `overload` when every worker is full.

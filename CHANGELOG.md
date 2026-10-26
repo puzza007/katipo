@@ -6,6 +6,11 @@ All notable changes to this project are documented here. This project follows
 ## [Unreleased]
 
 ### Added
+- The `{max_host_connections, N}` pool option caps each worker's
+  connections to any one host (`CURLMOPT_MAX_HOST_CONNECTIONS`); further
+  requests to that host wait in curl for a connection to free up, still
+  bounded by their `timeout_ms`. The cap is per worker, and a request
+  stays on the worker it was sent to.
 - The `{maxconnects, N}` pool option exposes curl's idle-connection cache
   size (`CURLMOPT_MAXCONNECTS`), bounding the fd footprint of cached dead
   keepalive connections under sustained load. See the README for sizing
