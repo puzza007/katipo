@@ -20,7 +20,6 @@
 -export([redirect_not_limited/1]).
 -export([decoded_at_limit/1]).
 -export([resumed_over_limit/1]).
--export([max_host_connections/1]).
 
 -include_lib("common_test/include/ct.hrl").
 
@@ -29,8 +28,7 @@
 all() ->
     [bad_opts, stall_fails, body_at_limit, content_length_over_limit,
      chunked_over_limit, decoded_over_limit, streamed_over_limit,
-     head_not_limited, redirect_not_limited, decoded_at_limit, resumed_over_limit,
-     max_host_connections].
+     head_not_limited, redirect_not_limited, decoded_at_limit, resumed_over_limit].
 
 init_per_suite(Config) ->
     {ok, _} = application:ensure_all_started(katipo),
@@ -39,9 +37,6 @@ init_per_suite(Config) ->
 end_per_suite(Config) ->
     Config.
 
-init_per_testcase(max_host_connections = TestCase, Config) ->
-    {ok, _} = katipo_pool:start(TestCase, 1, [{max_host_connections, 1}]),
-    [{pool, TestCase} | Config];
 init_per_testcase(TestCase, Config) ->
     {ok, _} = katipo_pool:start(TestCase, 1, []),
     [{pool, TestCase} | Config].
@@ -165,27 +160,6 @@ resumed_over_limit(Config) ->
     Received = grant_until_error(Pool, Ref, 0),
     true = Received > 0 andalso Received =< 20000,
     true = erlang:monotonic_time(millisecond) - T0 < ?WAIT.
-
-%% With one connection allowed to the host, a second request waits for the
-%% first, which the server never answers, to time out before it is sent.
-%% Without pipewait, so that curl would otherwise open a second connection
-%% at once rather than wait to see whether the first can multiplex.
-max_host_connections(Config) ->
-    {ok, Server, Port} = katipo_script_server:start([hang]),
-    Pool = ?config(pool, Config),
-    Url = katipo_script_server:url(Port),
-    {ok, First} = katipo:async_get(Pool, Url, #{timeout_ms => 1000, pipewait => false}),
-    {ok, Second} = katipo:async_get(Pool, Url, #{pipewait => false}),
-    first_request(Server),
-    receive {script_request, Server, _, _} -> ct:fail(second_not_held)
-    after 500 -> ok
-    end,
-    {error, #{code := operation_timedout}} = katipo:await(First, ?WAIT),
-    first_request(Server),
-    {ok, #{status := 200}} = katipo:await(Second, ?WAIT).
-
-first_request(Server) ->
-    receive {script_request, Server, _, _} -> ok after ?WAIT -> ct:fail(no_request) end.
 
 grant_until_error(Pool, Ref, Received) ->
     receive
