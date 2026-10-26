@@ -207,6 +207,39 @@ body after a cancel changes nothing: the port drops it. Every action and
 branch fires in some config (`-coverage 1`), and the verdicts hold at
 `Total = 3`, `W = 2`, `Resp = 3`.
 
+### Retries
+
+`KatipoRetry.tla`: requests with a retry policy, each sent again after a
+failed attempt, through one worker and its C port. The worker ends an
+attempt on a terminal message for the request's current transfer or on its
+own request timer, then backs off and sends again under a fresh port id, or
+resolves; a cancel can come at any time, a backoff included. Whether an
+outcome is retryable is the port's free choice, so every policy, method
+and status is covered, and the worker takes the port's output, each fired
+timer and the caller's cancel in any order across senders.
+
+| config | question | result |
+|---|---|---|
+| `KatipoRetry.cfg` | two requests, one retry each: one outcome per request, from its current attempt; nothing after a cancel; at most `max_retries` retries; no attempt cut short by another's timer; no transfer left running for nobody | pass |
+| `KatipoRetryDeep.cfg` | the same, one request retried up to three times | pass |
+| `KatipoRetryLiveness.cfg` | fair to the worker, the port, curl and the timers: does every request end with the port running nothing? | pass |
+| `KatipoRetryReuse.cfg` | each retry reusing the request's key as its port id | **fails**, as expected: a late message from the attempt given up on is taken for the retry's |
+| `KatipoRetryReuseOrphan.cfg` | the same | **fails**, as expected: the retry's transfer runs for a request already resolved |
+| `KatipoRetryNoTref.cfg` | no `Tref` match in the `req_timeout` clause | **fails**, as expected: the first attempt's timer, fired as that attempt ended, cuts the retry short |
+
+**Found.** Both mechanisms the design added are load-bearing, and both
+races need only the port's output and a timer message crossing in the
+worker's mailbox. Before retries, `From` was never registered twice, so
+matching `Tref` was redundant; with retries one request has a timer per
+attempt, and a timer that fired as its attempt ended must not count
+against the next. Each counterexample is reproduced against the real
+worker by `stale_port_output_dropped` and `stale_timer_ignored` in
+`test/katipo_retry_SUITE.erl`, which fail with the matching mechanism
+removed. Witnesses (`-inv`): late output arriving after the request moved
+on, a cancel queued during a backoff, a request retried to the limit, and
+a stale request timer firing while a later attempt runs all happen. Every
+action fires (`-coverage 1`).
+
 ## Lean proofs (`lean/`)
 
 Core Lean 4 only (no Mathlib), toolchain pinned in `lean/lean-toolchain`.
