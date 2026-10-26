@@ -82,7 +82,7 @@ VARIABLES
   live,          \* the conn exists
   buf,           \* chunks buffered in the port, not yet read by curl
   eofIn,         \* the port has eof
-  upFailed,      \* the port has failed the upload (upload_error)
+  upFailed,      \* the port has failed the upload (fail_code, set by it)
   demanded,      \* a demand is outstanding (sent, not yet answered)
   upPaused,      \* katipo's upload_paused
   curlSendPaused,\* curl's own send pause

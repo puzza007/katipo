@@ -130,12 +130,6 @@ typedef struct _ConnInfo {
   int upload_eof;
   int demanded;
   int upload_paused;
-  /* Why the port failed the upload, or CURLE_OK. The read callback then
-   * aborts, and complete_conn reports this and upload_msg rather than
-   * what curl saw. upload_msg has room for a path as long as Linux allows
-   * and the reason, which curl's CURL_ERROR_SIZE does not. */
-  CURLcode upload_error;
-  char upload_msg[4096 + 256];
   /* Streaming (stream => true): body bytes are forwarded as they arrive
    * instead of being buffered in `body`. headers_sent tracks the one-time
    * headers message that precedes the first chunk (or the done message for
@@ -146,6 +140,13 @@ typedef struct _ConnInfo {
   int headers_sent;
   long window;
   int paused;
+  /* Why the port failed the transfer, or CURLE_OK: a bad upload, or a
+   * response body over max_body_size. The read or write callback then
+   * aborts, and complete_conn reports this and fail_msg rather than what
+   * curl saw. fail_msg has room for a path as long as Linux allows and the
+   * reason, which curl's CURL_ERROR_SIZE does not. */
+  CURLcode fail_code;
+  char fail_msg[4096 + 256];
   // metrics
   double total_time;
   double namelookup_time;
@@ -461,7 +462,7 @@ static const char *curl_error_code(CURLcode error) {
 }
 
 static void check_multi_info(GlobalInfo *global);
-static void fail_upload(ConnInfo *conn, CURLcode code, const char *fmt, ...);
+static void fail_conn(ConnInfo *conn, CURLcode code, const char *fmt, ...);
 
 /* What a body command carries: a chunk of a streamed body, its end, or
  * something the port could not decode. */
@@ -703,9 +704,9 @@ static void send_error_to_erlang(CURLcode curl_code, ConnInfo *conn) {
   const char *error_msg;
 
   error_code = curl_error_code(curl_code);
-  /* The port's own reason for failing the upload, else ERRORBUFFER if
+  /* The port's own reason for failing the transfer, else ERRORBUFFER if
    * available, else curl_easy_strerror. */
-  error_msg = conn->upload_error != CURLE_OK ? conn->upload_msg
+  error_msg = conn->fail_code != CURLE_OK ? conn->fail_msg
               : conn->error[0] ? conn->error
               : curl_easy_strerror(curl_code);
   error_msg_len = strlen(error_msg);
@@ -856,8 +857,8 @@ static void complete_conn(GlobalInfo *global, ConnInfo *conn, CURLcode res) {
   curl_easy_getinfo(easy, CURLINFO_STARTTRANSFER_TIME, &conn->starttransfer_time);
 
   /* Even if curl finished: whatever it sent is not the body asked for. */
-  if (conn->upload_error != CURLE_OK) {
-    res = conn->upload_error;
+  if (conn->fail_code != CURLE_OK) {
+    res = conn->fail_code;
   }
   if (res == CURLE_OK) {
     if (conn->stream) {
@@ -889,25 +890,25 @@ static void body_conn(GlobalInfo *global, erlang_pid *pid, erlang_ref *ref,
   ConnInfo *conn = find_conn(global, pid, ref);
 
   if (conn == NULL || !conn->upload_stream || conn->upload_eof ||
-      conn->upload_error != CURLE_OK) {
+      conn->fail_code != CURLE_OK) {
     return;
   }
   /* State first: curl may call read_stream_cb synchronously inside
    * curl_easy_pause. An empty chunk buffers nothing, so the resumed read
    * demands again. */
   if (part == BODY_BAD) {
-    fail_upload(conn, CURLE_READ_ERROR, "Couldn't decode a body chunk");
+    fail_conn(conn, CURLE_READ_ERROR, "Couldn't decode a body chunk");
   } else if (part == BODY_EOF) {
     conn->upload_eof = 1;
     if (conn->upload_size >= 0 && conn->upload_pos < conn->upload_size) {
-      fail_upload(conn, CURLE_READ_ERROR,
+      fail_conn(conn, CURLE_READ_ERROR,
                   "Body ended after %" CURL_FORMAT_CURL_OFF_T
                   " of its declared %" CURL_FORMAT_CURL_OFF_T " bytes",
                   conn->upload_pos, conn->upload_size);
     }
   } else if (conn->upload_size >= 0 &&
              (curl_off_t)len > conn->upload_size - conn->upload_pos) {
-    fail_upload(conn, CURLE_READ_ERROR,
+    fail_conn(conn, CURLE_READ_ERROR,
                 "Body longer than its declared %" CURL_FORMAT_CURL_OFF_T " bytes",
                 conn->upload_size);
   } else {
@@ -1140,17 +1141,17 @@ static size_t header_cb(void *ptr, size_t size, size_t nmemb, void *data) {
   return realsize;
 }
 
-/* Fail the upload with code, unless it has failed already. See
- * upload_error. */
-static void fail_upload(ConnInfo *conn, CURLcode code, const char *fmt, ...) {
+/* Fail the transfer with code, unless it has failed already. See
+ * fail_code. */
+static void fail_conn(ConnInfo *conn, CURLcode code, const char *fmt, ...) {
   va_list ap;
 
-  if (conn->upload_error != CURLE_OK) {
+  if (conn->fail_code != CURLE_OK) {
     return;
   }
-  conn->upload_error = code;
+  conn->fail_code = code;
   va_start(ap, fmt);
-  vsnprintf(conn->upload_msg, sizeof(conn->upload_msg), fmt, ap);
+  vsnprintf(conn->fail_msg, sizeof(conn->fail_msg), fmt, ap);
   va_end(ap);
 }
 
@@ -1161,12 +1162,12 @@ static int stat_upload(ConnInfo *conn) {
   struct stat st;
 
   if (stat(conn->upload_path, &st) != 0) {
-    fail_upload(conn, CURLE_FILE_COULDNT_READ_FILE, "Couldn't open %s: %s",
+    fail_conn(conn, CURLE_FILE_COULDNT_READ_FILE, "Couldn't open %s: %s",
                 conn->upload_path, strerror(errno));
     return 0;
   }
   if (!S_ISREG(st.st_mode)) {
-    fail_upload(conn, CURLE_FILE_COULDNT_READ_FILE,
+    fail_conn(conn, CURLE_FILE_COULDNT_READ_FILE,
                 "Couldn't open %s: not a regular file", conn->upload_path);
     return 0;
   }
@@ -1184,12 +1185,12 @@ static int open_upload(ConnInfo *conn) {
 
   conn->upload_fd = open(conn->upload_path, O_RDONLY | O_NONBLOCK | O_NOCTTY);
   if (conn->upload_fd < 0 || fstat(conn->upload_fd, &st) != 0) {
-    fail_upload(conn, CURLE_FILE_COULDNT_READ_FILE, "Couldn't open %s: %s",
+    fail_conn(conn, CURLE_FILE_COULDNT_READ_FILE, "Couldn't open %s: %s",
                 conn->upload_path, strerror(errno));
     return 0;
   }
   if (!S_ISREG(st.st_mode)) {
-    fail_upload(conn, CURLE_FILE_COULDNT_READ_FILE,
+    fail_conn(conn, CURLE_FILE_COULDNT_READ_FILE,
                 "Couldn't open %s: not a regular file", conn->upload_path);
     return 0;
   }
@@ -1205,7 +1206,7 @@ static size_t read_cb(char *buffer, size_t size, size_t nitems, void *data) {
   size_t want = size * nitems;
   ssize_t n;
 
-  if (conn->upload_error != CURLE_OK ||
+  if (conn->fail_code != CURLE_OK ||
       (conn->upload_fd < 0 && !open_upload(conn))) {
     return CURL_READFUNC_ABORT;
   }
@@ -1220,10 +1221,10 @@ static size_t read_cb(char *buffer, size_t size, size_t nitems, void *data) {
   } while (n < 0 && errno == EINTR);
   if (n <= 0) {
     if (n < 0) {
-      fail_upload(conn, CURLE_READ_ERROR, "Couldn't read %s: %s",
+      fail_conn(conn, CURLE_READ_ERROR, "Couldn't read %s: %s",
                   conn->upload_path, strerror(errno));
     } else {
-      fail_upload(conn, CURLE_READ_ERROR, "%s shrank while it was being sent",
+      fail_conn(conn, CURLE_READ_ERROR, "%s shrank while it was being sent",
                   conn->upload_path);
     }
     return CURL_READFUNC_ABORT;
@@ -1255,7 +1256,7 @@ static size_t read_stream_cb(char *buffer, size_t size, size_t nitems, void *dat
   ConnInfo *conn = (ConnInfo *)data;
   int n;
 
-  if (conn->upload_error != CURLE_OK) {
+  if (conn->fail_code != CURLE_OK) {
     return CURL_READFUNC_ABORT;
   }
   n = evbuffer_remove(conn->upload_buf, buffer, size * nitems);
@@ -1286,7 +1287,7 @@ static int seek_stream_cb(void *data, curl_off_t offset, int origin) {
   if (offset == 0 && origin == SEEK_SET && taken == 0) {
     return CURL_SEEKFUNC_OK;
   }
-  fail_upload(conn, CURLE_SEND_FAIL_REWIND, "A streamed body cannot be sent again");
+  fail_conn(conn, CURLE_SEND_FAIL_REWIND, "A streamed body cannot be sent again");
   return CURL_SEEKFUNC_CANTSEEK;
 }
 
@@ -1413,7 +1414,7 @@ static void new_conn(long method, char *url, struct curl_slist *req_headers,
     }
   }
   if (body->path != NULL && !stat_upload(conn)) {
-    send_error_to_erlang(conn->upload_error, conn);
+    send_error_to_erlang(conn->fail_code, conn);
     free_eopts(&eopts);
     free_conn(global, conn);
     return;
