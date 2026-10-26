@@ -226,6 +226,7 @@ timer and the caller's cancel in any order across senders.
 | `KatipoRetryReuse.cfg` | each retry reusing the request's key as its port id | **fails**, as expected: a late message from the attempt given up on is taken for the retry's |
 | `KatipoRetryReuseOrphan.cfg` | the same | **fails**, as expected: the retry's transfer runs for a request already resolved |
 | `KatipoRetryNoTref.cfg` | no `Tref` match in the `req_timeout` clause | **fails**, as expected: the first attempt's timer, fired as that attempt ended, cuts the retry short |
+| `KatipoRetryLeanInv.cfg` | the Lean proof's invariants, mirrored, at one retry more | pass (11.4M states) |
 
 **Found.** Both mechanisms the design added are load-bearing, and both
 races need only the port's output and a timer message crossing in the
@@ -422,6 +423,30 @@ after eof breaks none: with a declared length the check refuses it anyway,
 and a chunked body's lying caller is left to `KatipoUploadLiarChunked.cfg`.
 Liveness is TLC-checked only.
 
+### Retries: any number of requests and retries
+
+`Retry/Model.lean` transcribes `KatipoRetry.tla` without its bounds: any
+number of requests, any `max_retries`, the worker taking the port's output
+in any order. Headline statements are in `Retry/Statements.lean`.
+
+| theorem | says |
+|---|---|
+| `at_most_once` | each request gets at most one outcome |
+| `cancel_quiet` | nothing is delivered after a cancel takes effect |
+| `retries_bounded` | a request is sent at most `max_retries + 1` times |
+| `no_stale` | with fresh port ids, an outcome or a retry comes from the request's current attempt, never the late output of one it gave up on |
+| `no_spurious` | matching `Tref`, an attempt ends by timeout only on its own timer |
+| `no_orphan` | with fresh port ids, every transfer the port runs is its request's current attempt or has an abort queued behind it |
+| `reuse_stale`, `reuse_orphan` | fresh ids are necessary (explicit traces) |
+| `no_tref_spurious` | matching `Tref` is necessary (explicit trace) |
+
+The invariants are mirrored in `KatipoRetry.tla` as `LeanGen` and
+`LeanFr`, which `KatipoRetryLeanInv.cfg` checks. Weakening any of five
+guards in the model breaks a proof at the step that needs it: the
+current-transfer check in `attempt_ended`, the abort on a timeout or on a
+cancel, the `Tref` match, and the `max_retries` bound. Liveness is
+TLC-checked only.
+
 ## Trace validation
 
 ```sh
@@ -503,6 +528,13 @@ as separate attempts.
   curl stops calling the read callback once it has sent that many bytes,
   and reads no eof. It does not hold the callback to the length (before
   8.7 the excess goes on the wire), which is why the port does.
+
+- Retries: `katipo_retry:delay/5` decides whether and when, and is
+  unit-tested rather than modelled: the models leave both to the port's
+  and the timers' free choice. Nor do the models have the worker's `ids`
+  map (port id -> key) that `current/2` resolves a port message through:
+  each message names its request directly, and the map's upkeep is left
+  to `stale_port_output_dropped` and the other worker tests.
 
 If you change the worker dispatch/delivery logic or the C flow-control path,
 update the matching spec and Lean transcription and re-run everything above.

@@ -4,6 +4,7 @@ import KatipoProofs.Admission.Statements
 import KatipoProofs.Admission.Trace
 import KatipoProofs.Timer.Statements
 import KatipoProofs.Upload.Statements
+import KatipoProofs.Retry.Statements
 
 /-!
 # Axiom pins
@@ -143,3 +144,30 @@ open KatipoProofs
 
 /-- info: 'KatipoProofs.Upload.Statements.cont_flags_drift' does not depend on any axioms -/
 #guard_msgs (whitespace := lax) in #print axioms Upload.Statements.cont_flags_drift
+
+/-- info: 'KatipoProofs.Retry.Statements.at_most_once' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms Retry.Statements.at_most_once
+
+/-- info: 'KatipoProofs.Retry.Statements.cancel_quiet' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms Retry.Statements.cancel_quiet
+
+/-- info: 'KatipoProofs.Retry.Statements.retries_bounded' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms Retry.Statements.retries_bounded
+
+/-- info: 'KatipoProofs.Retry.Statements.no_stale' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms Retry.Statements.no_stale
+
+/-- info: 'KatipoProofs.Retry.Statements.no_spurious' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms Retry.Statements.no_spurious
+
+/-- info: 'KatipoProofs.Retry.Statements.no_orphan' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms Retry.Statements.no_orphan
+
+/-- info: 'KatipoProofs.Retry.Statements.reuse_stale' depends on axioms: [propext] -/
+#guard_msgs (whitespace := lax) in #print axioms Retry.Statements.reuse_stale
+
+/-- info: 'KatipoProofs.Retry.Statements.reuse_orphan' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms Retry.Statements.reuse_orphan
+
+/-- info: 'KatipoProofs.Retry.Statements.no_tref_spurious' does not depend on any axioms -/
+#guard_msgs (whitespace := lax) in #print axioms Retry.Statements.no_tref_spurious
