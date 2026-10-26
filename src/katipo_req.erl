@@ -430,6 +430,8 @@ opt(low_speed_limit, Bytes, {Req, Errors}) when ?IS_INT_OPT(Bytes, 1) ->
     {Req#req{low_speed_limit = Bytes}, Errors};
 opt(low_speed_time, Secs, {Req, Errors}) when ?IS_INT_OPT(Secs, 1) ->
     {Req#req{low_speed_time = Secs}, Errors};
+opt(max_body_size, Bytes, {Req, Errors}) when ?IS_INT_OPT(Bytes, 0) ->
+    {Req#req{max_body_size = Bytes}, Errors};
 opt(ca_cache_timeout, Secs, {Req, Errors}) when ?IS_INT_OPT(Secs, -1) ->
     {Req#req{ca_cache_timeout = Secs}, Errors};
 opt(pipewait, true, {Req, Errors}) ->

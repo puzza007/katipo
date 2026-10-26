@@ -203,6 +203,7 @@ another, and fails fast with `overload` when every worker is full.
 | `pipewait`              | `boolean()`                         | `true`      | [docs](https://curl.se/libcurl/c/CURLOPT_PIPEWAIT.html) curl >= 7.43.0         |
 | `low_speed_limit`       | `1..2147483647`                     | off         | [docs](https://curl.se/libcurl/c/CURLOPT_LOW_SPEED_LIMIT.html) bytes/s; with `low_speed_time`, a slower transfer fails with `operation_timedout` |
 | `low_speed_time`        | `1..2147483647`                     | off         | [docs](https://curl.se/libcurl/c/CURLOPT_LOW_SPEED_TIME.html) seconds; requires `low_speed_limit` and vice versa |
+| `max_body_size`         | `0..2147483647`                     | no limit    | bytes of the final response's body, after decoding; more fails with `filesize_exceeded`, streamed or not |
 | `interface`             | `binary()`                          | `undefined` | [docs](https://curl.se/libcurl/c/CURLOPT_INTERFACE.html)                       |
 | `unix_socket_path`      | `binary()` \| `string()`            | `undefined` | [docs](https://curl.se/libcurl/c/CURLOPT_UNIX_SOCKET_PATH.html) curl >= 7.40.0 |
 | `doh_url`               | `binary()`                          | `undefined` | [docs](https://curl.se/libcurl/c/CURLOPT_DOH_URL.html) curl >= 7.62.0          |

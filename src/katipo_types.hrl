@@ -228,6 +228,7 @@ fails with `send_fail_rewind`.
         pipewait => boolean(),
         low_speed_limit => 1..?MAX_INT_OPT,
         low_speed_time => 1..?MAX_INT_OPT,
+        max_body_size => 0..?MAX_INT_OPT,
         retry => retry()).
 %% The options only the async API acts on: where to deliver the response,
 %% and whether to stream it. ?KATIPO_ASYNC_OPTS (katipo_internal.hrl) lists

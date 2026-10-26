@@ -10,6 +10,13 @@ All notable changes to this project are documented here. This project follows
   than the limit, in bytes per second, for that many seconds, with
   `operation_timedout`, so a stalled download is caught without a short
   `timeout_ms`. Each requires the other.
+- `max_body_size` fails a response whose body is larger, with
+  `filesize_exceeded`, streamed or not. The body is counted after
+  decoding, so a small compressed body that inflates past the limit fails
+  too, and only the final response's body counts, not a HEAD's or a
+  redirect's. An uncompressed response whose `Content-Length` is over the
+  limit fails before any of its body is read. Its counting is proved for
+  any limit and chunk sizes in `formal/lean/KatipoProofs/Limit`.
 - `retry => true | #{...}` sends a request again when an attempt fails:
   by default an idempotent request (GET, HEAD, OPTIONS, PUT, DELETE),
   up to 3 more times, after a connection error, a timeout, or a 429 or
