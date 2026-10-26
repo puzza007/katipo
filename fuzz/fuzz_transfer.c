@@ -14,6 +14,9 @@
  *  - streaming: one headers message, before the first chunk, the chunks
  *    are the body bytes in order, write_cb pauses exactly when the window
  *    is spent, and no more chunks go out than the window and grants allow;
+ *  - with a max_body_size, write_cb aborts the chunk that takes the body
+ *    past it, and the transfer ends in an error at once, even when the
+ *    chunk is the one curl re-delivers inside curl_easy_pause;
  *  - buffered: one ok message whose body is every byte delivered;
  *  - exactly one terminal message (ok, done or error), and it is last;
  *  - the transfer is freed.
@@ -29,6 +32,9 @@
  * eof is ignored; a body past its declared length, eof short of it or an
  * undecodable command fails the upload, so reads abort and the transfer
  * ends in an error even if curl finished. */
+/* curl re-delivers the chunk it held while paused inside curl_easy_pause,
+ * and returns what write_cb made of it; this stand-in does the same. */
+#define curl_easy_pause fuzz_easy_pause
 #include "fuzz_common.h"
 #include "fuzz_etf.h"
 
@@ -37,6 +43,22 @@
 #define MAX_BODY (MAX_OPS * MAX_CHUNK)
 
 static GlobalInfo global;
+/* The chunk curl holds for a paused transfer, and what write_cb returned
+ * when fuzz_easy_pause re-delivered it (-1 = it was not). */
+static const uint8_t *held = NULL;
+static size_t held_len = 0;
+static size_t redelivered = (size_t)-1;
+
+CURLcode fuzz_easy_pause(CURL *easy, int bitmask) {
+  ConnInfo *conn;
+
+  if (held == NULL || (bitmask & CURLPAUSE_RECV) ||
+      curl_easy_getinfo(easy, CURLINFO_PRIVATE, (char **)&conn) != CURLE_OK) {
+    return CURLE_OK;
+  }
+  redelivered = write_cb((void *)held, 1, held_len, conn);
+  return redelivered == 0 ? CURLE_WRITE_ERROR : CURLE_OK;
+}
 static uint8_t delivered[MAX_BODY];
 static uint8_t received[MAX_BODY];
 static uint8_t sent_up[MAX_BODY];
@@ -66,6 +88,7 @@ static ConnInfo *make_conn(int stream, long window) {
   make_pid(conn->pid, 1);
   make_ref(conn->ref, 42);
   conn->global = &global;
+  curl_easy_setopt(conn->easy, CURLOPT_PRIVATE, conn);
   conn->stream = stream;
   conn->window = window;
   conn->upload_fd = -1; /* no file body, so free_conn closes nothing */
@@ -125,19 +148,21 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
   ConnInfo *conn = make_conn(stream, window);
   int upload = (mode & 4) != 0;
   long declared = (mode & 8) ? (long)fi_u8(&in) * 4 : -1; /* bytes, or chunked */
+  long limit = (mode & 16) ? (long)fi_u8(&in) * 64 : -1; /* max_body_size */
+  int ended = 0;      /* the port has completed the transfer itself */
   size_t sent_n = 0;  /* body bytes the port took */
   size_t read_n = 0;  /* body bytes curl read */
   int sent_eof = 0;   /* the port has eof */
   int read_eof = 0;
-  int failed = 0;     /* the port should have failed the upload */
+  int failed = 0;     /* the port should have failed the transfer */
   int demanded = 0;   /* the model's outstanding demand */
   int demands = 0;    /* demands the port should have sent */
   size_t delivered_n = 0;
   size_t received_n = 0;
-  const uint8_t *held = NULL; /* a chunk refused with a pause */
-  size_t held_len = 0;
   int ok;
 
+  conn->body_limited = limit >= 0;
+  conn->max_body_size = limit;
   if (upload) {
     conn->upload_stream = 1;
     conn->upload_size = declared;
@@ -227,6 +252,8 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
       continue;
     } else if (kind == 2 && stream) {
       long n = fi_u8(&in) % 4 + 1;
+      int over = limit >= 0 && delivered_n + held_len > (size_t)limit;
+      redelivered = (size_t)-1;
       flow_conn(&global, conn->pid, conn->ref, n);
       if (credits >= 0) {
         credits += n;
@@ -234,16 +261,39 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
       if (held == NULL) {
         continue;
       }
-      /* Resumed: curl delivers the held chunk again. */
+      /* Resumed: curl delivered the held chunk again inside
+       * curl_easy_pause. */
+      FUZZ_ASSERT(redelivered != (size_t)-1);
+      if (over) {
+        /* curl_easy_pause failed, and arms nothing more: the port must
+         * end the transfer then and there. */
+        FUZZ_ASSERT(redelivered == 0 && global.active_conns == NULL);
+        failed = 1;
+        ended = 1;
+        held = NULL;
+        break;
+      }
+      FUZZ_ASSERT(redelivered == held_len);
+      memcpy(delivered + delivered_n, held, held_len);
+      delivered_n += held_len;
+      held = NULL;
+      continue;
     } else {
       continue;
     }
 
     if (held != NULL) {
+      /* A chunk arriving from the socket. */
       int spent = stream && conn->window == 0;
+      int over = limit >= 0 && delivered_n + held_len > (size_t)limit;
       size_t r = write_cb((void *)held, 1, held_len, conn);
       if (spent) {
         FUZZ_ASSERT(r == CURL_WRITEFUNC_PAUSE && conn->paused);
+      } else if (over) {
+        /* Short: curl aborts the transfer, and calls nothing more. */
+        FUZZ_ASSERT(r == 0);
+        failed = 1;
+        break;
       } else {
         FUZZ_ASSERT(r == held_len);
         memcpy(delivered + delivered_n, held, held_len);
@@ -254,7 +304,10 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
   }
 
   ok = fi_u8(&in) & 1;
-  complete_conn(&global, conn, ok ? CURLE_OK : CURLE_RECV_ERROR);
+  held = NULL;
+  if (!ended) {
+    complete_conn(&global, conn, ok ? CURLE_OK : CURLE_RECV_ERROR);
+  }
   FUZZ_ASSERT(global.active_conns == NULL);
 
   {

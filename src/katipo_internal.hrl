@@ -90,6 +90,7 @@
 -define(STREAM_WINDOW, 35).
 -define(LOW_SPEED_LIMIT, 36).
 -define(LOW_SPEED_TIME, 37).
+-define(MAX_BODY_SIZE, 38).
 
 -define(DEFAULT_REQ_TIMEOUT, 30000).
 
@@ -211,6 +212,7 @@
           stream_window = ?STREAM_WINDOW_UNLIMITED :: integer(),
           low_speed_limit = 0 :: non_neg_integer(),
           low_speed_time = 0 :: non_neg_integer(),
+          max_body_size = -1 :: -1 | non_neg_integer(),
           retry = undefined :: undefined | katipo_retry:policy()
          }).
 

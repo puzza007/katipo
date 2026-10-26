@@ -68,6 +68,7 @@
 #define K_CURLOPT_STREAM_WINDOW 35
 #define K_CURLOPT_LOW_SPEED_LIMIT 36
 #define K_CURLOPT_LOW_SPEED_TIME 37
+#define K_CURLOPT_MAX_BODY_SIZE 38
 
 #define K_CURLAUTH_BASIC 100
 #define K_CURLAUTH_DIGEST 101
@@ -142,6 +143,14 @@ typedef struct _ConnInfo {
   int headers_sent;
   long window;
   int paused;
+  /* max_body_size: whether the response body is limited, to how many
+   * bytes, how many write_cb has taken so far (decoded), and whether the
+   * current response is content-encoded, so that its Content-Length is not
+   * its decoded size. */
+  int body_limited;
+  curl_off_t max_body_size;
+  curl_off_t body_size;
+  int encoded;
   /* Why the port failed the transfer, or CURLE_OK: a bad upload, or a
    * response body over max_body_size. The read or write callback then
    * aborts, and complete_conn reports this and fail_msg rather than what
@@ -203,6 +212,7 @@ typedef struct _EasyOpts {
   long curlopt_stream_window;
   long curlopt_low_speed_limit;
   long curlopt_low_speed_time;
+  long curlopt_max_body_size;
 } EasyOpts;
 
 /* A request body as Erlang sent it: iodata (data, size), a file to read
@@ -467,6 +477,7 @@ static const char *curl_error_code(CURLcode error) {
 
 static void check_multi_info(GlobalInfo *global);
 static void fail_conn(ConnInfo *conn, CURLcode code, const char *fmt, ...);
+static void complete_conn(GlobalInfo *global, ConnInfo *conn, CURLcode res);
 
 /* What a body command carries: a chunk of a streamed body, its end, or
  * something the port could not decode. */
@@ -810,12 +821,20 @@ static void cancel_conn(GlobalInfo *global, erlang_pid *pid, erlang_ref *ref) {
 /* Resume a transfer once flow_conn or body_conn has cleared paused or
  * upload_paused. curl_easy_pause sets both directions at once, so the mask
  * keeps paused whichever still waits. curl may call write_cb or
- * read_stream_cb inside it, and check_multi_info may free conn. */
+ * read_stream_cb inside it, and check_multi_info may free conn. If one of
+ * those fails the transfer (write_cb over max_body_size), curl_easy_pause
+ * returns the error without arming the transfer again, so nothing would
+ * end it until timeout_ms: it is completed here instead. */
 static void resume_conn(GlobalInfo *global, ConnInfo *conn) {
   CURLMcode rc;
+  CURLcode res;
 
-  curl_easy_pause(conn->easy, (conn->paused ? CURLPAUSE_RECV : 0) |
-                                  (conn->upload_paused ? CURLPAUSE_SEND : 0));
+  res = curl_easy_pause(conn->easy, (conn->paused ? CURLPAUSE_RECV : 0) |
+                                        (conn->upload_paused ? CURLPAUSE_SEND : 0));
+  if (res != CURLE_OK) {
+    complete_conn(global, conn, res);
+    return;
+  }
   /* Kick the multi so the transfer moves on promptly. */
   rc = curl_multi_socket_action(global->multi, CURL_SOCKET_TIMEOUT, 0,
                                 &global->still_running);
@@ -1054,23 +1073,49 @@ static int multi_timer_cb(CURLM *multi, long timeout_ms, void *userp) {
   return 0;
 }
 
+/* Whether realsize more bytes take the body past max_body_size. The bytes
+ * are decoded, and only the final response's body reaches write_cb, so
+ * neither a HEAD's nor a redirect's Content-Length counts, unlike curl's
+ * MAXFILESIZE. At the first bytes, a Content-Length over the limit fails
+ * at once rather than once that much has arrived, unless the body is
+ * encoded, when the Content-Length is not the decoded size. */
+static int body_too_large(ConnInfo *conn, size_t realsize) {
+  curl_off_t length;
+
+  if (conn->body_size == 0 && !conn->encoded &&
+      curl_easy_getinfo(conn->easy, CURLINFO_CONTENT_LENGTH_DOWNLOAD_T, &length) == CURLE_OK &&
+      length > conn->max_body_size) {
+    return 1;
+  }
+  conn->body_size += (curl_off_t)realsize;
+  return conn->body_size > conn->max_body_size;
+}
+
 static size_t write_cb(void *ptr, size_t size, size_t nmemb, void *data) {
   size_t realsize = size * nmemb;
   ConnInfo *conn = (ConnInfo *)data;
+
+  if (conn->stream && conn->window == 0) {
+    /* Out of credits: pause the transfer. curl keeps this buffer and
+     * re-delivers it after CURLPAUSE_CONT, so nothing is sent or counted
+     * now. Pausing stops socket reads, so backpressure reaches the
+     * server via TCP or the HTTP/2/3 stream window. */
+    conn->paused = 1;
+    return CURL_WRITEFUNC_PAUSE;
+  }
+
+  if (conn->body_limited && body_too_large(conn, realsize)) {
+    fail_conn(conn, CURLE_FILESIZE_EXCEEDED,
+              "Response body exceeds max_body_size (%" CURL_FORMAT_CURL_OFF_T " bytes)",
+              conn->max_body_size);
+    return 0; /* short: curl aborts the transfer */
+  }
 
   /* Streaming transfers forward body bytes as they arrive instead of
    * buffering them; the headers message goes out once, before the first
    * chunk (by which point header_cb has seen the final response's header
    * block, including after redirects). */
   if (conn->stream) {
-    if (conn->window == 0) {
-      /* Out of credits: pause the transfer. curl keeps this buffer and
-       * re-delivers it after CURLPAUSE_CONT, so nothing is sent or counted
-       * now. Pausing stops socket reads, so backpressure reaches the
-       * server via TCP or the HTTP/2/3 stream window. */
-      conn->paused = 1;
-      return CURL_WRITEFUNC_PAUSE;
-    }
     if (!conn->headers_sent) {
       send_headers_to_erlang(conn);
     }
@@ -1117,12 +1162,16 @@ static size_t header_cb(void *ptr, size_t size, size_t nmemb, void *data) {
     }
     conn->interim = is_interim_status_line(src, header_len);
     conn->headers_ended = 0;
+    conn->encoded = 0;
   } else if (conn->headers_ended) {
     /* A trailer (chunked or HTTP/2 and 3). Streaming has already sent the
      * headers by the time one arrives, so trailers are dropped in both
      * modes rather than merged into the headers when buffered: RFC 9110
      * 6.5.1 forbids merging them unless each field allows it. */
     return realsize;
+  }
+  if (header_len > 17 && strncasecmp(src, "Content-Encoding:", 17) == 0) {
+    conn->encoded = 1;
   }
   /* Returning short fails just this transfer, with CURLE_WRITE_ERROR. */
   if (header_len > INT_MAX ||
@@ -1407,6 +1456,8 @@ static void new_conn(long method, char *url, struct curl_slist *req_headers,
   conn->post_data_size = body->size;
   conn->stream = eopts.curlopt_stream != 0;
   conn->window = eopts.curlopt_stream_window;
+  conn->body_limited = eopts.curlopt_max_body_size >= 0;
+  conn->max_body_size = eopts.curlopt_max_body_size;
   conn->upload_path = body->path;
   conn->upload_fd = -1;
   if (body->stream) {
@@ -1776,6 +1827,9 @@ static int parse_eopts(char *buf, int *index, EasyOpts *eopts) {
       case K_CURLOPT_LOW_SPEED_TIME:
         eopts->curlopt_low_speed_time = eopt_long;
         break;
+      case K_CURLOPT_MAX_BODY_SIZE:
+        eopts->curlopt_max_body_size = eopt_long;
+        break;
       default:
         break;
       }
@@ -2002,6 +2056,7 @@ static void handle_frame(GlobalInfo *global, char *buf, size_t len) {
       .curlopt_ca_cache_timeout = 86400,
       .curlopt_pipewait = 1,
       .curlopt_stream_window = -1,
+      .curlopt_max_body_size = -1,
   };
 
   if (parse_eopts(buf, &index, &eopts) != 0) {

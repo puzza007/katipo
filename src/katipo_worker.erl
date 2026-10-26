@@ -482,7 +482,8 @@ command({Self, Ref},
              stream = Stream,
              stream_window = StreamWindow,
              low_speed_limit = LowSpeedLimit,
-             low_speed_time = LowSpeedTime}) ->
+             low_speed_time = LowSpeedTime,
+             max_body_size = MaxBodySize}) ->
     Opts = [{?CONNECTTIMEOUT_MS, ConnTimeoutMs},
             {?FOLLOWLOCATION, FollowLocation},
             {?SSL_VERIFYHOST, SslVerifyHost},
@@ -513,7 +514,8 @@ command({Self, Ref},
             {?STREAM, Stream},
             {?STREAM_WINDOW, StreamWindow},
             {?LOW_SPEED_LIMIT, LowSpeedLimit},
-            {?LOW_SPEED_TIME, LowSpeedTime}],
+            {?LOW_SPEED_TIME, LowSpeedTime},
+            {?MAX_BODY_SIZE, MaxBodySize}],
     term_to_binary({Self, Ref, Method, Url, Headers, CookieJar, Body, Opts}).
 
 -spec parse_headers([binary()]) -> katipo:resp_headers().
