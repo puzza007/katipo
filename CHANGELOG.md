@@ -94,6 +94,11 @@ All notable changes to this project are documented here. This project follows
   not a key and value no longer crashes the caller.
 
 ### Fixed
+- A request is now bounded by its own `timeout_ms` alone. katipo's timer
+  ran for the longer of `timeout_ms` and `connecttimeout_ms`, leaving the
+  bound to curl, which up to at least 8.11 does not enforce it while a
+  request waits for a connection, as one held by `max_host_connections`
+  does.
 - With libcurl 8.10.0 to 8.11.0, a request's timeout could fire late,
   not until some transfer on the same port next sent or received data,
   which for a lone request stuck on a slow server meant when the server

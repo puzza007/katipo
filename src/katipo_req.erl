@@ -122,9 +122,13 @@ retry_error(#req{stream = ?STREAM_TRUE}) ->
 retry_error(#req{}) ->
     [].
 
+%% The worker's own bound on an attempt: timeout_ms, which in curl already
+%% covers connecting. curl enforces it too, but up to at least 8.11 not on
+%% a transfer still waiting for a connection (max_host_connections), as
+%% katipo drives it with curl_multi_socket_action.
 -spec get_timeout(req()) -> pos_integer().
-get_timeout(#req{connecttimeout_ms = ConnMs, timeout_ms = ReqMs}) ->
-    max(ConnMs, ReqMs).
+get_timeout(#req{timeout_ms = Ms}) ->
+    Ms.
 
 -spec method_int_to_binary(method_int()) -> binary().
 method_int_to_binary(?GET) -> <<"GET">>;
