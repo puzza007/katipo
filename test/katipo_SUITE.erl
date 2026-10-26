@@ -1466,7 +1466,7 @@ path_opts_bad_list(_) ->
 int_opts_out_of_range(_) ->
     Max = 2147483647,
     Opts = [connecttimeout_ms, timeout_ms, maxredirs, dns_cache_timeout,
-            ca_cache_timeout],
+            ca_cache_timeout, max_body_size],
     [{error, #{code := bad_opts, message := Message}} =
          katipo:check_opts(#{Opt => Max + 1})
      || Opt <- Opts,
@@ -1474,6 +1474,11 @@ int_opts_out_of_range(_) ->
     {error, #{code := bad_opts}} =
         katipo:check_opts(#{stream => true, stream_window => Max + 1}),
     [ok = katipo:check_opts(#{Opt => Max}) || Opt <- Opts],
+    {error, #{code := bad_opts}} =
+        katipo:check_opts(#{low_speed_limit => Max + 1, low_speed_time => 1}),
+    {error, #{code := bad_opts}} =
+        katipo:check_opts(#{low_speed_limit => 1, low_speed_time => Max + 1}),
+    ok = katipo:check_opts(#{low_speed_limit => Max, low_speed_time => Max}),
     %% A grant is clamped, not rejected: it means "plenty".
     ok = katipo:update_flow(?POOL, make_ref(), Max),
     ok = katipo:update_flow(?POOL, make_ref(), 1 bsl 64),
