@@ -88,6 +88,8 @@
 -define(PIPEWAIT, 33).
 -define(STREAM, 34).
 -define(STREAM_WINDOW, 35).
+-define(LOW_SPEED_LIMIT, 36).
+-define(LOW_SPEED_TIME, 37).
 
 -define(DEFAULT_REQ_TIMEOUT, 30000).
 
@@ -207,6 +209,8 @@
           pipewait = ?PIPEWAIT_TRUE :: ?PIPEWAIT_FALSE | ?PIPEWAIT_TRUE,
           stream = ?STREAM_FALSE :: ?STREAM_FALSE | ?STREAM_TRUE,
           stream_window = ?STREAM_WINDOW_UNLIMITED :: integer(),
+          low_speed_limit = 0 :: non_neg_integer(),
+          low_speed_time = 0 :: non_neg_integer(),
           retry = undefined :: undefined | katipo_retry:policy()
          }).
 

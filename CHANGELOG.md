@@ -6,6 +6,10 @@ All notable changes to this project are documented here. This project follows
 ## [Unreleased]
 
 ### Added
+- `low_speed_limit` and `low_speed_time` fail a transfer that runs slower
+  than the limit, in bytes per second, for that many seconds, with
+  `operation_timedout`, so a stalled download is caught without a short
+  `timeout_ms`. Each requires the other.
 - `retry => true | #{...}` sends a request again when an attempt fails:
   by default an idempotent request (GET, HEAD, OPTIONS, PUT, DELETE),
   up to 3 more times, after a connection error, a timeout, or a 429 or
