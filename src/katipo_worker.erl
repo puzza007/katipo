@@ -480,7 +480,9 @@ command({Self, Ref},
              ca_cache_timeout = CACacheTimeout,
              pipewait = Pipewait,
              stream = Stream,
-             stream_window = StreamWindow}) ->
+             stream_window = StreamWindow,
+             low_speed_limit = LowSpeedLimit,
+             low_speed_time = LowSpeedTime}) ->
     Opts = [{?CONNECTTIMEOUT_MS, ConnTimeoutMs},
             {?FOLLOWLOCATION, FollowLocation},
             {?SSL_VERIFYHOST, SslVerifyHost},
@@ -509,7 +511,9 @@ command({Self, Ref},
             {?CA_CACHE_TIMEOUT, CACacheTimeout},
             {?PIPEWAIT, Pipewait},
             {?STREAM, Stream},
-            {?STREAM_WINDOW, StreamWindow}],
+            {?STREAM_WINDOW, StreamWindow},
+            {?LOW_SPEED_LIMIT, LowSpeedLimit},
+            {?LOW_SPEED_TIME, LowSpeedTime}],
     term_to_binary({Self, Ref, Method, Url, Headers, CookieJar, Body, Opts}).
 
 -spec parse_headers([binary()]) -> katipo:resp_headers().

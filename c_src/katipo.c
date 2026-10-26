@@ -66,6 +66,8 @@
 #define K_CURLOPT_PIPEWAIT 33
 #define K_CURLOPT_STREAM 34
 #define K_CURLOPT_STREAM_WINDOW 35
+#define K_CURLOPT_LOW_SPEED_LIMIT 36
+#define K_CURLOPT_LOW_SPEED_TIME 37
 
 #define K_CURLAUTH_BASIC 100
 #define K_CURLAUTH_DIGEST 101
@@ -199,6 +201,8 @@ typedef struct _EasyOpts {
   long curlopt_pipewait;
   long curlopt_stream;
   long curlopt_stream_window;
+  long curlopt_low_speed_limit;
+  long curlopt_low_speed_time;
 } EasyOpts;
 
 /* A request body as Erlang sent it: iodata (data, size), a file to read
@@ -1488,6 +1492,8 @@ static void new_conn(long method, char *url, struct curl_slist *req_headers,
   curl_easy_setopt(conn->easy, CURLOPT_TIMEOUT_MS, eopts.curlopt_timeout_ms);
   curl_easy_setopt(conn->easy, CURLOPT_DNS_CACHE_TIMEOUT, eopts.curlopt_dns_cache_timeout);
   curl_easy_setopt(conn->easy, CURLOPT_MAXREDIRS, eopts.curlopt_maxredirs);
+  curl_easy_setopt(conn->easy, CURLOPT_LOW_SPEED_LIMIT, eopts.curlopt_low_speed_limit);
+  curl_easy_setopt(conn->easy, CURLOPT_LOW_SPEED_TIME, eopts.curlopt_low_speed_time);
   if (eopts.curlopt_http_auth != -1) {
     curl_easy_setopt(conn->easy, CURLOPT_HTTPAUTH,
                      eopts.curlopt_http_auth);
@@ -1763,6 +1769,12 @@ static int parse_eopts(char *buf, int *index, EasyOpts *eopts) {
         break;
       case K_CURLOPT_STREAM_WINDOW:
         eopts->curlopt_stream_window = eopt_long;
+        break;
+      case K_CURLOPT_LOW_SPEED_LIMIT:
+        eopts->curlopt_low_speed_limit = eopt_long;
+        break;
+      case K_CURLOPT_LOW_SPEED_TIME:
+        eopts->curlopt_low_speed_time = eopt_long;
         break;
       default:
         break;

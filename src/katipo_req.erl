@@ -63,7 +63,7 @@ validate(Opts, Mode, Url) ->
 
 cross_field_errors(Req, Url, Invalid) ->
     url_error(Req, Url, Invalid) ++ head_body_error(Req) ++
-        stream_opts_error(Req, Invalid) ++ retry_error(Req).
+        stream_opts_error(Req, Invalid) ++ low_speed_error(Req, Invalid) ++ retry_error(Req).
 
 url_error(#req{url = undefined}, url, Invalid) ->
     [{url, undefined} || not lists:member(url, Invalid)];
@@ -90,6 +90,14 @@ stream_opts_error(#req{stream = ?STREAM_FALSE, stream_window = W}, Invalid)
   when W =/= ?STREAM_WINDOW_UNLIMITED ->
     [{stream_window, W} || not lists:member(stream, Invalid)];
 stream_opts_error(#req{}, _) ->
+    [].
+
+%% curl checks the transfer speed only with both a limit and a time.
+low_speed_error(#req{low_speed_limit = L, low_speed_time = 0}, Invalid) when L > 0 ->
+    [{low_speed_limit, requires_low_speed_time} || not lists:member(low_speed_time, Invalid)];
+low_speed_error(#req{low_speed_limit = 0, low_speed_time = T}, Invalid) when T > 0 ->
+    [{low_speed_time, requires_low_speed_limit} || not lists:member(low_speed_limit, Invalid)];
+low_speed_error(#req{}, _) ->
     [].
 
 %% A policy that does not retry the request's method is no policy for it,
@@ -418,6 +426,10 @@ opt(userpwd, UserPwd, {Req, Errors}) when is_binary(UserPwd) ->
     {Req#req{userpwd = UserPwd}, Errors};
 opt(dns_cache_timeout, Secs, {Req, Errors}) when ?IS_INT_OPT(Secs, -1) ->
     {Req#req{dns_cache_timeout = Secs}, Errors};
+opt(low_speed_limit, Bytes, {Req, Errors}) when ?IS_INT_OPT(Bytes, 1) ->
+    {Req#req{low_speed_limit = Bytes}, Errors};
+opt(low_speed_time, Secs, {Req, Errors}) when ?IS_INT_OPT(Secs, 1) ->
+    {Req#req{low_speed_time = Secs}, Errors};
 opt(ca_cache_timeout, Secs, {Req, Errors}) when ?IS_INT_OPT(Secs, -1) ->
     {Req#req{ca_cache_timeout = Secs}, Errors};
 opt(pipewait, true, {Req, Errors}) ->
