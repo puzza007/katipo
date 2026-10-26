@@ -16,9 +16,11 @@ deriving instance Hashable for Msg
 deriving instance Hashable for St
 
 def succs (P : Params) (s : St) : List St :=
-  (if s.live = true ∧ s.curlPaused = false ∧ 0 < s.remaining ∧ s.window = 0
+  (if s.live = true ∧ s.curlPaused = false ∧ 0 < s.remaining ∧ s.window = 0 ∧
+      s.failed = false
    then [{ s with paused := true, curlPaused := true }] else []) ++
-  (if s.live = true ∧ s.curlPaused = false ∧ 0 < s.remaining ∧ s.window ≠ 0
+  (if s.live = true ∧ s.curlPaused = false ∧ 0 < s.remaining ∧ s.window ≠ 0 ∧
+      s.failed = false
    then [{ s with toW := s.toW ++ hdrs s ++ [.chunk], headersSent := true,
                   window := s.window - 1, remaining := s.remaining - 1 }] else []) ++
   (match s.pQ with
@@ -33,7 +35,7 @@ def succs (P : Params) (s : St) : List St :=
      else if s.unpausing = false ∧ n = 0 then [{ s with pQ := rest, live := false }]
      else []
    | [] => []) ++
-  (if s.unpausing = true
+  (if s.unpausing = true ∧ (P.completeOnFail && s.failed) = false
    then [{ s with unpausing := false,
                   paused := if P.clearFirst then s.paused else false }] else []) ++
   (if s.live = true ∧ s.unpausing = false ∧ s.remaining = 0 ∧ s.curlPaused = false
@@ -73,18 +75,28 @@ def succs (P : Params) (s : St) : List St :=
   (if P.batch ≤ s.owed ∧ terminal s = false
    then [{ s with flowQ := s.flowQ ++ [s.owed], owed := 0 }] else []) ++
   (if P.cancels = true ∧ terminal s = false ∧ s.cancelled = false
-   then [{ s with cancelQ := true, cancelled := true }] else [])
+   then [{ s with cancelQ := true, cancelled := true }] else []) ++
+  (if P.limits = true ∧ s.live = true ∧ s.curlPaused = false ∧ 0 < s.remaining ∧
+      s.window ≠ 0 ∧ s.failed = false ∧ s.unpausing = false
+   then [{ s with toW := s.toW ++ [.error], live := false }] else []) ++
+  (if P.limits = true ∧ s.live = true ∧ s.curlPaused = false ∧ 0 < s.remaining ∧
+      s.window ≠ 0 ∧ s.failed = false ∧ s.unpausing = true
+   then [{ s with failed := true }] else []) ++
+  (if s.unpausing = true ∧ P.completeOnFail = true ∧ s.failed = true
+   then [{ s with unpausing := false, toW := s.toW ++ [.error], live := false }] else [])
 
 theorem succs_complete {P : Params} {s t : St} (h : Step P s t) : t ∈ succs P s := by
   cases h <;> simp_all [succs]
 
 theorem succs_sound {P : Params} {s t : St} (h : t ∈ succs P s) : Step P s t := by
   simp only [succs, List.mem_append] at h
-  rcases h with ((((((((((((((h | h) | h) | h) | h) | h) | h) | h) | h) | h) | h) | h) | h) | h) | h)
+  rcases h with
+    (((((((((((((((((h | h) | h) | h) | h) | h) | h) | h) | h) | h) | h) | h) | h) | h) | h) |
+       h) | h) | h)
   · split at h <;> simp only [List.mem_singleton, List.not_mem_nil] at h
-    rename_i hg; subst h; exact .writePause s hg.1 hg.2.1 hg.2.2.1 hg.2.2.2
+    rename_i hg; subst h; exact .writePause s hg.1 hg.2.1 hg.2.2.1 hg.2.2.2.1 hg.2.2.2.2
   · split at h <;> simp only [List.mem_singleton, List.not_mem_nil] at h
-    rename_i hg; subst h; exact .writeChunk s hg.1 hg.2.1 hg.2.2.1 hg.2.2.2
+    rename_i hg; subst h; exact .writeChunk s hg.1 hg.2.1 hg.2.2.1 hg.2.2.2.1 hg.2.2.2.2
   · split at h
     · rename_i n rest hq
       split at h
@@ -108,7 +120,7 @@ theorem succs_sound {P : Params} {s t : St} (h : t ∈ succs P s) : Step P s t :
           · simp only [List.not_mem_nil] at h
     · simp only [List.not_mem_nil] at h
   · split at h <;> simp only [List.mem_singleton, List.not_mem_nil] at h
-    rename_i hg; subst h; exact .unpauseReturn s hg
+    rename_i hg; subst h; exact .unpauseReturn s hg.1 hg.2
   · split at h <;> simp only [List.mem_singleton, List.not_mem_nil] at h
     rename_i hg; subst h; exact .complete s hg.1 hg.2.1 hg.2.2.1 hg.2.2.2
   · split at h <;> simp only [List.mem_singleton, List.not_mem_nil] at h
@@ -145,6 +157,16 @@ theorem succs_sound {P : Params} {s t : St} (h : t ∈ succs P s) : Step P s t :
     rename_i hg; subst h; exact .consumerGrant s hg.1 hg.2
   · split at h <;> simp only [List.mem_singleton, List.not_mem_nil] at h
     rename_i hg; subst h; exact .consumerCancel s hg.1 hg.2.1 hg.2.2
+  · split at h <;> simp only [List.mem_singleton, List.not_mem_nil] at h
+    rename_i hg; subst h
+    exact .writeFailEvent s hg.1 hg.2.1 hg.2.2.1 hg.2.2.2.1 hg.2.2.2.2.1 hg.2.2.2.2.2.1
+      hg.2.2.2.2.2.2
+  · split at h <;> simp only [List.mem_singleton, List.not_mem_nil] at h
+    rename_i hg; subst h
+    exact .writeFailSync s hg.1 hg.2.1 hg.2.2.1 hg.2.2.2.1 hg.2.2.2.2.1 hg.2.2.2.2.2.1
+      hg.2.2.2.2.2.2
+  · split at h <;> simp only [List.mem_singleton, List.not_mem_nil] at h
+    rename_i hg; subst h; exact .unpauseFail s hg.1 hg.2.1 hg.2.2
 
 theorem succs_iff {P : Params} {s t : St} : t ∈ succs P s ↔ Step P s t :=
   ⟨succs_sound, succs_complete⟩

@@ -6,12 +6,18 @@
 (*  C port (c_src/katipo.c):                                               *)
 (*    write_cb      out of credits (window = 0): set paused, return        *)
 (*                  CURL_WRITEFUNC_PAUSE -- curl holds the data and        *)
-(*                  re-delivers it after CURLPAUSE_CONT. Otherwise send    *)
-(*                  headers (once) and a chunk, window--.                  *)
+(*                  re-delivers it after CURLPAUSE_CONT. Otherwise, if     *)
+(*                  the chunk takes the body past max_body_size (LimitOn), *)
+(*                  set fail_code and return short: curl aborts and calls  *)
+(*                  it no more. Otherwise send headers (once) and a chunk, *)
+(*                  window--.                                              *)
 (*    flow_conn     window += n; if paused: paused = 0, then               *)
 (*                  curl_easy_pause(CONT), which may call write_cb         *)
 (*                  synchronously (possibly several times, possibly        *)
-(*                  re-pausing), then check_multi_info.                    *)
+(*                  re-pausing), then check_multi_info. If write_cb failed *)
+(*                  in there, curl_easy_pause returns the error and arms   *)
+(*                  nothing more; resume_conn then completes the transfer  *)
+(*                  with the error itself (CompleteOnFail).                *)
 (*    check_multi_info  CURLE_OK: headers (if still owed) + done; else     *)
 (*                  error. Then free_conn.                                 *)
 (*    cancel_conn   free_conn; no message.                                 *)
@@ -62,7 +68,11 @@ CONSTANTS
   KillsOn,      \* the worker may be killed outright (no terminate/2)
   \* TRUE: flow_conn clears `paused` BEFORE curl_easy_pause(CONT), as the
   \* code does. FALSE: after it -- losing a re-pause raised inside the call.
-  ClearPausedFirst
+  ClearPausedFirst,
+  LimitOn,      \* a chunk may take the body past max_body_size
+  \* TRUE: resume_conn completes a transfer whose curl_easy_pause failed,
+  \* as the code does. FALSE: it ignores the failure, as it used to.
+  CompleteOnFail
 
 ASSUME W \in Nat \ {0} /\ Total \in Nat /\ GrantBatch \in Nat \ {0}
 
@@ -86,13 +96,14 @@ VARIABLES
   cancelled,   \* consumer called katipo:cancel/2
   pAlive,      \* the C port process is running
   wAlive,      \* the worker process is running
-  exitPending  \* the port's 'EXIT' is queued behind toW
+  exitPending, \* the port's 'EXIT' is queued behind toW
+  failed       \* write_cb failed the transfer inside curl_easy_pause
 
 vars == <<window, paused, curlPaused, unpausing, remaining, headersSent, live,
           toW, pQ, inReqs, flowQ, cancelQ, toC, owed,
           seenHeaders, chunksSeen, seenDone, seenError, orderBad, cancelled,
-          pAlive, wAlive, exitPending>>
-deathVars == <<pAlive, wAlive, exitPending>>
+          pAlive, wAlive, exitPending, failed>>
+deathVars == <<pAlive, wAlive, exitPending, failed>>
 portVars == <<window, paused, curlPaused, unpausing, remaining, headersSent,
               live, deathVars>>
 consVars == <<owed, seenHeaders, chunksSeen, seenDone, seenError, orderBad,
@@ -105,7 +116,7 @@ Init ==
   /\ flowQ = <<>> /\ cancelQ = <<>> /\ toC = <<>> /\ owed = 0
   /\ seenHeaders = FALSE /\ chunksSeen = 0 /\ seenDone = FALSE
   /\ seenError = FALSE /\ orderBad = FALSE /\ cancelled = FALSE
-  /\ pAlive = TRUE /\ wAlive = TRUE /\ exitPending = FALSE
+  /\ pAlive = TRUE /\ wAlive = TRUE /\ exitPending = FALSE /\ failed = FALSE
 
 Cancel == 0  \* the cancel command in pQ; grants are always positive
 
@@ -118,7 +129,7 @@ HeadersIfOwed == IF headersSent THEN <<>> ELSE <<"headers">>
 \* curl_easy_pause(CONT) when unpausing. curl only calls it while the
 \* handle is not paused.
 WriteCb ==
-  /\ live /\ ~curlPaused /\ remaining > 0
+  /\ live /\ ~curlPaused /\ remaining > 0 /\ ~failed
   /\ IF window = 0
      THEN /\ paused' = TRUE /\ curlPaused' = TRUE
           /\ UNCHANGED <<window, remaining, headersSent, toW>>
@@ -131,6 +142,21 @@ WriteCb ==
 
 EventWrite == ~unpausing /\ WriteCb
 SyncWrite  == unpausing /\ WriteCb
+
+\* write_cb with a credit for a chunk that takes the body past
+\* max_body_size. From the socket, curl ends the transfer and
+\* check_multi_info reports the port's error in the same callback. Inside
+\* curl_easy_pause, curl_easy_pause returns the error (UnpauseFail).
+WriteFail ==
+  /\ LimitOn /\ live /\ ~curlPaused /\ remaining > 0 /\ ~failed /\ window > 0
+  /\ IF unpausing
+     THEN /\ failed' = TRUE
+          /\ UNCHANGED <<toW, live>>
+     ELSE /\ toW' = Append(toW, "error") /\ live' = FALSE
+          /\ UNCHANGED failed
+  /\ UNCHANGED <<window, paused, curlPaused, unpausing, remaining, headersSent,
+                 pAlive, wAlive, exitPending, pQ, inReqs, flowQ, cancelQ, toC,
+                 consVars>>
 
 \* flow_conn, up to and including the curl_easy_pause(CONT) call.
 PortFlow ==
@@ -148,11 +174,19 @@ PortFlow ==
 
 \* curl_easy_pause returns (it stops delivering once re-paused or drained).
 UnpauseReturn ==
-  /\ unpausing
+  /\ unpausing /\ ~(failed /\ CompleteOnFail)
   /\ unpausing' = FALSE
   /\ paused' = IF ClearPausedFirst THEN paused ELSE FALSE
   /\ UNCHANGED <<deathVars, window, curlPaused, remaining, headersSent, live, toW, pQ,
                  inReqs, flowQ, cancelQ, toC, consVars>>
+
+\* curl_easy_pause returns write_cb's failure: resume_conn completes the
+\* transfer with it (complete_conn reports fail_code).
+UnpauseFail ==
+  /\ unpausing /\ failed /\ CompleteOnFail
+  /\ unpausing' = FALSE /\ toW' = Append(toW, "error") /\ live' = FALSE
+  /\ UNCHANGED <<deathVars, window, paused, curlPaused, remaining, headersSent,
+                 pQ, inReqs, flowQ, cancelQ, toC, consVars>>
 
 \* check_multi_info, CURLMSG_DONE with CURLE_OK: the body is drained.
 PortComplete ==
@@ -182,7 +216,7 @@ PortDies ==
   /\ PortDeathsOn /\ pAlive
   /\ pAlive' = FALSE /\ live' = FALSE /\ exitPending' = TRUE
   /\ unpausing' = FALSE /\ paused' = FALSE /\ curlPaused' = FALSE
-  /\ UNCHANGED <<window, remaining, headersSent, wAlive, toW, pQ, inReqs,
+  /\ UNCHANGED <<window, remaining, headersSent, wAlive, failed, toW, pQ, inReqs,
                  flowQ, cancelQ, toC, consVars>>
 
 (* ------------------------------- worker --------------------------------*)
@@ -193,7 +227,7 @@ WorkerExit ==
   /\ wAlive /\ exitPending /\ toW = <<>>
   /\ wAlive' = FALSE /\ exitPending' = FALSE /\ inReqs' = FALSE
   /\ toC' = IF inReqs THEN Append(toC, "error") ELSE toC
-  /\ UNCHANGED <<window, paused, curlPaused, unpausing, remaining,
+  /\ UNCHANGED <<window, paused, curlPaused, unpausing, remaining, failed,
                  headersSent, live, pAlive, toW, pQ, flowQ, cancelQ, consVars>>
 
 \* exit(Worker, kill): no terminate/2, no message. The linked port dies too
@@ -203,7 +237,7 @@ Kill ==
   /\ wAlive' = FALSE /\ pAlive' = FALSE /\ live' = FALSE /\ inReqs' = FALSE
   /\ exitPending' = FALSE /\ toW' = <<>>
   /\ unpausing' = FALSE /\ paused' = FALSE /\ curlPaused' = FALSE
-  /\ UNCHANGED <<window, remaining, headersSent, pQ, flowQ, cancelQ, toC,
+  /\ UNCHANGED <<window, remaining, headersSent, failed, pQ, flowQ, cancelQ, toC,
                  consVars>>
 
 WorkerPort ==
@@ -269,8 +303,8 @@ ConsumerCancel ==
 
 (* -------------------------------- spec ---------------------------------*)
 
-PortStep == EventWrite \/ SyncWrite \/ PortFlow \/ UnpauseReturn
-            \/ PortComplete \/ PortCancel
+PortStep == EventWrite \/ SyncWrite \/ WriteFail \/ PortFlow \/ UnpauseReturn
+            \/ UnpauseFail \/ PortComplete \/ PortCancel
 WorkerStep == WorkerPort \/ WorkerFlow \/ WorkerCancel \/ WorkerExit
 
 Next ==
@@ -324,6 +358,9 @@ ChunksBounded == chunksSeen <= Total
 \* paused transfer is never resumed.
 PausedAgrees == ~unpausing => (paused = curlPaused)
 
+\* A transfer write_cb failed inside curl_easy_pause ends when it returns.
+FailEnds == failed /\ ~unpausing => ~live
+
 \* Liveness: with a consumer that keeps granting, the transfer finishes.
 EventuallyTerminal == <>(Terminal \/ cancelled)
 EventuallyDone == <>seenDone
@@ -336,4 +373,7 @@ WitnessFullWindow == Outstanding < W
 \* ... and, with PortDeathsOn, a consumer that saw part of the body then
 \* got worker_died.
 WitnessDiedMidBody == ~(seenError /\ chunksSeen > 0 /\ ~pAlive)
+\* ... and, with LimitOn, a write_cb failure inside curl_easy_pause after
+\* part of the body went out.
+WitnessFailOnResume == ~(failed /\ unpausing /\ chunksSeen > 0)
 =============================================================================

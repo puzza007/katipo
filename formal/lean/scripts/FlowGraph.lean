@@ -2,15 +2,17 @@ import KatipoProofs.Flow.Executable
 import Std.Data.HashSet
 
 /-! Enumerate the Lean flow model's reachable graph for the instance in
-`formal/KatipoFlow.cfg` (or, with argument `crash`, `KatipoFlowCrash.cfg`)
-and print it in TLC's value syntax: one `I <state>` line for the initial
-state and one `E <state> => <state>` line per non-stuttering edge.
-Run: `lake env lean --run scripts/FlowGraph.lean [crash]`. -/
+`formal/KatipoFlow.cfg` (or, with argument `crash` or `limit`,
+`KatipoFlowCrash.cfg` or `KatipoFlowLimit.cfg`) and print it in TLC's value
+syntax: one `I <state>` line for the initial state and one
+`E <state> => <state>` line per non-stuttering edge.
+Run: `lake env lean --run scripts/FlowGraph.lean [crash | limit]`. -/
 
 open KatipoProofs.Flow
 
-def P0 : Params := ⟨2, 4, 1, true, true, true, false, true, by decide, by decide⟩
-def PCrash : Params := ⟨2, 4, 1, true, true, true, true, true, by decide, by decide⟩
+def P0 : Params := ⟨2, 4, 1, true, true, true, false, true, false, true, by decide, by decide⟩
+def PCrash : Params := ⟨2, 4, 1, true, true, true, true, true, false, true, by decide, by decide⟩
+def PLimit : Params := ⟨2, 4, 1, true, true, true, true, true, true, true, by decide, by decide⟩
 
 def tb (b : Bool) : String := if b then "TRUE" else "FALSE"
 def tm : Msg → String
@@ -30,7 +32,8 @@ def render (s : St) : String :=
     s!"seenError={tb s.seenError}", s!"seenHeaders={tb s.seenHeaders}",
     s!"toC={tseq (s.toC.map tm)}", s!"toW={tseq (s.toW.map tm)}",
     s!"unpausing={tb s.unpausing}", s!"window={s.window}",
-    s!"pAlive={tb s.pAlive}", s!"wAlive={tb s.wAlive}", s!"exitPending={tb s.exitQ}"]
+    s!"pAlive={tb s.pAlive}", s!"wAlive={tb s.wAlive}", s!"exitPending={tb s.exitQ}",
+    s!"failed={tb s.failed}"]
 
 partial def bfs (P0 : Params) (frontier : List St) (seen : Std.HashSet St) (out : Array String) :
     Array String :=
@@ -44,7 +47,7 @@ partial def bfs (P0 : Params) (frontier : List St) (seen : Std.HashSet St) (out 
     bfs P0 (rest ++ next.reverse) seen out
 
 def main (args : List String) : IO Unit := do
-  let P0 := if args == ["crash"] then PCrash else P0
+  let P0 := if args == ["crash"] then PCrash else if args == ["limit"] then PLimit else P0
   let s0 := init P0
   let edges := bfs P0 [s0] ((({} : Std.HashSet St).insert s0)) #[]
   IO.println s!"I {render s0}"
