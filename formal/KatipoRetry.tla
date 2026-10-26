@@ -286,6 +286,40 @@ Termination ==
        /\ running = {} /\ pipe = <<>> /\ out = <<>>)
 
 -----------------------------------------------------------------------------
+\* The Lean proof's invariants (lean/KatipoProofs/Retry/Proofs.lean), mirrored.
+
+IsCur(id) == st[id[1]] = "held" /\ mode[id[1]] = "attempt" /\ id[2] = cur[id[1]]
+Ids == {<<r, n>> : r \in R, n \in 0..MaxRetries + 1}
+Tokens(id) ==
+  Cardinality({i \in 1..Len(pipe) : pipe[i].t = "req" /\ pipe[i].id = id})
+  + Cardinality({x \in running : x.id = id})
+  + Cardinality({i \in 1..Len(out) : out[i].id = id})
+
+\* Gen: outcomes and transfers sent against each request's state.
+LeanGen ==
+  \A r \in R :
+    /\ delivered[r] = IF st[r] = "done" THEN 1 ELSE 0
+    /\ st[r] = "new" => sent[r] = 0
+    /\ st[r] = "held" => /\ sent[r] = cur[r] + 1 /\ cur[r] <= MaxRetries
+                         /\ (mode[r] = "backoff" => cur[r] < MaxRetries)
+    /\ sent[r] <= MaxRetries + 1
+
+\* Fr: with fresh ids, each id carries its attempt number, is in one place
+\* at most, exists only once sent, and is current or has a cancel behind it.
+LeanFr ==
+  /\ \A i \in 1..Len(pipe) : pipe[i].t = "req" => pipe[i].id[2] = pipe[i].n
+  /\ \A x \in running : x.id[2] = x.n
+  /\ \A i \in 1..Len(out) : out[i].id[2] = out[i].n
+  /\ \A id \in Ids : Tokens(id) <= 1
+  /\ \A id \in Ids : sent[id[1]] <= id[2] => Tokens(id) = 0
+  /\ \A i \in 1..Len(pipe) :
+       pipe[i].t = "req" =>
+         \/ IsCur(pipe[i].id)
+         \/ \E j \in i + 1..Len(pipe) : pipe[j].t = "cancel" /\ pipe[j].id = pipe[i].id
+  /\ \A x \in running : IsCur(x.id) \/ CancelQueued(x.id)
+  /\ ~stale
+
+-----------------------------------------------------------------------------
 \* Witnesses (-inv): each is violated, showing the state is reachable.
 
 \* A transfer's late output reaches the worker after the request moved on.
