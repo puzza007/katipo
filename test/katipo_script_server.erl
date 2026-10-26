@@ -14,8 +14,10 @@
 
 %% A step: {respond, Raw} sends Raw, which should carry
 %% `connection: close', and closes; `close' closes without a response;
-%% `hang' reads the request and never answers.
--type step() :: {respond, iodata()} | close | hang.
+%% `hang' reads the request and never answers; `keepalive' tells the owner
+%% {script_connection, Pid} and answers every request on the connection
+%% with a 200, keeping it open until the client closes it.
+-type step() :: {respond, iodata()} | close | hang | keepalive.
 
 -spec start([step()]) -> {ok, pid(), inet:port_number()}.
 start(Script) ->
@@ -53,6 +55,9 @@ accept(Listen, Owner, Script) ->
     Pid ! go,
     accept(Listen, Owner, Rest).
 
+serve(Sock, Owner, Server, keepalive) ->
+    Owner ! {script_connection, Server},
+    keepalive(Sock, Owner, Server);
 serve(Sock, Owner, Server, Step) ->
     case read_request(Sock) of
         {ok, Head, Body} ->
@@ -60,6 +65,16 @@ serve(Sock, Owner, Server, Step) ->
             answer(Sock, Step);
         closed ->
             ok
+    end.
+
+keepalive(Sock, Owner, Server) ->
+    case read_request(Sock) of
+        {ok, Head, Body} ->
+            Owner ! {script_request, Server, Head, Body},
+            ok = gen_tcp:send(Sock, <<"HTTP/1.1 200 OK\r\ncontent-length: 2\r\n\r\nok">>),
+            keepalive(Sock, Owner, Server);
+        closed ->
+            gen_tcp:close(Sock)
     end.
 
 answer(Sock, {respond, Raw}) ->
