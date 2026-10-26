@@ -2216,6 +2216,7 @@ int main(int argc, char **argv) {
     { "max-total-connections", required_argument, 0, 'c' },
     { "max-concurrent-streams", required_argument, 0, 's' },
     { "maxconnects", required_argument, 0, 'm' },
+    { "max-host-connections", required_argument, 0, 'h' },
     { 0, 0, 0, 0 }
   };
 
@@ -2234,7 +2235,7 @@ int main(int argc, char **argv) {
   global_init(&global);
 
   while (1) {
-    c = getopt_long(argc, argv, "p:c:s:m:", long_options, &option_index);
+    c = getopt_long(argc, argv, "p:c:s:m:h:", long_options, &option_index);
     if (c == -1)
       break;
     switch (c) {
@@ -2256,7 +2257,14 @@ int main(int argc, char **argv) {
         break;
 #endif
       case 'm':
+        /* Size it above peak concurrent connections, or leave it unset: an
+         * undersized cache defeats reuse, and the churn leaves half-closed
+         * sockets faster than curl reaps them. */
         curl_multi_setopt(global.multi, CURLMOPT_MAXCONNECTS,
+                          strtol(optarg, NULL, 10));
+        break;
+      case 'h':
+        curl_multi_setopt(global.multi, CURLMOPT_MAX_HOST_CONNECTIONS,
                           strtol(optarg, NULL, 10));
         break;
       default:
