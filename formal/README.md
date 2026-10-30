@@ -137,7 +137,7 @@ the deadline they reported whenever they are run for a timeout, which makes
 an early fire harmless; 8.10.0 to 8.11.0 do not, so the early fire left no
 timer pending and a timeout waited for unrelated socket activity. That was
 the intermittent `async.streaming_timeout` failure in the HTTP/3 CI job,
-which builds libcurl 8.11.0. Timers also fire early for a second reason:
+which builds libcurl 8.11.0 alongside the current release. Timers also fire early for a second reason:
 libevent and libcurl read different clocks (on Linux libevent defaults to
 `CLOCK_MONOTONIC_COARSE`, libcurl uses `CLOCK_MONOTONIC_RAW`), which
 `ClockLag` models. Refreshing libevent's cached time removes the first cause

@@ -11,7 +11,7 @@ jobs:
       fail-fast: false
       matrix:
         otp: ['27', '28', '29']
-        rebar3: ['3.27.0']
+        rebar3: ['3.28.0']
 
     steps:
       - uses: actions/checkout@v7
@@ -58,7 +58,7 @@ jobs:
           lcov --remove coverage.info '/usr/*' --output-file coverage.info
 
       - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@v5
+        uses: codecov/codecov-action@v7
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: ./_build/test/covertool/katipo.covertool.xml,./c_src/coverage.info
@@ -114,7 +114,7 @@ jobs:
     strategy:
       matrix:
         otp: ['27']
-        rebar3: ['3.27.0']
+        rebar3: ['3.28.0']
 
     steps:
       - uses: actions/checkout@v7
@@ -190,7 +190,33 @@ jobs:
     runs-on: ubuntu-latest
     # Building curl with HTTP/3 support on a cache miss takes most of this.
     timeout-minutes: 45
-    name: HTTP/3 Tests
+    name: HTTP/3 Tests (${{ matrix.curl }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Current curl, on OpenSSL's own QUIC API.
+          - curl: curl-8_23_0
+            openssl_repo: https://github.com/openssl/openssl.git
+            openssl: openssl-3.5.9
+            nghttp3: v1.18.0
+            ngtcp2: v1.25.0
+          # curl 8.10.0-8.11.0 keep the timer deadline they reported, the
+          # one range where the C port's timer re-arm is needed
+          # (formal/KatipoTimerOld811.cfg). It predates OpenSSL's QUIC API,
+          # so it builds quictls and the ngtcp2 and nghttp3 of its day.
+          - curl: curl-8_11_0
+            openssl_repo: https://github.com/quictls/openssl.git
+            openssl: openssl-3.1.4+quic
+            nghttp3: v1.6.0
+            ngtcp2: v1.8.1
+    env:
+      OPENSSL_REPO: ${{ matrix.openssl_repo }}
+      OPENSSL_TAG: ${{ matrix.openssl }}
+      NGHTTP3_TAG: ${{ matrix.nghttp3 }}
+      NGTCP2_TAG: ${{ matrix.ngtcp2 }}
+      CURL_TAG: ${{ matrix.curl }}
+      CURL_PREFIX: /tmp/curl-http3/install
 
     steps:
       - uses: actions/checkout@v7
@@ -215,8 +241,8 @@ jobs:
         uses: actions/cache@v6
         id: curl-cache
         with:
-          path: /tmp/curl-http3
-          key: curl-http3-8.11.0-recursive-${{ runner.os }}
+          path: ${{ env.CURL_PREFIX }}
+          key: curl-http3-${{ env.CURL_TAG }}-${{ env.NGTCP2_TAG }}-${{ env.NGHTTP3_TAG }}-${{ env.OPENSSL_TAG }}-${{ runner.os }}
 
       - name: Build curl with HTTP/3 support
         if: steps.curl-cache.outputs.cache-hit != 'true'
@@ -225,47 +251,46 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y build-essential pkg-config autoconf libtool cmake libpsl-dev
 
-          mkdir -p /tmp/curl-http3
-          cd /tmp/curl-http3
+          SRC=$(mktemp -d)
+          cd "$SRC"
+          PREFIX=$CURL_PREFIX
+          export PKG_CONFIG_PATH=$PREFIX/lib/pkgconfig
 
-          # Build OpenSSL with QUIC support (quictls)
-          git clone --depth 1 -b openssl-3.1.4+quic https://github.com/quictls/openssl.git
+          git clone --depth 1 -b "$OPENSSL_TAG" "$OPENSSL_REPO" openssl
           cd openssl
-          ./config --prefix=/tmp/curl-http3/install --openssldir=/tmp/curl-http3/install/ssl
+          ./config --prefix=$PREFIX --openssldir=$PREFIX/ssl --libdir=lib
           make -j$(nproc)
           make install_sw
           cd ..
 
           # Build nghttp3 (sfparse is built as a submodule)
-          git clone --recursive https://github.com/ngtcp2/nghttp3.git
+          git clone --depth 1 --recursive -b "$NGHTTP3_TAG" https://github.com/ngtcp2/nghttp3.git
           cd nghttp3
           autoreconf -fi
-          ./configure --prefix=/tmp/curl-http3/install --enable-lib-only \
-            PKG_CONFIG_PATH=/tmp/curl-http3/install/lib/pkgconfig:/tmp/curl-http3/install/lib64/pkgconfig
+          ./configure --prefix=$PREFIX --enable-lib-only
           make -j$(nproc)
           make install
           cd ..
 
           # Build ngtcp2
-          git clone --depth 1 https://github.com/ngtcp2/ngtcp2.git
+          git clone --depth 1 --recursive -b "$NGTCP2_TAG" https://github.com/ngtcp2/ngtcp2.git
           cd ngtcp2
           autoreconf -fi
-          ./configure --prefix=/tmp/curl-http3/install --enable-lib-only \
-            PKG_CONFIG_PATH=/tmp/curl-http3/install/lib/pkgconfig:/tmp/curl-http3/install/lib64/pkgconfig \
-            --with-openssl=/tmp/curl-http3/install
+          ./configure --prefix=$PREFIX --enable-lib-only --with-openssl \
+            LDFLAGS="-Wl,-rpath,$PREFIX/lib"
           make -j$(nproc)
           make install
           cd ..
 
           # Build curl with HTTP/3
-          git clone --depth 1 -b curl-8_11_0 https://github.com/curl/curl.git
+          git clone --depth 1 -b "$CURL_TAG" https://github.com/curl/curl.git
           cd curl
           autoreconf -fi
-          ./configure --prefix=/tmp/curl-http3/install \
-            --with-openssl=/tmp/curl-http3/install \
-            --with-nghttp3=/tmp/curl-http3/install \
-            --with-ngtcp2=/tmp/curl-http3/install \
-            PKG_CONFIG_PATH=/tmp/curl-http3/install/lib/pkgconfig:/tmp/curl-http3/install/lib64/pkgconfig
+          ./configure --prefix=$PREFIX \
+            --with-openssl=$PREFIX \
+            --with-nghttp3=$PREFIX \
+            --with-ngtcp2=$PREFIX \
+            LDFLAGS="-Wl,-rpath,$PREFIX/lib"
           make -j$(nproc)
           make install
           cd ..
@@ -273,7 +298,7 @@ jobs:
       - uses: erlef/setup-beam@v1
         with:
           otp-version: '27'
-          rebar3-version: '3.24.0'
+          rebar3-version: '3.28.0'
 
       - name: Install dependencies
         run: |
@@ -283,12 +308,11 @@ jobs:
       - name: Build and test with HTTP/3 curl
         env:
           KATIPO_TEST_HTTP3: "true"
-          PKG_CONFIG_PATH: /tmp/curl-http3/install/lib/pkgconfig:/tmp/curl-http3/install/lib64/pkgconfig
-          LD_LIBRARY_PATH: /tmp/curl-http3/install/lib:/tmp/curl-http3/install/lib64
-          CURL_PREFIX: /tmp/curl-http3/install
+          PKG_CONFIG_PATH: ${{ env.CURL_PREFIX }}/lib/pkgconfig
+          LD_LIBRARY_PATH: ${{ env.CURL_PREFIX }}/lib
         run: |
           # Add custom curl to PATH
-          export PATH=/tmp/curl-http3/install/bin:$PATH
+          export PATH=$CURL_PREFIX/bin:$PATH
 
           # Verify HTTP/3 support
           curl --version | grep -i http3
