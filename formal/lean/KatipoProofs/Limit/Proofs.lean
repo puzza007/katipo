@@ -51,7 +51,7 @@ theorem fails_iff_none (limit : Nat) (cs : List Nat) :
     by_cases h : limit < n + c
     · simp [upfront, h]; omega
     · simp only [upfront, Option.any_none, Bool.and_false, Bool.false_or, h,
-        decide_false, Bool.false_eq_true, if_false]
+        decide_false, Bool.false_eq_true, ite_false]
       rw [ih (n + c) (by omega)]; simp; omega
 
 theorem forwarded_within (limit : Nat) (cl : Option Nat) (cs : List Nat) :
@@ -104,10 +104,10 @@ theorem refused_overflows (limit : Nat) (cs : List Nat) :
     rw [run_cons] at h ⊢
     by_cases hc : limit < n + c
     · simp only [upfront, Option.any_none, Bool.and_false, Bool.false_or, hc, decide_true,
-        if_true]
+        ite_true]
       exact ⟨c, cs, by simp, by simp; omega⟩
     · simp only [upfront, Option.any_none, Bool.and_false, Bool.false_or, hc, decide_false,
-        Bool.false_eq_true, if_false] at h ⊢
+        Bool.false_eq_true, ite_false] at h ⊢
       obtain ⟨c', rest, h1, h2⟩ := ih (n + c) h
       exact ⟨c', rest, by simp; exact h1, by simp; omega⟩
 
@@ -134,7 +134,7 @@ theorem honest_upfront (limit : Nat) (cs : List Nat) (hpos : ∀ c ∈ cs, 0 < c
       rw [run_pos limit _ cs c hc]
       refine ⟨by simp, fun h => absurd h ?_⟩
       have hle : ¬ limit < c := by omega
-      simp only [hle, if_false, Bool.not_eq_true]
+      simp only [hle, ite_false, Bool.not_eq_true]
       cases hr : (run limit none c cs).2
       · rfl
       · have := (fails_iff_none limit cs c (by omega)).1 hr; omega

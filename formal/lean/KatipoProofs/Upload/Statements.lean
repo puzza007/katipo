@@ -46,7 +46,7 @@ theorem one_demand (P : Params) (he : P.eager = false) (hlr : P.liar = false)
     (hg : P.guard = true ∨ P.masked = true) (s : St) (h : Reach P s) (hr : s.inReqs = true) :
     demands s ≤ 1 := by
   have := (dem_reach he hlr hg h).one
-  simp only [tokens, answerable, demands, hr, if_true] at this ⊢; omega
+  simp only [tokens, answerable, demands, hr, ite_true] at this ⊢; omega
 
 /-- Whatever the caller sends, curl never gets more than the declared
 length (`LengthHeld`). -/

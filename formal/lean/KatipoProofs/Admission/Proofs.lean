@@ -88,12 +88,12 @@ macro_rules
       by_cases hx : x = $r
       · subst hx
         simp only [upd_same, admitting, replyExpired, resolve, Bool.toNat, cntReq_append, cntReq_req,
-          cntReq_cancel, cntReq_resp, cntReq_chunk, cntReq_nil, List.append_nil, if_true] at *
+          cntReq_cancel, cntReq_resp, cntReq_chunk, cntReq_nil, List.append_nil, ite_true] at *
         grind [cntReq_req, cntReq_cancel, cntReq_resp, cntReq_chunk, cntReq_nil]
       · have hx' : ¬ $r = x := fun h => hx h.symm
         simp only [upd_other _ _ _ _ hx, hx, hx', admitting, replyExpired, resolve, Bool.toNat,
           cntReq_append, cntReq_req, cntReq_cancel, cntReq_resp, cntReq_chunk,
-          cntReq_nil, if_false] at *
+          cntReq_nil, ite_false] at *
         grind [cntReq_req, cntReq_cancel, cntReq_resp, cntReq_chunk, cntReq_nil]))
 
 /-- Preserve `Inv` across a step touching only request `r` and leaving
