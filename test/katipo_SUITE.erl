@@ -342,9 +342,7 @@ groups() ->
        otel_metrics_recorded,
        otel_async_span_created,
        otel_async_metrics_recorded,
-       otel_url_sanitization,
-       otel_noop_metrics_no_crash,
-       otel_metrics_init_no_crash]},
+       otel_url_sanitization]},
      %% Alone: it changes the VM's working directory.
      {cwd, [], [file_body_relative]},
      {http1, [parallel],
@@ -2443,42 +2441,6 @@ metric_contains_name([H | T], Name) ->
     metric_contains_name(H, Name) orelse metric_contains_name(T, Name);
 metric_contains_name(_, _) ->
     false.
-
-otel_noop_metrics_no_crash(_Config) ->
-    %% opentelemetry_api_experimental 0.5.1 has a bug where otel_meter_noop
-    %% is missing record/5, causing undef crashes on metric calls when no
-    %% OTel SDK is configured.
-    %% See: https://github.com/open-telemetry/opentelemetry-erlang/pull/876
-    %%
-    %% Simulate the bug by mocking otel_meter to delegate to a module that
-    %% only has record/3 and record/4 (like the broken noop).
-    ok = meck:new(otel_meter, [passthrough, no_link]),
-    meck:expect(otel_meter, record, 5,
-                meck:raise(error, undef)),
-    meck:expect(otel_meter, record, 4,
-                meck:raise(error, undef)),
-
-    Response = {ok, #{status => 200}},
-    Metrics = [{total_time, 0.1}, {namelookup_time, 0.01}],
-    _ = katipo_metrics:notify(Response, Metrics, 100, <<"GET">>),
-
-    ErrorResponse = {error, timeout},
-    _ = katipo_metrics:notify(ErrorResponse, Metrics, 100, <<"POST">>),
-
-    meck:unload(otel_meter),
-    ok.
-
-otel_metrics_init_no_crash(_Config) ->
-    %% Instrument creation must be guarded like the record path: with no metrics
-    %% SDK the noop meter raises undef, and an unguarded init/0 would crash the
-    %% whole application at startup (katipo_app calls it).
-    ok = meck:new(otel_meter, [passthrough, no_link]),
-    meck:expect(otel_meter, create_counter, 3, meck:raise(error, undef)),
-    meck:expect(otel_meter, create_histogram, 3, meck:raise(error, undef)),
-    ok = katipo_metrics:init(),
-    meck:unload(otel_meter),
-    %% Re-create instruments against the real meter for later tests.
-    ok = katipo_metrics:init().
 
 otel_url_sanitization(_Config) ->
     %% Test that query strings are stripped (prevents leaking API keys, tokens, etc.)

@@ -106,8 +106,10 @@ cap_is_per_worker(_Config) ->
     [{error, #{code := operation_timedout}} = katipo:await(Ref, ?WAIT) || Ref <- Refs].
 
 %% A cache of one connection: after requests to A then B, B's connection
-%% has taken A's place, so A gets a new one. curl up to 8.11 evicts the
-%% oldest by age in whole milliseconds, so the requests are a few apart.
+%% has taken A's place, so A gets a new one. curl evicts the oldest idle
+%% connection, and up to 8.11 tells their ages apart only in whole
+%% milliseconds, so the requests are a few apart. Checked with curl 8.5,
+%% 8.11 and 8.23.
 cache_evicts(_Config) ->
     2 = connections_to_a(cache_evicts, [{maxconnects, 1}]).
 
