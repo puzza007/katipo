@@ -255,6 +255,51 @@ on, a cancel queued during a backoff, a request retried to the limit, and
 a stale request timer firing while a later attempt runs all happen. Every
 action fires (`-coverage 1`).
 
+### Pool defaults
+
+`KatipoPoolDefaults.tla`: one pool's default request options and their
+lifetime. `katipo_pool:start/3` starts a wpool pool whose options carry the
+defaults and a fresh generation; the pool's supervisor registers the name,
+stores the options in a `persistent_term`, then starts the workers, which
+hold the generation. The term is never erased, only overwritten by the next
+start under the name. `stop/1` terminates the pool; a crashed pool is
+restarted by `wpool_sup` from the same options. Callers find the name, read
+the term, or finding none store wpool's rebuild without the defaults over
+whatever the term holds by then; with rebuilt options they ask a worker for
+its configuration (`Fallback`); then they call a worker, all in any order.
+
+| config | question | result |
+|---|---|---|
+| `KatipoPoolDefaults.cfg` | with requests tagged with their pool's generation: is every request served with its own pool's defaults, are the stored options and the workers the running pool's, is nothing left after a stop; and the Lean invariant, mirrored | pass |
+| `KatipoPoolDefaultsLiveness.cfg` | does a pool that is not being stopped always come back up after a crash? | pass |
+| `KatipoPoolDefaultsRebuild.cfg` | can wpool's rebuild replace the options of a pool that is running? | **fails**, as found: a caller that finds the name as the pool first starts, but not its options, stores the rebuild after `init/1` has stored the pool's own, and the pool runs with it |
+| `KatipoPoolDefaultsNoAsk.cfg` | generations, but no fallback | **fails**, as expected: a request read from the rebuild has no generation, so every worker of the running pool refuses it, and every later one too |
+| `KatipoPoolDefaultsWindow.cfg` | no generations or fallback, one configuration | **fails**, as expected: a request that finds the name as the pool first starts, before its options are stored, reads wpool's rebuild and is served with no defaults |
+| `KatipoPoolDefaultsStale.cfg` | no generations or fallback, across a stop and a start with other defaults | **fails**, as expected: a request that finds the name of the pool being replaced reads its options after the next start has the name, and is served by that pool with the old defaults |
+
+**Found.** Both races are reads of the name and the options that a start
+falls between, so the options alone cannot be trusted to be the serving
+pool's. Each `katipo_pool:start/3` makes a generation, a reference the
+options and the workers both hold; a request carries the one it read (none
+from a rebuild), and a worker refuses any other. An earlier version kept
+the defaults in an ETS table owned by a supervisor of katipo's own; it
+needed the same generation, and a wait for the previous pool in its
+`init/1`, which this design has no use for. `refuses_other_generations` in
+`test/katipo_defaults_SUITE.erl` checks the worker refuses a request with
+no generation or another pool's.
+
+**Found in review.** wpool keeps the options it rebuilds, and a caller
+racing the pool's first start can store them over the pool's own
+(`KatipoPoolDefaultsRebuild.cfg`); the model had the rebuild as a read
+only. With generations alone that pool then refuses every request
+(`KatipoPoolDefaultsNoAsk.cfg`). The workers have the defaults in their
+arguments too, so a caller with rebuilt options asks one for them
+(`katipo_worker:defaults/1`). `served_after_rebuild` in
+`test/katipo_defaults_SUITE.erl` reproduces it by erasing wpool's record.
+Witnesses (`-inv`): a request served, a pool restarted after a crash, a
+request served while the term is the rebuild. Every action fires
+(`-coverage 1`).
+
 ## Lean proofs (`lean/`)
 
 Core Lean 4 only (no Mathlib), toolchain pinned in `lean/lean-toolchain`.
@@ -322,6 +367,33 @@ over the chunks curl hands it, with any Content-Length or none.
 | `forwarded_is_prefix`, `forwarded_all` | what is forwarded is the body's first chunks, in order, and all of them unless the transfer failed |
 | `refused_overflows` | the chunk refused is the one that would have gone over: nothing that fits is refused |
 | `upfront_only_sooner` | with an honest Content-Length, the up-front check changes no verdict, and a failure forwards nothing |
+
+### Pool defaults: any number of requests and restarts
+
+`Defaults/Model.lean` transcribes `KatipoPoolDefaults.tla`, without TLC's
+bounds on starts and crashes; `Defaults/Merge.lean` transcribes
+`katipo_defaults:merge/2`'s option and header merge and its scoping of
+credentials to `base_url`'s origin. The statements were re-frozen on
+2026-10-27 for the move from a supervisor's ETS table to wpool's options
+(`Defaults/Statements.lean` says what changed), and revised on 2026-10-30
+for wpool's rebuild and the fallback.
+
+| theorem | says |
+|---|---|
+| `ran_with_its_defaults` | with generations, a request is only served with the defaults of the pool serving it |
+| `term_with_pool` | the stored options are the running pool's own or wpool's rebuild, and the workers are the running pool's own |
+| `never_without_generation` | with the fallback, no request is left with no generation |
+| `rebuild_replaces_options`, `without_fallback_refused` | the rebuild can replace a running pool's options, and without the fallback a request then has no generation, which no worker serves (explicit traces) |
+| `nothing_left` | nothing outlives a stopped pool: a request then finds none |
+| `unchecked_window`, `unchecked_stale` | the generation is necessary (explicit traces) |
+| `request_option_wins`, `default_option_applies` | an option the request gives wins, else the default applies |
+| `credentials_stay_on_origin`, `unknown_origin_never_same` | a request for another origin than `base_url`'s, or one whose origin cannot be told, has none of the origin-only defaults |
+| `request_headers_kept`, `default_header_kept_iff`, `request_name_wins` | the request's headers all come first, in order; a default header stays exactly when the request has none of its name |
+| `headers_idempotent` | merging the defaults into headers that already have them changes nothing |
+
+The invariant is mirrored as `LeanInv` in `KatipoPoolDefaults.tla`.
+Weakening the worker's generation check breaks the proof at the step that
+uses it. The url's resolution and `uri_string`'s normalisation are trusted.
 
 ### Admission and delivery: any number of requests and crashes
 
@@ -572,6 +644,11 @@ as separate attempts.
   map (port id -> key) that `current/2` resolves a port message through:
   each message names its request directly, and the map's upkeep is left
   to `stale_port_output_dropped` and the other worker tests.
+
+- Pool defaults: wpool stores a pool's options before its workers start,
+  restarts a pool from the same options, and `find_wpool/1` gives them only
+  while the name is registered. A `url`'s resolution against `base_url` is
+  `uri_string:resolve/2`'s, and an origin `uri_string:normalize/2`'s.
 
 If you change the worker dispatch/delivery logic or the C flow-control path,
 update the matching spec and Lean transcription and re-run everything above.
