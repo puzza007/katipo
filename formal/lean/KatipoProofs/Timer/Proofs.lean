@@ -132,9 +132,9 @@ theorem post_timer (P : Params) (s : St) (isTimer : Bool) (extra drop : Option N
   unfold callback update
   simp only [hm, hne]
   by_cases h : repOf (some m) = (if isTimer && P.resets then Rep.none else s.last)
-  · rw [if_pos h, if_pos h]
+  · rw [ite_eq_left h, ite_eq_left h]
     cases isTimer <;> cases P.rearm <;> simp
-  · rw [if_neg h, if_neg h, hy]
+  · rw [ite_eq_right h, ite_eq_right h, hy]
     cases isTimer <;> cases P.rearm <;> simp
 
 theorem callback_inv (P : Params) (s : St) (hI : Inv P s)
@@ -157,9 +157,9 @@ theorem callback_inv (P : Params) (s : St) (hI : Inv P s)
       (isTimer && P.resets) = false ∧ minD s.ds = some m := by
     intro m _ hL
     cases hb : (isTimer && P.resets)
-    · rw [hb, if_neg (by simp), hI.lastOk] at hL
+    · rw [hb, ite_eq_right (by simp), hI.lastOk] at hL
       exact ⟨rfl, (repOf_inj hL).symm⟩
-    · rw [hb, if_pos rfl] at hL
+    · rw [hb, ite_eq_left rfl] at hL
       exact absurd hL (repOf_some_ne_none _)
   -- With the refresh on one clock and no re-arm, that fire cannot happen:
   -- the timer was not before the deadline, so the deadline was due and has
@@ -179,7 +179,7 @@ theorem callback_inv (P : Params) (s : St) (hI : Inv P s)
     rw [hds] at hm
     rw [post_timer P s isTimer extra drop k m hm, hnow]
     by_cases hL : repOf (some m) = (if isTimer && P.resets then Rep.none else s.last)
-    · rw [if_pos hL]
+    · rw [ite_eq_left hL]
       obtain ⟨hb, hold⟩ := hsame m hm hL
       cases hT : isTimer
       · obtain ⟨x, hx, h⟩ := hI.armed hP m hold
@@ -194,25 +194,25 @@ theorem callback_inv (P : Params) (s : St) (hI : Inv P s)
         · obtain ⟨x, hx⟩ := Option.isSome_iff_exists.mp
             (timerFor_isSome P m (s.now + k) s.now)
           exact ⟨x, by simp [hx], timerFor_armed P (by omega) hx⟩
-    · rw [if_neg hL]
+    · rw [ite_eq_right hL]
       obtain ⟨x, hx⟩ := Option.isSome_iff_exists.mp (timerFor_isSome P m (s.now + k) s.now)
       exact ⟨x, hx, timerFor_armed P (by omega) hx⟩
   · intro hrf m x hm hx
     rw [hds] at hm
     rw [post_timer P s isTimer extra drop k m hm] at hx
     by_cases hL : repOf (some m) = (if isTimer && P.resets then Rep.none else s.last)
-    · rw [if_pos hL] at hx
+    · rw [ite_eq_left hL] at hx
       obtain ⟨_, hold⟩ := hsame m hm hL
       cases hT : isTimer
-      · simp only [hT, Bool.false_and, Bool.false_eq_true, if_false] at hx
+      · simp only [hT, Bool.false_and, Bool.false_eq_true, ite_false] at hx
         exact hI.noEarly hrf m x hold hx
       · -- A fire that left the deadline unchanged: the re-arm sets the timer
         -- from the refreshed time, and without it none is pending.
         cases hA : P.rearm
         · simp [hT, hA] at hx
-        · simp only [hT, hA, Bool.and_self, if_true] at hx
+        · simp only [hT, hA, Bool.and_self, ite_true] at hx
           exact timerFor_refresh P hrf hx
-    · rw [if_neg hL] at hx
+    · rw [ite_eq_right hL] at hx
       exact timerFor_refresh P hrf hx
   · intro _ m hm
     rw [hds] at hm

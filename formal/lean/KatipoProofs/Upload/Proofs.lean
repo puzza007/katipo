@@ -297,7 +297,7 @@ theorem eof_step {P : Params} (hlr : P.liar = false) {s t : St} (hC : Cons s) (h
       · dsimp only at hx ⊢; rw [← hE] at hx; exact e6 hx
       · dsimp only at hx; simp [ne] at hx
       · dsimp only at hx hl ⊢; simp [ne] at hx hl
-        have := e8 hl (Or.inl (by rw [hE]; exact hx)); rw [if_pos rfl]; omega
+        have := e8 hl (Or.inl (by rw [hE]; exact hx)); rw [ite_eq_left rfl]; omega
     | eof =>
       have hE : cntBody .eof s.pQ = cntBody .eof rest + 1 := by simp [h2]; omega
       have hD : cntBody .data s.pQ = cntBody .data rest := by simp [h2]
@@ -372,7 +372,7 @@ theorem eof_step {P : Params} (hlr : P.liar = false) {s t : St} (hC : Cons s) (h
     have hp : ∀ q : List Cmd, cntBody .data (q ++ [.flow n]) = cntBody .data q ∧
         cntBody .eof (q ++ [.flow n]) = cntBody .eof q := by intro q; simp [cntBody]
     cases hi : s.inReqs <;>
-      simp only [if_true, if_false, Bool.false_eq_true] <;>
+      simp only [ite_true, ite_false, Bool.false_eq_true] <;>
       first
       | exact ⟨e1, e2, e3, e4, e5, e6, e7, e8, e9⟩
       | exact ⟨e1, e2, by simpa [hp] using e3, e4,
@@ -382,7 +382,7 @@ theorem eof_step {P : Params} (hlr : P.liar = false) {s t : St} (hC : Cons s) (h
     have hp : ∀ q : List Cmd, cntBody .data (q ++ [.cancel]) = cntBody .data q ∧
         cntBody .eof (q ++ [.cancel]) = cntBody .eof q := by intro q; simp [cntBody]
     cases hi : s.inReqs <;>
-      simp only [if_true, if_false, Bool.false_eq_true] <;>
+      simp only [ite_true, ite_false, Bool.false_eq_true] <;>
       first
       | exact ⟨e1, e2, e3, e4, e5, e6, e7, e8, e9⟩
       | exact ⟨e1, e2, by simpa [hp] using e3, e4,
@@ -478,7 +478,7 @@ theorem cons_step {P : Params} (hlr : P.liar = false) {s t : St} (hI : Cons s) (
     cases b <;> simp at this
   | workerBody b rest h1 =>
     intro hr hl; dsimp only at hr hl ⊢; have := hI hr hl
-    rw [h1] at this; simp only [hr, if_true]; cases b <;> simp at this ⊢ <;> omega
+    rw [h1] at this; simp only [hr, ite_true]; cases b <;> simp at this ⊢ <;> omega
   | callerData =>
     intro hr hl; dsimp only at hr hl ⊢; have := hI hr hl; simp; omega
   | callerEof =>

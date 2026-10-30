@@ -246,7 +246,8 @@ theorem fstep_proj {P : Params} {f g : FSt R} (hI : FInv f) (h : FStep P f g) :
     | recvChunk r rest hw hi hq =>
       left; have := Step.recvChunk (P := P) (proj f) r [] (rest.filterMap FMsg.toW) hw hi
         (by simp [proj, hq])
-      simpa [proj] using this
+      simp only [proj] at this ⊢
+      exact this
     | recvExit rest hw hi hq =>
       left; have := Step.crash (P := P) (proj f) hw
       simpa [proj, fcrash, crash] using this

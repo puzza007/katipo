@@ -118,7 +118,12 @@ theorem count_req_eq (r : R) : ∀ l : List (FMsg R),
   | [] => rfl
   | m :: l => by
     have ih := count_req_eq r l
-    cases m <;> simp [List.count_cons, ih] <;> grind
+    cases m with
+    | req x =>
+      by_cases h : x = r
+      · subst h; simp [FMsg.toW, ih]; omega
+      · simp [FMsg.toW, h, ih]
+    | _ => simp [List.filterMap_cons, FMsg.toW, ih]
 
 structure LInv (f : FSt R) : Prop where
   /-- where an unresolved request can be -/
@@ -165,7 +170,7 @@ macro_rules
         clear l1 l2 l3 l4 l5 l6 l7
         by_cases hx : x = $r
         · subst hx
-          simp only [upd_same, if_true, admitting, resolved, abortPQ_nil, ua_abortPQ, cntP_abortPQ, mem_abortPQ_req,
+          simp only [upd_same, ite_true, admitting, resolved, abortPQ_nil, ua_abortPQ, cntP_abortPQ, mem_abortPQ_req,
             mem_abortPQ_cancel, replyExpired, resolve, Bool.toNat, List.mem_append,
             List.mem_singleton, List.mem_cons, FMsg.req.injEq, FMsg.resp.injEq, FMsg.cancel.injEq,
             FMsg.timeout.injEq, reduceCtorEq, List.not_mem_nil, req_mem_of_cnt,
@@ -174,7 +179,7 @@ macro_rules
             toW_exit, cntReq_req, cntReq_cancel, cntReq_resp, cntReq_chunk, cntReq_nil, proj] at *
           grind
         · have hx' : ¬ $r = x := fun h => hx h.symm
-          simp only [upd_other _ _ _ _ hx, if_neg hx, if_neg hx', decide_eq_false hx,
+          simp only [upd_other _ _ _ _ hx, ite_eq_right hx, ite_eq_right hx', decide_eq_false hx,
             decide_eq_false hx', admitting, resolved, abortPQ_nil, ua_abortPQ, cntP_abortPQ, mem_abortPQ_req,
             mem_abortPQ_cancel, replyExpired, resolve, Bool.toNat, List.mem_append,
             List.mem_singleton, List.mem_cons, FMsg.req.injEq, FMsg.resp.injEq, FMsg.cancel.injEq,
@@ -202,7 +207,7 @@ macro_rules
         clear l1 l2 l3 l4 l5 l6 l7
         by_cases hx : x = $r
         · subst hx
-          simp only [$hq:ident, upd_same, if_true, admitting, resolved, abortPQ_nil, ua_abortPQ, cntP_abortPQ, mem_abortPQ_req,
+          simp only [$hq:ident, upd_same, ite_true, admitting, resolved, abortPQ_nil, ua_abortPQ, cntP_abortPQ, mem_abortPQ_req,
             mem_abortPQ_cancel, replyExpired, resolve, Bool.toNat, List.mem_append,
             List.mem_singleton, List.mem_cons, FMsg.req.injEq, FMsg.resp.injEq, FMsg.cancel.injEq,
             FMsg.timeout.injEq, reduceCtorEq, List.not_mem_nil, req_mem_of_cnt,
@@ -211,7 +216,7 @@ macro_rules
             toW_exit, cntReq_req, cntReq_cancel, cntReq_resp, cntReq_chunk, cntReq_nil, proj] at *
           grind
         · have hx' : ¬ $r = x := fun h => hx h.symm
-          simp only [$hq:ident, upd_other _ _ _ _ hx, if_neg hx, if_neg hx', decide_eq_false hx,
+          simp only [$hq:ident, upd_other _ _ _ _ hx, ite_eq_right hx, ite_eq_right hx', decide_eq_false hx,
             decide_eq_false hx', admitting, resolved, abortPQ_nil, ua_abortPQ, cntP_abortPQ, mem_abortPQ_req,
             mem_abortPQ_cancel, replyExpired, resolve, Bool.toNat, List.mem_append,
             List.mem_singleton, List.mem_cons, FMsg.req.injEq, FMsg.resp.injEq, FMsg.cancel.injEq,
@@ -380,15 +385,15 @@ theorem wstep_mu {P : Params} {f g : FSt R} (h : WStep P f g) (m : FMsg R) (hm :
   | admitReply x _ hp => simp [mu, hp, rem]
   | recvCancel x rest _ hi hq =>
     unfold mu
-    by_cases hr : f.c.reqs x = true <;> simp only [hr, if_true, if_false, Bool.false_eq_true,] at hm ⊢ <;>
+    by_cases hr : f.c.reqs x = true <;> simp only [hr, ite_true, ite_false, Bool.false_eq_true,] at hm ⊢ <;>
       exact pop _ rest _ _ hq hi hm
   | recvResp x rest _ hi hq =>
     unfold mu
-    by_cases hr : f.c.reqs x = true <;> simp only [hr, if_true, if_false, Bool.false_eq_true, resolve,] at hm ⊢ <;>
+    by_cases hr : f.c.reqs x = true <;> simp only [hr, ite_true, ite_false, Bool.false_eq_true, resolve,] at hm ⊢ <;>
       exact pop _ rest _ _ hq hi hm
   | recvTimeout x rest _ hi hq =>
     unfold mu
-    by_cases hr : f.c.reqs x = true <;> simp only [hr, if_true, if_false, Bool.false_eq_true, resolve,] at hm ⊢ <;>
+    by_cases hr : f.c.reqs x = true <;> simp only [hr, ite_true, ite_false, Bool.false_eq_true, resolve,] at hm ⊢ <;>
       exact pop _ rest _ _ hq hi hm
   | recvChunk x rest _ hi hq =>
     simp only at hm; exact pop _ rest _ _ hq hi hm
@@ -695,7 +700,8 @@ theorem stall_behaviour : Behaviour pShip stall := by
   | 3 =>
     left
     have := FStep.worker (WStep.admitReply (P := pShip) (stall 3) () rfl rfl)
-    simpa [stall, stall.stall4, upd] using this
+    simp only [stall, stall.stall4, upd] at this ⊢
+    exact this
   | 4 => left; exact FStep.portRecvReq _ () [] rfl rfl
   | k + 5 => right; rfl
 

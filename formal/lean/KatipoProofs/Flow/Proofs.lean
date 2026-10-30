@@ -335,7 +335,7 @@ theorem inv_workerFlow (n : Nat) (rest : List Nat) (hq : s.flowQ = n :: rest) :
       outReqs := fun h => by simp at h
       deadPort := fun _ hl => hI.deadPort hr hl
       cancelOut := fun h => by
-        simp only [if_true, List.mem_append, List.mem_singleton] at h
+        simp only [ite_true, List.mem_append, List.mem_singleton] at h
         rcases h with h | h
         · simp [hI.cancelOut h] at hr
         · exact absurd h.symm hn

@@ -127,7 +127,12 @@ theorem req_mem_of_cnt (r : R) : ∀ l : List (FMsg R),
   | [] => by simp
   | m :: l => by
     have ih := req_mem_of_cnt r l
-    cases m <;> simp [ih] <;> grind
+    cases m with
+    | req x =>
+      by_cases h : x = r
+      · subst h; simp [FMsg.toW]; omega
+      · simp [FMsg.toW, h, Ne.symm h, ih]
+    | _ => simp [List.filterMap_cons, FMsg.toW, ih]
 
 
 /-- Prove every `OInv` field after a step that touches request `r`
@@ -155,14 +160,14 @@ macro_rules
         by_cases hx : x = $r
         · subst hx
           simp only [proj, upd_same, admitting, abortPQ_nil, ua_abortPQ, cntP_abortPQ, mem_abortPQ_req, mem_abortPQ_cancel, ua_append, cntP_append, cntP_nil,
-            cntP_req, cntP_cancel, replyExpired, resolve, Bool.toNat, if_true, List.mem_append,
+            cntP_req, cntP_cancel, replyExpired, resolve, Bool.toNat, ite_true, List.mem_append,
             List.mem_singleton, List.mem_cons, FMsg.req.injEq, FMsg.resp.injEq, FMsg.cancel.injEq,
             PMsg.req.injEq, PMsg.cancel.injEq, reduceCtorEq, List.not_mem_nil, req_mem_of_cnt, List.filterMap_append, cntReq_append] at *
           grind [ua_mem, cntP_pos]
         · have hx' : ¬ $r = x := fun h => hx h.symm
-          simp only [proj, upd_other _ _ _ _ hx, if_neg hx, if_neg hx', decide_eq_false hx, decide_eq_false hx', admitting, abortPQ_nil, ua_abortPQ, cntP_abortPQ, mem_abortPQ_req, mem_abortPQ_cancel, ua_append,
+          simp only [proj, upd_other _ _ _ _ hx, ite_eq_right hx, ite_eq_right hx', decide_eq_false hx, decide_eq_false hx', admitting, abortPQ_nil, ua_abortPQ, cntP_abortPQ, mem_abortPQ_req, mem_abortPQ_cancel, ua_append,
             cntP_append, cntP_nil, cntP_req, cntP_cancel, replyExpired, resolve, Bool.toNat,
-            if_false, List.mem_append, List.mem_singleton, List.mem_cons, FMsg.req.injEq,
+            ite_false, List.mem_append, List.mem_singleton, List.mem_cons, FMsg.req.injEq,
             FMsg.resp.injEq, FMsg.cancel.injEq, PMsg.req.injEq, PMsg.cancel.injEq, reduceCtorEq,
             List.not_mem_nil, req_mem_of_cnt, List.filterMap_append, cntReq_append] at *
           grind [ua_mem, cntP_pos]))
@@ -187,14 +192,14 @@ macro_rules
         by_cases hx : x = $r
         · subst hx
           simp only [$hq:ident, ua, List.filterMap_cons, toW_req, toW_cancel, toW_resp, toW_timeout, toW_chunk, toW_exit, cntReq_req, cntReq_cancel, cntReq_resp, cntReq_chunk, proj, upd_same, admitting, abortPQ_nil, ua_abortPQ, cntP_abortPQ, mem_abortPQ_req, mem_abortPQ_cancel, ua_append, cntP_append, cntP_nil,
-            cntP_req, cntP_cancel, replyExpired, resolve, Bool.toNat, if_true, List.mem_append,
+            cntP_req, cntP_cancel, replyExpired, resolve, Bool.toNat, ite_true, List.mem_append,
             List.mem_singleton, List.mem_cons, FMsg.req.injEq, FMsg.resp.injEq, FMsg.cancel.injEq,
             PMsg.req.injEq, PMsg.cancel.injEq, reduceCtorEq, List.not_mem_nil, req_mem_of_cnt, List.filterMap_append, cntReq_append] at *
           grind [ua_mem, cntP_pos]
         · have hx' : ¬ $r = x := fun h => hx h.symm
-          simp only [$hq:ident, ua, List.filterMap_cons, toW_req, toW_cancel, toW_resp, toW_timeout, toW_chunk, toW_exit, cntReq_req, cntReq_cancel, cntReq_resp, cntReq_chunk, proj, upd_other _ _ _ _ hx, if_neg hx, if_neg hx', decide_eq_false hx, decide_eq_false hx', admitting, abortPQ_nil, ua_abortPQ, cntP_abortPQ, mem_abortPQ_req, mem_abortPQ_cancel, ua_append,
+          simp only [$hq:ident, ua, List.filterMap_cons, toW_req, toW_cancel, toW_resp, toW_timeout, toW_chunk, toW_exit, cntReq_req, cntReq_cancel, cntReq_resp, cntReq_chunk, proj, upd_other _ _ _ _ hx, ite_eq_right hx, ite_eq_right hx', decide_eq_false hx, decide_eq_false hx', admitting, abortPQ_nil, ua_abortPQ, cntP_abortPQ, mem_abortPQ_req, mem_abortPQ_cancel, ua_append,
             cntP_append, cntP_nil, cntP_req, cntP_cancel, replyExpired, resolve, Bool.toNat,
-            if_false, List.mem_append, List.mem_singleton, List.mem_cons, FMsg.req.injEq,
+            ite_false, List.mem_append, List.mem_singleton, List.mem_cons, FMsg.req.injEq,
             FMsg.resp.injEq, FMsg.cancel.injEq, PMsg.req.injEq, PMsg.cancel.injEq, reduceCtorEq,
             List.not_mem_nil, req_mem_of_cnt, List.filterMap_append, cntReq_append] at *
           grind [ua_mem, cntP_pos]))
