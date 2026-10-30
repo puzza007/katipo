@@ -25,6 +25,7 @@
            "src/katipo.app.src",
            "src/katipo.erl",
            "src/katipo_app.erl",
+           "src/katipo_defaults.erl",
            "src/katipo_internal.hrl",
            "src/katipo_metrics.erl",
            "src/katipo_req.erl",

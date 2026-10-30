@@ -166,16 +166,17 @@ delay_decisions(_Config) ->
     none = katipo_retry:delay(P, 0, error, #{code => ssl_cacert, message => <<>>}, Now),
     none = katipo_retry:delay(P, 0, done, #{status => 503}, Now).
 
-bad_opts(_Config) ->
+bad_opts(Config) ->
+    Pool = ?config(pool, Config),
     Url = <<"http://127.0.0.1:1/">>,
     {error, #{code := bad_opts, message := M1}} =
-        katipo:async_req(?MODULE, #{url => Url, method => put, retry => true,
-                                    body => {stream, #{}}}),
+        katipo:async_req(Pool, #{url => Url, method => put, retry => true,
+                                 body => {stream, #{}}}),
     {match, _} = re:run(M1, "not_allowed_with_stream"),
     {error, #{code := bad_opts, message := M2}} =
-        katipo:async_req(?MODULE, #{url => Url, retry => true, stream => true}),
+        katipo:async_req(Pool, #{url => Url, retry => true, stream => true}),
     {match, _} = re:run(M2, "not_allowed_with_stream"),
-    {error, #{code := bad_opts}} = katipo:get(?MODULE, Url, #{retry => #{max_retries => x}}),
+    {error, #{code := bad_opts}} = katipo:get(Pool, Url, #{retry => #{max_retries => x}}),
     ok = katipo:check_opts(#{retry => #{statuses => [500, 502]}}, sync),
     %% Turned off, a retry is no reason to refuse a stream.
     ok = katipo:check_opts(#{retry => false, stream => true}, async),
@@ -430,7 +431,7 @@ worker_port(Worker) ->
 
 %% The worker's #inflight{tref, kind, port_id, req, retries} for Key.
 entry(Pool, Key) ->
-    {state, _, _, {state, _Port, Reqs, _Ids, _Max}, _} = sys:get_state(worker_pid(Pool)),
+    {state, _, _, {state, _Port, Reqs, _Ids, _Max, _Gen, _Defaults}, _} = sys:get_state(worker_pid(Pool)),
     maps:get(Key, Reqs).
 
 fast() ->
@@ -464,5 +465,5 @@ in_flight(Pool) ->
     [Worker] = wpool:get_workers(Pool),
     %% katipo_worker's #state{port, reqs, ids, max_in_flight}, inside
     %% wpool_process's wrapper (as katipo_SUITE's worker_state/1).
-    {state, _, _, {state, _Port, Reqs, _Ids, _Max}, _} = sys:get_state(whereis(Worker)),
+    {state, _, _, {state, _Port, Reqs, _Ids, _Max, _Gen, _Defaults}, _} = sys:get_state(whereis(Worker)),
     map_size(Reqs).

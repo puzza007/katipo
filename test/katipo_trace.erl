@@ -47,9 +47,11 @@ emit(Event) ->
 
 record(start) ->
     put_event(slot(), start);
-record({overload, {async_req, _, _, _, _}}) ->
+%% A refusal for another pool generation, like an overload one, touches no
+%% state, so it is dropped as one is.
+record({Refused, {async_req, _, _, _, _}}) when Refused =:= overload; Refused =:= stale ->
     put_event(slot(), {overload, label()});
-record({overload, _SyncReq}) ->
+record({Refused, _SyncReq}) when Refused =:= overload; Refused =:= stale ->
     ok;
 record({clock, Deadline}) ->
     %% Read just before the worker's own past/1 check, so a late bit here
@@ -107,6 +109,7 @@ attempt(_SyncReq, Fun) ->
     Fun().
 
 reply_outcome({overload, _}) -> overload;
+reply_outcome(stale) -> overload;
 reply_outcome(expired) -> expired;
 reply_outcome(_Alias) -> ok.
 

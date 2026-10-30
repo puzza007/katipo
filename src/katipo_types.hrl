@@ -196,9 +196,13 @@ fails with `send_fail_rewind`.
 %% The request options, shared by every request type: Erlang cannot compose
 %% map types, so the fields are spelled out once here instead.
 -define(KATIPO_OPTS_FIELDS,
+        body => req_body(),
+        ?KATIPO_DEFAULTABLE_OPTS_FIELDS).
+%% The options a pool's defaults may give: all but body, which is a
+%% request's alone, as are the async ones.
+-define(KATIPO_DEFAULTABLE_OPTS_FIELDS,
         headers => headers(),
         cookiejar => cookiejar(),
-        body => req_body(),
         connecttimeout_ms => connecttimeout_ms(),
         followlocation => boolean(),
         ssl_verifyhost => ssl_verifyhost(),
@@ -250,10 +254,11 @@ functions take all of them. The synchronous functions take
 """.
 -type opts() :: #{?KATIPO_OPTS_FIELDS, ?KATIPO_ASYNC_OPTS_FIELDS}.
 -doc """
-A request for `async_req/2`: the options plus `url`, and `method`
-(default `get`). `req/2` takes `t:sync_request/0`.
+A request for `async_req/2`: the options plus `url`, which a pool with a
+default `base_url` makes optional, and `method` (default `get`). `req/2`
+takes `t:sync_request/0`.
 """.
--type request() :: #{url := url(), method => method(),
+-type request() :: #{url => url(), method => method(),
                      ?KATIPO_OPTS_FIELDS, ?KATIPO_ASYNC_OPTS_FIELDS}.
 -doc """
 Options for `get/3` and the other synchronous method functions. They
@@ -262,8 +267,8 @@ other than the caller with `bad_opts`; the values that change nothing
 are accepted.
 """.
 -type sync_opts() :: #{?KATIPO_OPTS_FIELDS, ?KATIPO_SYNC_NOOP_FIELDS}.
--doc "A request for `req/2`: the synchronous options plus `url` and `method`.".
--type sync_request() :: #{url := url(), method => method(),
+-doc "A request for `req/2`: the synchronous options plus `url` and `method`, as in `t:request/0`.".
+-type sync_request() :: #{url => url(), method => method(),
                           ?KATIPO_OPTS_FIELDS, ?KATIPO_SYNC_NOOP_FIELDS}.
 -doc """
 Any options or request, with `url` and `method` both optional, as
@@ -275,6 +280,14 @@ Any options or request, with `url` and `method` both optional, as
 -export_type([sync_opts/0]).
 -export_type([sync_request/0]).
 -export_type([partial_request/0]).
+-doc """
+Default options for every request on a pool (`katipo_pool:start/3`): the
+request options but `body` and the async-only ones, and `base_url`, which
+a request's `url` is resolved against.
+""".
+-type pool_defaults() :: #{base_url => url(), url => url(), method => method(),
+                           ?KATIPO_DEFAULTABLE_OPTS_FIELDS}.
+-export_type([pool_defaults/0]).
 -doc "One of the timings libcurl reports for a request.".
 -type metric() :: total_time | namelookup_time | connect_time |
                   appconnect_time | pretransfer_time | redirect_time |
@@ -370,7 +383,8 @@ body or response cannot be, so `retry` with either is `bad_opts`.
                     {max_host_connections, 0..?MAX_INT_OPT}.
 %% Pool options: the curl-multi options above plus katipo's own Erlang-side
 %% per-worker admission cap.
--type pool_opts() :: [curlmopt() | {max_in_flight, pos_integer() | infinity}].
+-type pool_opts() :: [curlmopt() | {max_in_flight, pos_integer() | infinity} |
+                      {defaults, pool_defaults()}].
 
 -export_type([method/0]).
 -export_type([url/0]).
