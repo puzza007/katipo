@@ -213,7 +213,10 @@
           low_speed_limit = 0 :: non_neg_integer(),
           low_speed_time = 0 :: non_neg_integer(),
           max_body_size = -1 :: -1 | non_neg_integer(),
-          retry = undefined :: undefined | katipo_retry:policy()
+          retry = undefined :: undefined | katipo_retry:policy(),
+          %% The generation of the pool whose defaults the request was given
+          %% (katipo_defaults), which only that pool's workers admit.
+          gen = undefined :: undefined | reference()
          }).
 
 -endif.

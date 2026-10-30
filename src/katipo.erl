@@ -294,13 +294,12 @@ async_delete(PoolName, Url, Opts) ->
 
 -doc "Performs an HTTP request using the full request map.".
 -spec req(katipo_pool:name(), sync_request()) -> response().
-req(PoolName, Opts)
-  when is_map(Opts) ->
-    case katipo_req:build_req(Opts, sync) of
-        {ok, Req} ->
-            do_req_with_span(PoolName, Req);
-        {error, _} = Error ->
-            Error
+req(PoolName, Opts0)
+  when is_map(Opts0) ->
+    maybe
+        {ok, Opts, Gen} ?= katipo_defaults:merge_into(PoolName, Opts0),
+        {ok, Req} ?= katipo_req:build_req(Opts, sync),
+        do_req_with_span(PoolName, Req#req{gen = Gen})
     end.
 
 -doc """
@@ -348,17 +347,16 @@ surfaces that body through the write path -- in streaming form the
 than the final one. Real-world redirect responses rarely carry bodies.
 """.
 -spec async_req(katipo_pool:name(), request()) -> async_response().
-async_req(PoolName, Opts)
-  when is_map(Opts) ->
-    %% build_req validates reply_to along with every other option.
-    case katipo_req:build_req(Opts, async) of
-        {ok, Req} ->
-            ReplyTo = maps:get(reply_to, Opts, self()),
-            Obs = katipo_span:start_async(katipo_req:method_int_to_binary(Req#req.method),
-                                          Req#req.url),
-            dispatch_async(PoolName, ReplyTo, Req, Obs);
-        {error, _} = Error ->
-            Error
+async_req(PoolName, Opts0)
+  when is_map(Opts0) ->
+    maybe
+        {ok, Opts, Gen} ?= katipo_defaults:merge_into(PoolName, Opts0),
+        %% build_req validates reply_to along with every other option.
+        {ok, Req} ?= katipo_req:build_req(Opts, async),
+        ReplyTo = maps:get(reply_to, Opts, self()),
+        Obs = katipo_span:start_async(katipo_req:method_int_to_binary(Req#req.method),
+                                      Req#req.url),
+        dispatch_async(PoolName, ReplyTo, Req#req{gen = Gen}, Obs)
     end.
 
 %% Admission is a synchronous call, not a cast, so dispatch failures surface
@@ -504,6 +502,8 @@ pool_call(PoolName, Msg) ->
             spillover(spillover_candidates(PoolName, FullWorker), Msg, Bound);
         {ok, Reply} ->
             {ok, Reply};
+        stale ->
+            stale_error();
         Err when Err =:= worker_died; Err =:= admission_timeout ->
             %% admission_timeout fails fast by design: a caller retry
             %% re-rolls onto a (likely healthy) random worker immediately.
@@ -544,6 +544,7 @@ attempt(CallFun, Msg, Bound) ->
     try ?TRACE_ATTEMPT(Msg, CallFun(stamp(Msg, Bound))) of
         {overload, Pid} -> {overload, Pid};
         expired -> admission_timeout;
+        stale -> stale;
         Reply -> {ok, Reply}
     catch
         exit:{timeout, {gen_server, call, _}} when Bound =/= infinity ->
@@ -551,6 +552,11 @@ attempt(CallFun, Msg, Bound) ->
         exit:{_Reason, {gen_server, call, _}} ->
             worker_died
     end.
+
+%% A worker of another pool generation than the request's defaults: the
+%% pool was replaced under its name while the request was being made.
+stale_error() ->
+    {error, katipo_req:error_map(worker_died, <<>>)}.
 
 %% The rest of the pool in random-rotation order, minus the worker that just
 %% rejected: rotation spreads spillover load, the exclusion avoids a
@@ -571,6 +577,10 @@ spillover([Worker | Workers], Msg, Bound) ->
             %% Same fail-fast rationale as the first attempt: at most one
             %% bounded wait per admission, never one per candidate.
             {error, katipo_req:error_map(admission_timeout, <<>>)};
+        stale ->
+            %% Another pool has the name now: none of its workers will
+            %% take the request either.
+            stale_error();
         _NoRoom ->
             %% Full, dead, or restarting: nothing to offer here, keep going.
             spillover(Workers, Msg, Bound)
