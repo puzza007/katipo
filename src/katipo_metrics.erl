@@ -5,7 +5,7 @@
 
 %% Suppress dialyzer warnings from OTel macro expansion
 %% (macros use is_atom checks that always match since we use atom names)
--dialyzer({nowarn_function, [create_instruments/0, emit/4,
+-dialyzer({nowarn_function, [init/0, emit/4,
                              emit_timing_metrics/3, record_timing/3]}).
 
 -export([init/0]).
@@ -24,15 +24,6 @@
 
 -spec init() -> ok.
 init() ->
-    %% When no OTel metrics SDK is configured, the experimental API's noop meter
-    %% raises undef (opentelemetry-erlang#876). Guard instrument creation the
-    %% same way the record path is guarded, so starting katipo can't crash the
-    %% whole application on a plain (no-SDK) deployment.
-    try create_instruments()
-    catch error:undef -> ok end,
-    ok.
-
-create_instruments() ->
     %% Create request counter
     _ = ?create_counter(?REQUESTS_COUNTER, #{
         description => <<"Number of HTTP requests made">>,
@@ -75,14 +66,7 @@ create_instruments() ->
 
 -spec notify(katipo:response(), katipo:metrics(), number(), binary()) -> ok.
 notify(Result, Metrics, TotalUs, Method) ->
-    %% One guard around the whole emission rather than one per instrument: with
-    %% no metrics SDK the noop meter raises undef on the first call, so a single
-    %% catch skips the rest (down from up to nine exceptions per request). It is
-    %% re-attempted every request, so metrics begin flowing if an SDK is
-    %% configured after startup.
-    try emit(Result, Metrics, TotalUs, Method)
-    catch error:undef -> ok end,
-    ok.
+    emit(Result, Metrics, TotalUs, Method).
 
 emit({ok, Response}, Metrics, TotalUs, Method) ->
     #{status := Status} = Response,

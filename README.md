@@ -274,9 +274,9 @@ To export them, add the SDK and an exporter:
 ```erlang
 %% In rebar.config
 {deps, [
-    {opentelemetry, "1.5.0"},
-    {opentelemetry_experimental, "0.5.1"},
-    {opentelemetry_exporter, "1.8.0"}
+    {opentelemetry, "1.7.0"},
+    {opentelemetry_experimental, "0.6.0"},
+    {opentelemetry_exporter, "1.11.0"}
 ]}.
 ```
 

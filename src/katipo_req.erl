@@ -253,7 +253,7 @@ headers_to_binary([H | T], N, Acc) ->
 headers_to_binary(_ImproperTail, N, _) ->
     {error, N}.
 
-header_line({K, V}) when (is_binary(K) orelse is_list(K)),
+header_line({K, V}) when (is_binary(K) orelse is_list(K)) andalso
                          (is_binary(V) orelse is_list(V)) ->
     iolist_to_binary([K, <<": ">>, V]).
 

@@ -73,6 +73,9 @@ All notable changes to this project are documented here. This project follows
   `{error, map()}`.
 
 ### Changed
+- `opentelemetry_api_experimental` is now required at `~> 0.6.0` (was
+  `~> 0.5.1`). `worker_pool` stays on 6.x: 7.0.0 uses nominal types, so it
+  does not compile on OTP 27, which katipo still supports.
 - Pool options curl cannot take, including integers above 2147483647, now
   fail `katipo_pool:start/3` with `bad_opts` naming them, as
   `max_in_flight` does, rather than crashing each worker as it starts.
