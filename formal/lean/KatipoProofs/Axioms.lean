@@ -6,6 +6,7 @@ import KatipoProofs.Timer.Statements
 import KatipoProofs.Upload.Statements
 import KatipoProofs.Retry.Statements
 import KatipoProofs.Limit.Statements
+import KatipoProofs.Defaults.Statements
 
 /-!
 # Axiom pins
@@ -196,3 +197,51 @@ open KatipoProofs
 
 /-- info: 'KatipoProofs.Limit.Statements.upfront_only_sooner' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs (whitespace := lax) in #print axioms Limit.Statements.upfront_only_sooner
+
+/-- info: 'KatipoProofs.Defaults.Statements.ran_with_its_defaults' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms Defaults.Statements.ran_with_its_defaults
+
+/-- info: 'KatipoProofs.Defaults.Statements.term_with_pool' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms Defaults.Statements.term_with_pool
+
+/-- info: 'KatipoProofs.Defaults.Statements.never_without_generation' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms Defaults.Statements.never_without_generation
+
+/-- info: 'KatipoProofs.Defaults.Statements.rebuild_replaces_options' depends on axioms: [propext] -/
+#guard_msgs (whitespace := lax) in #print axioms Defaults.Statements.rebuild_replaces_options
+
+/-- info: 'KatipoProofs.Defaults.Statements.without_fallback_refused' depends on axioms: [propext] -/
+#guard_msgs (whitespace := lax) in #print axioms Defaults.Statements.without_fallback_refused
+
+/-- info: 'KatipoProofs.Defaults.Statements.nothing_left' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms Defaults.Statements.nothing_left
+
+/-- info: 'KatipoProofs.Defaults.Statements.unchecked_window' depends on axioms: [propext] -/
+#guard_msgs (whitespace := lax) in #print axioms Defaults.Statements.unchecked_window
+
+/-- info: 'KatipoProofs.Defaults.Statements.unchecked_stale' depends on axioms: [propext] -/
+#guard_msgs (whitespace := lax) in #print axioms Defaults.Statements.unchecked_stale
+
+/-- info: 'KatipoProofs.Defaults.Statements.request_option_wins' depends on axioms: [propext] -/
+#guard_msgs (whitespace := lax) in #print axioms Defaults.Statements.request_option_wins
+
+/-- info: 'KatipoProofs.Defaults.Statements.default_option_applies' depends on axioms: [propext] -/
+#guard_msgs (whitespace := lax) in #print axioms Defaults.Statements.default_option_applies
+
+/-- info: 'KatipoProofs.Defaults.Statements.credentials_stay_on_origin' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms Defaults.Statements.credentials_stay_on_origin
+
+/-- info: 'KatipoProofs.Defaults.Statements.unknown_origin_never_same' depends on axioms: [propext] -/
+#guard_msgs (whitespace := lax) in #print axioms Defaults.Statements.unknown_origin_never_same
+
+/-- info: 'KatipoProofs.Defaults.Statements.request_headers_kept' does not depend on any axioms -/
+#guard_msgs (whitespace := lax) in #print axioms Defaults.Statements.request_headers_kept
+
+/-- info: 'KatipoProofs.Defaults.Statements.default_header_kept_iff' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms Defaults.Statements.default_header_kept_iff
+
+/-- info: 'KatipoProofs.Defaults.Statements.request_name_wins' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms Defaults.Statements.request_name_wins
+
+/-- info: 'KatipoProofs.Defaults.Statements.headers_idempotent' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms Defaults.Statements.headers_idempotent
