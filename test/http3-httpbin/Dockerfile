@@ -1,6 +1,6 @@
 # Google's mirror of Docker Hub: the same image, without Docker Hub's
 # anonymous pull limits, which failed CI jobs before any test ran.
-FROM mirror.gcr.io/library/python:3.11-slim
+FROM mirror.gcr.io/library/python:3.13-slim
 
 LABEL name="httpbin"
 LABEL description="A simple HTTP service for testing HTTP/3"
@@ -16,9 +16,9 @@ WORKDIR /httpbin
 # Caddy. Pinning to a verified-good set keeps the backend reproducible.
 RUN pip install --no-cache-dir \
     "httpbin==0.10.4" \
-    "gunicorn==26.0.0" \
+    "gunicorn==26.2.0" \
     "flask==3.1.3" \
-    "werkzeug==3.1.8"
+    "werkzeug==3.1.9"
 
 # Copy WSGI wrapper that fixes bytearray->bytes conversion
 COPY wsgi_wrapper.py .
