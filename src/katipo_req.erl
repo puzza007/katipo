@@ -9,11 +9,13 @@
 
 -export([build_req/2]).
 -export([check_opts/2]).
+-export([opts_errors/2]).
 -export([get_timeout/1]).
 -export([method_int_to_binary/1]).
 -export([error_map/2]).
 -export([method_to_int/1]).
 -export([ascii_lowercase/1]).
+-export([header_name/1]).
 
 -include("katipo_internal.hrl").
 
@@ -48,18 +50,26 @@ check_opts(Opts, Mode) when is_map(Opts) ->
         {error, _} = Error -> Error
     end.
 
+%% What check_opts/2 would name, for a caller with errors of its own to add.
+-spec opts_errors(katipo:partial_request(), sync | async) -> [{atom(), term()}].
+opts_errors(Opts, Mode) when is_map(Opts) ->
+    element(2, req_errors(Opts, Mode, no_url)).
+
 %% Every invalid option, and every rule between options that is broken, is
 %% named in the one error, so fixing a request takes one round. A rule is
 %% checked only on options that were valid: one that was not is left at its
 %% default in Req, and is named already.
 validate(Opts, Mode, Url) ->
+    case req_errors(Opts, Mode, Url) of
+        {Req, []} -> {ok, Req};
+        {_, All} -> {error, error_map(bad_opts, All)}
+    end.
+
+req_errors(Opts, Mode, Url) ->
     {Req0, Errors} = process_opts(Opts, Mode),
     Req = retry_method(Req0),
     Invalid = [K || {K, _} <- Errors],
-    case Errors ++ cross_field_errors(Req, Url, Invalid) ++ stream_body_error(Req, Mode) of
-        [] -> {ok, Req};
-        All -> {error, error_map(bad_opts, All)}
-    end.
+    {Req, Errors ++ cross_field_errors(Req, Url, Invalid) ++ stream_body_error(Req, Mode)}.
 
 cross_field_errors(Req, Url, Invalid) ->
     url_error(Req, Url, Invalid) ++ head_body_error(Req) ++
@@ -193,9 +203,13 @@ content_type_line(_) -> <<"Content-Type:">>.
 %% not valid UTF-8. The headers have been validated by then (opt/3).
 has_content_type(Headers) ->
     lists:any(fun({K, _}) ->
-                      iolist_size(K) =:= 12 andalso
-                          ascii_lowercase(iolist_to_binary(K)) =:= <<"content-type">>
+                      iolist_size(K) =:= 12 andalso header_name(K) =:= <<"content-type">>
               end, Headers).
+
+%% A header's name as compared: ASCII case folded.
+-spec header_name(iodata()) -> binary().
+header_name(K) ->
+    ascii_lowercase(iolist_to_binary(K)).
 
 -spec ascii_lowercase(binary()) -> binary().
 ascii_lowercase(Bin) ->

@@ -6,6 +6,23 @@ All notable changes to this project are documented here. This project follows
 ## [Unreleased]
 
 ### Added
+- The `{defaults, Opts}` pool option gives every request on the pool
+  default options and a `base_url` that a relative `url` is resolved
+  against, so `url` is now optional in `request()` and `sync_request()`.
+  A request's own options win, and its headers replace default ones of
+  the same name. Default headers, credentials and the client's TLS
+  identity go only to `base_url`'s origin; a relative or default `url` is
+  resolved as RFC 3986 has it, its bytes sent as curl would send them in
+  an absolute one, and an absolute `url` is sent as given. The defaults are validated when the
+  pool starts, `body`, `reply_to`, `stream` and `stream_window` being a
+  request's alone, and kept in the pool's options, used only while it
+  runs and not shown in `wpool:stats/1`. Each start makes a new
+  generation that the pool's workers check, so a request is only ever
+  served with its own pool's defaults, even one that races a restart or
+  a stop and start under the same name, and should wpool lose the pool's
+  options, requests ask a worker for them. The lifetime is modelled in
+  `formal/KatipoPoolDefaults.tla` and proved for any number of requests
+  and restarts, with the merge, in `formal/lean/KatipoProofs/Defaults`.
 - The `{max_host_connections, N}` pool option caps each worker's
   connections to any one host (`CURLMOPT_MAX_HOST_CONNECTIONS`); further
   requests to that host wait in curl for a connection to free up, still
@@ -76,6 +93,9 @@ All notable changes to this project are documented here. This project follows
 - `opentelemetry_api_experimental` is now required at `~> 0.6.0` (was
   `~> 0.5.1`). `worker_pool` stays on 6.x: 7.0.0 uses nominal types, so it
   does not compile on OTP 27, which katipo still supports.
+- A request to a pool that is not running exits `no_workers` before its
+  options are checked, as they depend on the pool's defaults; it used to
+  be `bad_opts` when they were also invalid.
 - Pool options curl cannot take, including integers above 2147483647, now
   fail `katipo_pool:start/3` with `bad_opts` naming them, as
   `max_in_flight` does, rather than crashing each worker as it starts.

@@ -27,6 +27,8 @@
 -export([decode/1]).
 %% For katipo_pool, which validates the curl-multi options at start.
 -export([curl_args/1]).
+%% For katipo_defaults, when wpool has lost the pool's options.
+-export([defaults/1]).
 
 -include("katipo_internal.hrl").
 
@@ -52,29 +54,51 @@
                 reqs = #{} :: map(),
                 %% The key of each request whose port_id is not the key.
                 ids = #{} :: #{port_id() => port_id()},
-                max_in_flight = infinity :: pos_integer() | infinity}).
+                max_in_flight = infinity :: pos_integer() | infinity,
+                %% This pool's generation (katipo_pool:start/3), and its
+                %% defaults, for a caller that finds wpool lost them.
+                gen :: reference() | undefined,
+                defaults :: katipo_defaults:get()}).
 
-start_link([MaxInFlight, CurlArgs]) when is_list(CurlArgs) ->
-    gen_server:start_link(?MODULE, [MaxInFlight, CurlArgs], []).
+start_link([MaxInFlight, CurlArgs, Defaults]) when is_list(CurlArgs) ->
+    gen_server:start_link(?MODULE, [MaxInFlight, CurlArgs, Defaults], []).
 
-init([MaxInFlight, CurlArgs]) ->
+%% The pool's defaults, as katipo_defaults:wpool_opt/2 made them.
+-spec defaults(atom()) -> katipo_defaults:get().
+defaults(Worker) ->
+    gen_server:call(Worker, katipo_defaults).
+
+init([MaxInFlight, CurlArgs, Defaults]) ->
     process_flag(trap_exit, true),
     Prog = filename:join([code:priv_dir(katipo), "katipo"]),
     Port = open_port({spawn, Prog ++ " " ++ CurlArgs}, [{packet, 4}, binary]),
     ?TRACE(start),
-    {ok, #state{port = Port, reqs = #{}, max_in_flight = MaxInFlight}}.
+    {Gen, _, _} = Defaults(),
+    {ok, #state{port = Port, reqs = #{}, max_in_flight = MaxInFlight, gen = Gen,
+                defaults = Defaults}}.
 
+%% defaults/1.
+handle_call(katipo_defaults, _From, State = #state{defaults = Defaults}) ->
+    {reply, Defaults, State};
 %% Admission is gated on max_in_flight: a full worker replies
 %% {overload, self()} without registering anything, and pool_call in katipo
-%% offers the request to the remaining workers.
-handle_call(Msg, From, State) ->
-    case at_capacity(State) of
-        true ->
+%% offers the request to the remaining workers. A request given another
+%% pool generation's defaults -- read as this pool replaced one of the same
+%% name, or before it had any -- is refused with `stale'.
+handle_call(Msg, From, State = #state{gen = Gen}) ->
+    case {req_gen(Msg), at_capacity(State)} of
+        {ReqGen, _} when ReqGen =/= Gen ->
+            ?TRACE({stale, Msg}),
+            {reply, stale, State};
+        {_, true} ->
             ?TRACE({overload, Msg}),
             {reply, {overload, self()}, State};
-        false ->
+        {_, false} ->
             admit_call(Msg, From, State)
     end.
+
+req_gen(#req{gen = Gen}) -> Gen;
+req_gen({async_req, _ReplyTo, #req{gen = Gen}, _Obs, _Deadline}) -> Gen.
 
 admit_call(Req = #req{}, From, State = #state{port = Port}) ->
     true = port_command(Port, command(From, Req)),
@@ -435,6 +459,11 @@ port_cmd(Port, Frame) ->
     end,
     ok.
 
+%% A worker from before pool defaults: its pool's options have none, so its
+%% requests carry no generation.
+code_change(_OldVsn, {state, Port, Reqs, Ids, MaxInFlight}, _Extra) ->
+    {ok, #state{port = Port, reqs = Reqs, ids = Ids, max_in_flight = MaxInFlight,
+                gen = undefined, defaults = fun katipo_defaults:none/0}};
 code_change(_OldVsn, State, _Extra) ->
     {ok, State}.
 

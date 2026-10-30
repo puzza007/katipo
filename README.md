@@ -196,6 +196,50 @@ same host: the pool as a whole may hold up to the cap on every worker.
 With `max_in_flight`, a request that finds its worker full spills over to
 another, and fails fast with `overload` when every worker is full.
 
+### Default request options
+
+`{defaults, Opts}` gives every request on a pool default options, plus a
+`base_url` that a request's `url` is resolved against (RFC 3986), so a
+relative one joins it and an absolute one stands:
+
+```erlang
+{ok, _} = katipo_pool:start(api, 4,
+                            [{defaults, #{base_url => <<"https://api.example.com/v1/">>,
+                                          headers => [{<<"authorization">>, Token}],
+                                          timeout_ms => 5000}}]),
+{ok, #{status := 200}} = katipo:get(api, <<"items">>).   %% .../v1/items
+```
+
+An option a request gives wins, and a request header replaces a default
+one of the same name, in any case. A relative `url`'s path, or a default
+`url`'s, is resolved against `base_url` as RFC 3986 has it; `base_url`
+must be http or https with a host and no query. The query and fragment
+are kept as given, and the bytes are not checked, as they are not in an
+absolute `url`: curl sends both alike. An absolute `url` is sent as given.
+A default `retry` is dropped for a request that streams.
+
+Default headers, all of them, and `username`, `password`, `userpwd`, and
+the client's TLS identity (`sslcert`, `sslkey`, `sslkey_blob`,
+`keypasswd`) go only to requests for `base_url`'s scheme, host and port,
+as they may be credentials for it; a request for another origin gets the
+other defaults.
+With no `base_url`, they go to every request. curl itself keeps sending
+custom headers when it follows a redirect to another host, so a pool whose
+defaults hold a key in a custom header should not also default to
+`followlocation`.
+
+The defaults are checked when the pool starts (`body`, `reply_to`,
+`stream` and `stream_window` are a request's alone) and are used only while
+the pool runs. They are not shown in `wpool:stats/1` or in an idle
+worker's status, though a request carrying them shows in a worker's crash
+report like any other. A request is only ever served with its own pool's
+defaults; one that races a pool being restarted, or stopped and started
+again under its name, fails with `worker_died` instead. Should wpool lose
+a running pool's options, as it can when a request races the pool's first
+start, requests ask a worker for the defaults, at the cost of a call each,
+until the pool restarts. Running pools do not survive a hot upgrade of
+katipo.
+
 ## Request options
 
 | Option                  | Type                                | Default     | Notes                                                                               |
