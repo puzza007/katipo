@@ -102,6 +102,10 @@ All notable changes to this project are documented here. This project follows
   `{error, map()}`.
 
 ### Changed
+- A decoded response no longer has the `content-encoding` header, nor the
+  `content-length` of its encoded body, so its headers describe the body
+  it has and a decompression step after katipo does not decode it again.
+  A response with no body (a HEAD's, a 204 or a 304) keeps them.
 - `opentelemetry_api_experimental` is now required at `~> 0.6.0` (was
   `~> 0.5.1`). `worker_pool` stays on 6.x: 7.0.0 uses nominal types, so it
   does not compile on OTP 27, which katipo still supports.

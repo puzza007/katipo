@@ -173,7 +173,7 @@ timeout_aborts_transfer_in_port(Config) ->
     {ok, Ref} = katipo:async_req(Pool, blackhole_req()),
     RealPort = worker_port(WorkerPid),
     %% The entry is the worker's #inflight{} record.
-    [{From, {inflight, Tref, _Kind, _PortId, _Req, _Retries}}] = maps:to_list(worker_reqs(WorkerPid)),
+    [{From, {inflight, Tref, _Kind, _PortId, _Req, _Retries, _Decoded}}] = maps:to_list(worker_reqs(WorkerPid)),
 
     FakePort = open_port({spawn, "/bin/cat"}, [{packet, 4}, binary]),
     ok = swap_port(WorkerPid, FakePort),

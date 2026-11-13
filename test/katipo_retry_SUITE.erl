@@ -385,9 +385,9 @@ stale_timer_ignored(Config) ->
     first_request(Server),
     Worker = worker_pid(Pool),
     Key = {Worker, Ref},
-    {inflight, Tref0, _, Key, _, 0} = entry(Pool, Key),
+    {inflight, Tref0, _, Key, _, 0, _} = entry(Pool, Key),
     first_request(Server),
-    Retry = {inflight, Tref1, _, {Worker, _}, _, 1} = entry(Pool, Key),
+    Retry = {inflight, Tref1, _, {Worker, _}, _, 1, _} = entry(Pool, Key),
     true = Tref1 =/= Tref0,
     Worker ! {timeout, Tref0, {req_timeout, Key}},
     Retry = entry(Pool, Key),
@@ -408,7 +408,7 @@ stale_port_output_dropped(Config) ->
     first_request(Server),
     Worker = worker_pid(Pool),
     Key = {Worker, Ref},
-    Retry = {inflight, _, _, {Worker, _}, _, 1} = entry(Pool, Key),
+    Retry = {inflight, _, _, {Worker, _}, _, 1, _} = entry(Pool, Key),
     Stale = [term_to_binary({ok, {Key, {200, [<<"HTTP/1.1 200 OK">>], [], <<>>, []}}}),
              <<"stale">>],
     Worker ! {worker_port(Worker), {data, iolist_to_binary(Stale)}},
@@ -429,7 +429,7 @@ worker_port(Worker) ->
                    erlang:port_info(P, connected) =:= {connected, Worker}],
     Port.
 
-%% The worker's #inflight{tref, kind, port_id, req, retries} for Key.
+%% The worker's #inflight{tref, kind, port_id, req, retries, decoded} for Key.
 entry(Pool, Key) ->
     {_Port, Reqs} = katipo_test_util:worker_state(worker_pid(Pool)),
     maps:get(Key, Reqs).

@@ -23,6 +23,8 @@
 
 -include_lib("common_test/include/ct.hrl").
 
+-import(katipo_script_server, [sized/1, sized/3]).
+
 -define(WAIT, 5000).
 
 all() ->
@@ -196,10 +198,3 @@ over_limit(Config, Raw) ->
         katipo:get(?config(pool, Config), katipo_script_server:url(Port),
                    #{max_body_size => 1000}).
 
-sized(Body) ->
-    sized(<<"200 OK">>, <<>>, Body).
-
-sized(Status, Headers, Body) ->
-    [<<"HTTP/1.1 ">>, Status, <<"\r\n">>, Headers,
-     <<"content-length: ">>, integer_to_binary(byte_size(Body)),
-     <<"\r\nconnection: close\r\n\r\n">>, Body].

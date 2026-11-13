@@ -60,6 +60,13 @@ Content-Length, is `ftp_weird_server_reply`: curl's
 `CURLE_WEIRD_SERVER_REPLY` under the name it had before curl 7.51, kept so
 existing matches keep working.
 
+curl asks for every content encoding it was built to decode, and decodes
+the body, so a response's headers have no `content-encoding`, nor the
+`content-length` of the encoded body: they describe the body you are
+given. A response with no body (a HEAD's, a 204 or a 304) keeps them. With
+`decode => false` the body is the bytes the server sent, the headers are
+kept, and no `accept-encoding` is sent but one the request gives.
+
 ## Async requests
 
 ```erlang
@@ -312,7 +319,7 @@ options are checked and then ignored.
 | `low_speed_limit`       | `1..2147483647`                     | off         | [docs](https://curl.se/libcurl/c/CURLOPT_LOW_SPEED_LIMIT.html) bytes/s; with `low_speed_time`, a slower transfer fails with `operation_timedout` |
 | `low_speed_time`        | `1..2147483647`                     | off         | [docs](https://curl.se/libcurl/c/CURLOPT_LOW_SPEED_TIME.html) seconds; requires `low_speed_limit` and vice versa |
 | `max_body_size`         | `0..2147483647`                     | no limit    | bytes of the final response's body, after decoding; more fails with `filesize_exceeded`, streamed or not |
-| `decode`                | `boolean()`                         | `true`      | ask for and decode a compressed response body; with `false` the body is as sent, and no `accept-encoding` is sent but the request's own |
+| `decode`                | `boolean()`                         | `true`      | decode a compressed response body, and drop the headers that describe the encoded one (see Responses) |
 | `interface`             | `binary()`                          | `undefined` | [docs](https://curl.se/libcurl/c/CURLOPT_INTERFACE.html)                       |
 | `unix_socket_path`      | `binary()` \| `string()`            | `undefined` | [docs](https://curl.se/libcurl/c/CURLOPT_UNIX_SOCKET_PATH.html) curl >= 7.40.0 |
 | `doh_url`               | `binary()`                          | `undefined` | [docs](https://curl.se/libcurl/c/CURLOPT_DOH_URL.html) curl >= 7.62.0          |
