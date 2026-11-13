@@ -6,6 +6,15 @@ All notable changes to this project are documented here. This project follows
 ## [Unreleased]
 
 ### Added
+- The `{stub, Handler}` pool option starts a pool that gives each
+  request to `Handler`, a fun from `katipo:stub_request()` to
+  `katipo:stub_response()`, instead of sending it, for tests. Only the C
+  port is stood in for, by a process that takes the same commands and
+  answers with the same messages, so defaults, `max_in_flight`,
+  timeouts, `cancel/2`, retries, streaming in both directions and flow
+  control work as on a real pool. A `Handler` that raises, exits or
+  answers what is not a response fails its request with the new error
+  code `stub_failed`.
 - The `{defaults, Opts}` pool option gives every request on the pool
   default options and a `base_url` that a relative `url` is resolved
   against, so `url` is now optional in `request()` and `sync_request()`.

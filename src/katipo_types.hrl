@@ -126,7 +126,9 @@
         await_timeout |
         worker_died |
         overload |
-        admission_timeout.
+        admission_timeout |
+        %% a stub pool's handler did not answer with a response
+        stub_failed.
 
 -type error_msg() :: binary().
 -type status() :: pos_integer().
@@ -288,6 +290,33 @@ a request's `url` is resolved against.
 -type pool_defaults() :: #{base_url => url(), url => url(), method => method(),
                            ?KATIPO_DEFAULTABLE_OPTS_FIELDS}.
 -export_type([pool_defaults/0]).
+-doc """
+A request as a stub pool's handler is given it (`t:stub/0`): its method,
+its url once resolved against any default `base_url`, the headers that
+would be sent, among them the pool's defaults and any `Content-Type`
+katipo or curl adds, and the whole body, read from its file or collected from
+`send_body/3` as it is sent.
+""".
+-type stub_request() :: #{method := method(), url := url(),
+                          headers := resp_headers(), body := binary()}.
+-doc """
+What a stub pool's handler answers (`t:stub/0`): a response, whose
+`headers` and `body` default to none, or an error, whose message defaults
+to empty. A streamed request (`stream => true`) gets each element of a
+list `body` as a chunk of its own.
+""".
+-type stub_response() :: #{status := 100..599, headers => headers(), body => iodata()} |
+                         {error, error_code()} |
+                         {error, error_code(), error_msg()}.
+-doc """
+A stub pool's handler (`katipo_pool:start/3`), called with each request in
+place of sending it, from a process of its own: one that blocks is ended
+by the request's `timeout_ms`, or `cancel/2`. One that raises, exits or
+answers anything but a `t:stub_response/0` fails that request with
+`stub_failed`, and the reason as the error's message.
+""".
+-type stub() :: fun((stub_request()) -> stub_response()).
+-export_type([stub_request/0, stub_response/0, stub/0]).
 -doc "One of the timings libcurl reports for a request.".
 -type metric() :: total_time | namelookup_time | connect_time |
                   appconnect_time | pretransfer_time | redirect_time |
@@ -384,7 +413,7 @@ body or response cannot be, so `retry` with either is `bad_opts`.
 %% Pool options: the curl-multi options above plus katipo's own Erlang-side
 %% per-worker admission cap.
 -type pool_opts() :: [curlmopt() | {max_in_flight, pos_integer() | infinity} |
-                      {defaults, pool_defaults()}].
+                      {defaults, pool_defaults()} | {stub, stub()}].
 
 -export_type([method/0]).
 -export_type([url/0]).

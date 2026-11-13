@@ -50,7 +50,7 @@
                    req :: undefined | #req{},
                    retries = 0 :: non_neg_integer()}).
 
--record(state, {port :: port(),
+-record(state, {port :: port() | pid(),
                 reqs = #{} :: map(),
                 %% The key of each request whose port_id is not the key.
                 ids = #{} :: #{port_id() => port_id()},
@@ -60,8 +60,10 @@
                 gen :: reference() | undefined,
                 defaults :: katipo_defaults:get()}).
 
-start_link([MaxInFlight, CurlArgs, Defaults]) when is_list(CurlArgs) ->
-    gen_server:start_link(?MODULE, [MaxInFlight, CurlArgs, Defaults], []).
+start_link(Args = [_MaxInFlight, CurlArgs, _Defaults]) when is_list(CurlArgs) ->
+    gen_server:start_link(?MODULE, Args, []);
+start_link(Args = [_MaxInFlight, {stub, Handler}, _Defaults]) when is_function(Handler, 1) ->
+    gen_server:start_link(?MODULE, Args, []).
 
 %% The pool's defaults, as katipo_defaults:wpool_opt/2 made them.
 -spec defaults(atom()) -> katipo_defaults:get().
@@ -70,8 +72,7 @@ defaults(Worker) ->
 
 init([MaxInFlight, CurlArgs, Defaults]) ->
     process_flag(trap_exit, true),
-    Prog = filename:join([code:priv_dir(katipo), "katipo"]),
-    Port = open_port({spawn, Prog ++ " " ++ CurlArgs}, [{packet, 4}, binary]),
+    Port = open(CurlArgs),
     ?TRACE(start),
     {Gen, _, _} = Defaults(),
     {ok, #state{port = Port, reqs = #{}, max_in_flight = MaxInFlight, gen = Gen,
@@ -101,7 +102,7 @@ req_gen(#req{gen = Gen}) -> Gen;
 req_gen({async_req, _ReplyTo, #req{gen = Gen}, _Obs, _Deadline}) -> Gen.
 
 admit_call(Req = #req{}, From, State = #state{port = Port}) ->
-    true = port_command(Port, command(From, Req)),
+    true = write(Port, command(From, Req)),
     {noreply, register_req(From, sync, Req, State)};
 admit_call({async_req, ReplyTo, Req = #req{}, Obs, Deadline}, _From,
            State = #state{port = Port}) ->
@@ -127,7 +128,7 @@ admit_call({async_req, ReplyTo, Req = #req{}, Obs, Deadline}, _From,
             ?TRACE(sending),
             Alias = alias(),
             From = {self(), Alias},
-            true = port_command(Port, command(From, Req)),
+            true = write(Port, command(From, Req)),
             ?TRACE({clock, Deadline}),
             case past(Deadline) of
                 true ->
@@ -414,11 +415,32 @@ terminate(_Reason, #state{port = Port, reqs = Reqs}) ->
     %% block until their await/request timeout.
     ?TRACE(terminate),
     maps:foreach(fun notify_worker_died/2, Reqs),
-    %% port_close/1 raises badarg if the port is already dead (the common case
-    %% when we get here via port death); ignore it -- we're terminating anyway.
+    close(Port).
+
+%% The C port, or in a pool started with {stub, Handler} the process that
+%% stands in for it (katipo_stub), which takes the same commands and
+%% answers with the same messages.
+open({stub, Handler}) ->
+    katipo_stub:start_link(Handler);
+open(CurlArgs) ->
+    Prog = filename:join([code:priv_dir(katipo), "katipo"]),
+    open_port({spawn, Prog ++ " " ++ CurlArgs}, [{packet, 4}, binary]).
+
+write(Port, Frame) when is_port(Port) ->
+    port_command(Port, Frame);
+write(Stub, Frame) ->
+    Stub ! {self(), {command, iolist_to_binary(Frame)}},
+    true.
+
+%% port_close/1 raises badarg if the port is already dead (the common case
+%% when we get here via port death); ignore it -- we're terminating anyway.
+%% A stub goes when we do, as it is linked to us.
+close(Port) when is_port(Port) ->
     try port_close(Port)
     catch error:badarg -> ok
     end,
+    ok;
+close(_Stub) ->
     ok.
 
 notify_worker_died(From, #inflight{kind = {async, _, _} = Kind}) ->
@@ -454,7 +476,7 @@ relay(Ref, Tag, Arg, State = #state{port = Port, reqs = Reqs}) ->
 %% port is moot then, and crashing here would let terminate/2 message callers
 %% that have already been dealt with.
 port_cmd(Port, Frame) ->
-    try port_command(Port, Frame)
+    try write(Port, Frame)
     catch error:badarg -> ok
     end,
     ok.

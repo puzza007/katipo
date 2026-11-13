@@ -54,10 +54,11 @@ request as one map.
 
 `code` is a curl error name (`couldnt_connect`, `operation_timedout`, ...)
 or one of katipo's: `bad_opts`, `worker_died`, `overload`,
-`admission_timeout`, `await_timeout`. A malformed response that libcurl
-rejects, such as one with an invalid Content-Length, is
-`ftp_weird_server_reply`: curl's `CURLE_WEIRD_SERVER_REPLY` under the name
-it had before curl 7.51, kept so existing matches keep working.
+`admission_timeout`, `await_timeout`, and on a stub pool `stub_failed`. A
+malformed response that libcurl rejects, such as one with an invalid
+Content-Length, is `ftp_weird_server_reply`: curl's
+`CURLE_WEIRD_SERVER_REPLY` under the name it had before curl 7.51, kept so
+existing matches keep working.
 
 ## Async requests
 
@@ -239,6 +240,54 @@ a running pool's options, as it can when a request races the pool's first
 start, requests ask a worker for the defaults, at the cost of a call each,
 until the pool restarts. Running pools do not survive a hot upgrade of
 katipo.
+
+### Stubbing a pool in tests
+
+`{stub, Handler}` starts a pool whose requests go to `Handler` instead of
+over the network, so code under test can be given the pool it already
+names:
+
+```erlang
+{ok, _} = katipo_pool:start(api, 1,
+                            [{stub, fun(#{method := get, url := <<"https://api.example.com/v1/items">>}) ->
+                                            #{status => 200, body => <<"[]">>};
+                                       (#{method := post, body := Body}) ->
+                                            #{status => 201, headers => [{<<"location">>, Body}]};
+                                       (_) ->
+                                            {error, couldnt_connect}
+                                    end},
+                             {defaults, #{base_url => <<"https://api.example.com/v1/">>}}]),
+{ok, #{status := 200, body := <<"[]">>}} = katipo:get(api, <<"items">>).
+```
+
+`Handler` gets the request as it would be sent (`katipo:stub_request()`):
+its `method`, its `url` resolved against any default `base_url`, the
+`headers`, the pool's defaults and any `Content-Type` katipo or curl adds among
+them, and the whole `body`, read from its file or collected from
+`send_body/3`. It answers with a response map, whose `headers` and `body`
+default to none, or `{error, Code}` or `{error, Code, Message}`. A
+streamed response (`stream => true`) gets each element of a list `body`
+as a chunk of its own.
+
+Only the port is stood in for: the pool's workers, and with them the
+defaults, `max_in_flight`, `timeout_ms`, `cancel/2`, `retry`, streaming
+and `stream_window`, the body demand protocol and the telemetry, are the
+real ones. `Handler` runs in a process of its own for each request, so it
+can block, and receive whatever it is sent, until the request's
+`timeout_ms` or a `cancel/2` ends it. One that raises, exits or answers
+anything else fails that request, and no other, with `stub_failed` and
+the reason as the error's message.
+
+Of what curl itself does, the stub does what shows in a request or a
+response: a header with a blank value is not sent, a POST is given
+`Content-Type: application/x-www-form-urlencoded` unless it names its
+own, a `body` over `max_body_size` fails before any of the response is
+given, as one with a `Content-Length` does, a `{file, Path}` body must be
+a regular file, and CR, LF and NUL in response header values become
+spaces. It does not follow redirects, authenticate, or act on the
+connection, TLS, proxy, DNS or `low_speed_*` options. The response's
+`cookiejar` is the request's, its metrics are empty, and the curl-multi
+options are checked and then ignored.
 
 ## Request options
 

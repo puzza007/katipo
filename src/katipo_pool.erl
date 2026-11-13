@@ -29,6 +29,11 @@ Default headers, `username`, `password`, `userpwd`, `sslcert`, `sslkey`,
 carry credentials for it. `body`, `reply_to`, `stream` and
 `stream_window` are a request's alone. The defaults go with the pool.
 
+`{stub, Handler}` sends no requests: each goes to `Handler`
+(`t:katipo:stub/0`) instead, for tests. The workers are the real ones,
+with a process standing in for each one's C port, so everything above the
+network behaves as it does on a pool that sends requests.
+
 An option that is not one of these, or has a value it cannot take, fails
 the start with `bad_opts` naming it.
 """.
@@ -44,13 +49,18 @@ start(PoolName, PoolSize, WorkerOpts)
     %% instead of surfacing as N worker-init crashes under wpool.
     maybe
         {ok, Defaults, Opts1} ?= take_defaults(WorkerOpts),
-        {ok, MaxInFlight, CurlOpts} ?= take_max_in_flight(Opts1),
+        {ok, Stub, Opts2} ?= take_stub(Opts1),
+        {ok, MaxInFlight, CurlOpts} ?= take_max_in_flight(Opts2),
         {ok, CurlArgs} ?= curl_args(CurlOpts),
+        Port = case Stub of
+                   undefined -> CurlArgs;
+                   Handler -> {stub, Handler}
+               end,
         %% A fresh generation for this start: the workers admit only
         %% requests given this pool's defaults (katipo_defaults).
         {katipo_defaults, Get} = Opt = katipo_defaults:wpool_opt(make_ref(), Defaults),
         wpool:start_sup_pool(PoolName,
-                             [{worker, {katipo_worker, [MaxInFlight, CurlArgs, Get]}},
+                             [{worker, {katipo_worker, [MaxInFlight, Port, Get]}},
                               {workers, PoolSize},
                               {pool_sup_shutdown, infinity},
                               Opt])
@@ -100,6 +110,16 @@ curl_args(CurlOpts) ->
     case katipo_worker:curl_args(CurlOpts) of
         {ok, _} = Ok -> Ok;
         {error, Bad} -> {error, katipo_req:error_map(bad_opts, Bad)}
+    end.
+
+take_stub(Opts) ->
+    case lists:keytake(stub, 1, Opts) of
+        {value, {stub, Handler}, Rest} when is_function(Handler, 1) ->
+            {ok, Handler, Rest};
+        {value, {stub, V}, _Rest} ->
+            {error, katipo_req:error_map(bad_opts, [{stub, V}])};
+        false ->
+            {ok, undefined, Opts}
     end.
 
 take_max_in_flight(Opts) ->
