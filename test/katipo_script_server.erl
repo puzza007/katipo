@@ -11,6 +11,7 @@
 -export([start/1]).
 -export([stop/1]).
 -export([url/1]).
+-export([sized/1, sized/3]).
 
 %% A step: {respond, Raw} sends Raw, which should carry
 %% `connection: close', and closes; `close' closes without a response;
@@ -124,3 +125,13 @@ read_body(Sock, Left, Acc) ->
         {ok, Data} -> read_body(Sock, Left - byte_size(Data), <<Acc/binary, Data/binary>>);
         {error, _} -> closed
     end.
+
+%% A response of Body, with Headers (each line ending in CRLF), its
+%% Content-Length and `connection: close'.
+sized(Body) ->
+    sized(<<"200 OK">>, <<>>, Body).
+
+sized(Status, Headers, Body) ->
+    [<<"HTTP/1.1 ">>, Status, <<"\r\n">>, Headers,
+     <<"content-length: ">>, integer_to_binary(byte_size(Body)),
+     <<"\r\nconnection: close\r\n\r\n">>, Body].

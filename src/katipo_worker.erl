@@ -41,14 +41,16 @@
 %% outcome goes (sync, or {async, ReplyTo, Obs}); the port_id of its
 %% current transfer, or `backoff' between attempts; and, only for a
 %% request with a retry policy, the request itself and the number of
-%% retries sent so far. The first transfer's port_id is the key itself;
+%% retries sent so far; and whether curl decodes its response's body
+%% (decoded/1). The first transfer's port_id is the key itself;
 %% each retry's is fresh, so that output from an attempt that was given up
 %% on can never be taken for the current one's.
 -record(inflight, {tref :: reference(),
                    kind :: sync | {async, pid(), katipo_span:obs()},
                    port_id :: port_id() | backoff,
                    req :: undefined | #req{},
-                   retries = 0 :: non_neg_integer()}).
+                   retries = 0 :: non_neg_integer(),
+                   decoded = true :: boolean()}).
 
 -record(state, {port :: port() | pid(),
                 reqs = #{} :: map(),
@@ -164,7 +166,13 @@ register_req(From, Kind, Req = #req{timeout = Timeout, retry = Retry},
     Tref = erlang:start_timer(Timeout, self(), {req_timeout, From}),
     Kept = case Retry of undefined -> undefined; _ -> Req end,
     State#state{reqs = Reqs#{From => #inflight{tref = Tref, kind = Kind,
-                                               port_id = From, req = Kept}}}.
+                                               port_id = From, req = Kept,
+                                               decoded = decoded(Req)}}}.
+
+%% Whether curl decodes the body of Req's response: with decode, of any
+%% method but HEAD, whose response has no body.
+decoded(#req{decode = ?DECODE_TRUE, method = Method}) -> Method =/= ?HEAD;
+decoded(#req{}) -> false.
 
 handle_cast(Msg, State) ->
     logger:error("Unexpected cast: ~p", [Msg]),
@@ -172,34 +180,39 @@ handle_cast(Msg, State) ->
 
 %% One decoded message from the C port, for the transfer it names.
 %% Terminal messages ({ok, ...}, {error, ...}, {done, ...}) end the
-%% attempt: the request is retried or resolved (attempt_ended/4).
+%% attempt: the request is retried or resolved (ended/5).
 %% Streaming progress messages ({headers, ...}, {chunk, ...}) are forwarded
 %% to the async reply_to and leave the request in flight. Any message for a
 %% transfer that is not a request's current one is dropped silently -- the
 %% request timed out, was cancelled, already completed, or has moved on to
 %% another attempt.
 handle_port_msg({ok, {PortId, {Status, Headers, CookieJar, Body, Metrics}}}, State) ->
-    R = #{status => Status,
-          headers => parse_headers(Headers),
-          cookiejar => CookieJar,
-          body => Body},
-    attempt_ended(PortId, ok, {R, Metrics}, State);
+    case current(PortId, State) of
+        {Key, Entry} ->
+            R = #{status => Status,
+                  headers => headers(Entry, Status, Headers),
+                  cookiejar => CookieJar,
+                  body => Body},
+            ended(Key, Entry, ok, {R, Metrics}, State);
+        error ->
+            dropped(PortId, State)
+    end;
 handle_port_msg({error, {PortId, {Code, Message, Metrics}}}, State) ->
     Error = #{code => Code, message => Message},
     attempt_ended(PortId, error, {Error, Metrics}, State);
 handle_port_msg({headers, {PortId, {Status, Headers}}}, State) ->
     forward_progress(PortId, State,
-                     fun(UserRef) ->
+                     fun(UserRef, Entry) ->
                              {katipo_headers, UserRef,
                               #{status => Status,
-                                headers => parse_headers(Headers)}}
+                                headers => headers(Entry, Status, Headers)}}
                      end);
 handle_port_msg({demand, {PortId, []}}, State) ->
     forward_progress(PortId, State,
-                     fun(UserRef) -> {katipo_body_demand, UserRef} end);
+                     fun(UserRef, _Entry) -> {katipo_body_demand, UserRef} end);
 handle_port_msg({chunk, {PortId, Body}}, State) ->
     forward_progress(PortId, State,
-                     fun(UserRef) -> {katipo_chunk, UserRef, Body} end);
+                     fun(UserRef, _Entry) -> {katipo_chunk, UserRef, Body} end);
 handle_port_msg({done, {PortId, {Status, CookieJar, Metrics}}}, State) ->
     Done = #{status => Status, cookiejar => CookieJar},
     attempt_ended(PortId, done, {Done, Metrics}, State).
@@ -243,11 +256,11 @@ own_body(Body, _Frame) ->
 %% Progress messages forward to the async reply_to iff the transfer is
 %% its request's current one; otherwise they are dropped silently (the
 %% request timed out, was cancelled, or already completed). The message is
-%% only built when it will be sent.
+%% only built when it will be sent, from the request's key and entry.
 forward_progress(PortId, State, BuildMsg) ->
     _ = case current(PortId, State) of
-            {Key = {_Self, UserRef}, #inflight{kind = {async, ReplyTo, _Obs}}} ->
-                ReplyTo ! BuildMsg(UserRef),
+            {Key = {_Self, UserRef}, Entry = #inflight{kind = {async, ReplyTo, _Obs}}} ->
+                ReplyTo ! BuildMsg(UserRef, Entry),
                 ?TRACE({progress, Key, forwarded});
             _ ->
                 ?TRACE({progress, PortId, dropped})
@@ -258,13 +271,17 @@ forward_progress(PortId, State, BuildMsg) ->
 %% current one, the request is retried or resolved.
 attempt_ended(PortId, Result, Response, State) ->
     case current(PortId, State) of
-        {Key, Entry = #inflight{tref = Tref}} ->
-            _ = erlang:cancel_timer(Tref),
-            retry_or_resolve(Key, Entry, Result, Response, State);
-        error ->
-            ?TRACE({terminal, PortId, dropped}),
-            State
+        {Key, Entry} -> ended(Key, Entry, Result, Response, State);
+        error -> dropped(PortId, State)
     end.
+
+ended(Key, Entry = #inflight{tref = Tref}, Result, Response, State) ->
+    _ = erlang:cancel_timer(Tref),
+    retry_or_resolve(Key, Entry, Result, Response, State).
+
+dropped(PortId, State) ->
+    ?TRACE({terminal, PortId, dropped}),
+    State.
 
 %% Wait and send the request again if its retry policy says to, else
 %% resolve it with this result.
@@ -563,6 +580,30 @@ command({Self, Ref},
             {?MAX_BODY_SIZE, MaxBodySize},
             {?DECODE, Decode}],
     term_to_binary({Self, Ref, Method, Url, Headers, CookieJar, Body, Opts}).
+
+%% A response's headers, as the caller is given them. curl has decoded the
+%% body of any encoding it names, so the Content-Encoding, and the
+%% Content-Length of the encoded body, would only mislead; they are left
+%% on a response with no body (a HEAD's, a 204 or a 304), which describes
+%% the body another request would get: a HEAD's is not decoded/1.
+headers(#inflight{decoded = true}, Status, Lines) when Status =/= 204, Status =/= 304 ->
+    undecoded(parse_headers(Lines));
+headers(#inflight{}, _Status, Lines) ->
+    parse_headers(Lines).
+
+%% Only a name of the right length is case-folded, so a response with no
+%% encoding allocates nothing here.
+undecoded(Headers) ->
+    case lists:any(fun({K, _}) -> named(K, <<"content-encoding">>) end, Headers) of
+        true ->
+            [H || {K, _} = H <- Headers,
+                  not named(K, <<"content-encoding">>), not named(K, <<"content-length">>)];
+        false ->
+            Headers
+    end.
+
+named(K, Name) ->
+    byte_size(K) =:= byte_size(Name) andalso katipo_req:header_name(K) =:= Name.
 
 -spec parse_headers([binary()]) -> katipo:resp_headers().
 parse_headers([]) ->
