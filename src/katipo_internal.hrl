@@ -91,6 +91,7 @@
 -define(LOW_SPEED_LIMIT, 36).
 -define(LOW_SPEED_TIME, 37).
 -define(MAX_BODY_SIZE, 38).
+-define(DECODE, 39).
 
 -define(DEFAULT_REQ_TIMEOUT, 30000).
 
@@ -140,6 +141,8 @@
 -define(VERBOSE_FALSE, 0).
 -define(PIPEWAIT_TRUE, 1).
 -define(PIPEWAIT_FALSE, 0).
+-define(DECODE_TRUE, 1).
+-define(DECODE_FALSE, 0).
 -define(STREAM_TRUE, 1).
 -define(STREAM_FALSE, 0).
 -define(STREAM_WINDOW_UNLIMITED, -1).
@@ -213,6 +216,7 @@
           low_speed_limit = 0 :: non_neg_integer(),
           low_speed_time = 0 :: non_neg_integer(),
           max_body_size = -1 :: -1 | non_neg_integer(),
+          decode = ?DECODE_TRUE :: ?DECODE_FALSE | ?DECODE_TRUE,
           retry = undefined :: undefined | katipo_retry:policy(),
           %% The generation of the pool whose defaults the request was given
           %% (katipo_defaults), which only that pool's workers admit.

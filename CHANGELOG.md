@@ -6,6 +6,9 @@ All notable changes to this project are documented here. This project follows
 ## [Unreleased]
 
 ### Added
+- The `decode` request option, `true` by default, may be `false` to get
+  a response body as the server sent it, with its `content-encoding`,
+  and to send no `accept-encoding` but the request's own.
 - The `{stub, Handler}` pool option starts a pool that gives each
   request to `Handler`, a fun from `katipo:stub_request()` to
   `katipo:stub_response()`, instead of sending it, for tests. Only the C

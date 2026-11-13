@@ -69,6 +69,7 @@
 #define K_CURLOPT_LOW_SPEED_LIMIT 36
 #define K_CURLOPT_LOW_SPEED_TIME 37
 #define K_CURLOPT_MAX_BODY_SIZE 38
+#define K_CURLOPT_DECODE 39
 
 #define K_CURLAUTH_BASIC 100
 #define K_CURLAUTH_DIGEST 101
@@ -144,12 +145,13 @@ typedef struct _ConnInfo {
   long window;
   int paused;
   /* max_body_size: whether the response body is limited, to how many
-   * bytes, how many write_cb has taken so far (decoded), and whether the
-   * current response is content-encoded, so that its Content-Length is not
-   * its decoded size. */
+   * bytes, how many write_cb has taken so far (decoded, if decode), and
+   * whether the current response is content-encoded and decoded, so that
+   * its Content-Length is not the size of the body given. */
   int body_limited;
   curl_off_t max_body_size;
   curl_off_t body_size;
+  int decode;
   int encoded;
   /* Why the port failed the transfer, or CURLE_OK: a bad upload, or a
    * response body over max_body_size. The read or write callback then
@@ -213,6 +215,7 @@ typedef struct _EasyOpts {
   long curlopt_low_speed_limit;
   long curlopt_low_speed_time;
   long curlopt_max_body_size;
+  long curlopt_decode;
 } EasyOpts;
 
 /* A request body as Erlang sent it: iodata (data, size), a file to read
@@ -1170,7 +1173,7 @@ static size_t header_cb(void *ptr, size_t size, size_t nmemb, void *data) {
      * 6.5.1 forbids merging them unless each field allows it. */
     return realsize;
   }
-  if (header_len > 17 && strncasecmp(src, "Content-Encoding:", 17) == 0) {
+  if (conn->decode && header_len > 17 && strncasecmp(src, "Content-Encoding:", 17) == 0) {
     conn->encoded = 1;
   }
   /* Returning short fails just this transfer, with CURLE_WRITE_ERROR. */
@@ -1458,6 +1461,7 @@ static void new_conn(long method, char *url, struct curl_slist *req_headers,
   conn->window = eopts.curlopt_stream_window;
   conn->body_limited = eopts.curlopt_max_body_size >= 0;
   conn->max_body_size = eopts.curlopt_max_body_size;
+  conn->decode = eopts.curlopt_decode != 0;
   conn->upload_path = body->path;
   conn->upload_fd = -1;
   if (body->stream) {
@@ -1512,7 +1516,12 @@ static void new_conn(long method, char *url, struct curl_slist *req_headers,
   curl_easy_setopt(conn->easy, CURLOPT_VERBOSE, eopts.curlopt_verbose);
   curl_easy_setopt(conn->easy, CURLOPT_ERRORBUFFER, conn->error);
   curl_easy_setopt(conn->easy, CURLOPT_PRIVATE, conn);
-  curl_easy_setopt(conn->easy, CURLOPT_ACCEPT_ENCODING, "");
+  /* decode: curl asks for every encoding it can decode, and decodes the
+   * body; otherwise the body is as the server sent it, and any
+   * Accept-Encoding is the caller's own. */
+  if (eopts.curlopt_decode) {
+    curl_easy_setopt(conn->easy, CURLOPT_ACCEPT_ENCODING, "");
+  }
 
   curl_easy_setopt(conn->easy, CURLOPT_CONNECTTIMEOUT_MS,
                    eopts.curlopt_connecttimeout_ms);
@@ -1830,6 +1839,9 @@ static int parse_eopts(char *buf, int *index, EasyOpts *eopts) {
       case K_CURLOPT_MAX_BODY_SIZE:
         eopts->curlopt_max_body_size = eopt_long;
         break;
+      case K_CURLOPT_DECODE:
+        eopts->curlopt_decode = eopt_long;
+        break;
       default:
         break;
       }
@@ -2057,6 +2069,7 @@ static void handle_frame(GlobalInfo *global, char *buf, size_t len) {
       .curlopt_pipewait = 1,
       .curlopt_stream_window = -1,
       .curlopt_max_body_size = -1,
+      .curlopt_decode = 1,
   };
 
   if (parse_eopts(buf, &index, &eopts) != 0) {

@@ -452,6 +452,10 @@ opt(max_body_size, Bytes, {Req, Errors}) when ?IS_INT_OPT(Bytes, 0) ->
     {Req#req{max_body_size = Bytes}, Errors};
 opt(ca_cache_timeout, Secs, {Req, Errors}) when ?IS_INT_OPT(Secs, -1) ->
     {Req#req{ca_cache_timeout = Secs}, Errors};
+opt(decode, true, {Req, Errors}) ->
+    {Req#req{decode = ?DECODE_TRUE}, Errors};
+opt(decode, false, {Req, Errors}) ->
+    {Req#req{decode = ?DECODE_FALSE}, Errors};
 opt(pipewait, true, {Req, Errors}) ->
     {Req#req{pipewait = ?PIPEWAIT_TRUE}, Errors};
 opt(pipewait, false, {Req, Errors}) ->
