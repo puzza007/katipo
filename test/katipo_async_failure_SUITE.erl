@@ -257,12 +257,9 @@ worker_port(WorkerPid) ->
     Port.
 
 %% White-box helpers for the protocol test: a request's internal {Pid, Ref}
-%% identity and timer, and the port slot itself, have no public seam, so
-%% match katipo_worker's #state{port, reqs} at its known position inside
-%% wpool_process's wrapper (same idiom as katipo_SUITE's worker_state/1;
-%% fails loudly if the wrapper shape changes).
+%% identity and timer, and the port slot itself, have no public seam.
 worker_reqs(WorkerPid) ->
-    {state, _, _, {state, _Port, Reqs, _Ids, _MaxInFlight, _Gen, _Defaults}, _} = sys:get_state(WorkerPid),
+    {_Port, Reqs} = katipo_test_util:worker_state(WorkerPid),
     Reqs.
 
 swap_port(WorkerPid, NewPort) ->

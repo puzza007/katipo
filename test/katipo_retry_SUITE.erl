@@ -431,7 +431,7 @@ worker_port(Worker) ->
 
 %% The worker's #inflight{tref, kind, port_id, req, retries} for Key.
 entry(Pool, Key) ->
-    {state, _, _, {state, _Port, Reqs, _Ids, _Max, _Gen, _Defaults}, _} = sys:get_state(worker_pid(Pool)),
+    {_Port, Reqs} = katipo_test_util:worker_state(worker_pid(Pool)),
     maps:get(Key, Reqs).
 
 fast() ->
@@ -463,7 +463,5 @@ bodies(Server, N, Acc) ->
 
 in_flight(Pool) ->
     [Worker] = wpool:get_workers(Pool),
-    %% katipo_worker's #state{port, reqs, ids, max_in_flight}, inside
-    %% wpool_process's wrapper (as katipo_SUITE's worker_state/1).
-    {state, _, _, {state, _Port, Reqs, _Ids, _Max, _Gen, _Defaults}, _} = sys:get_state(whereis(Worker)),
+    {_Port, Reqs} = katipo_test_util:worker_state(whereis(Worker)),
     map_size(Reqs).
