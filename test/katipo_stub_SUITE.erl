@@ -4,12 +4,31 @@
 %% the C port, and every part of the request's life above the port --
 %% defaults, streaming, flow control, timeouts, cancel, retries,
 %% max_in_flight, a Handler failing -- works as it does on a real pool.
-%% No server is required.
+%%
+%%   unit          each behaviour on its own;
+%%   differential  a property: the same requests and responses on a stub
+%%                 pool and a real one, against katipo_prop_server, look
+%%                 the same to the caller and the server (katipo_stub_diff);
+%%   statem        a PropEr state machine over requests of every kind in
+%%                 flight at once on a stub pool, driven step by step
+%%                 through answers, crashes, cancels, grants and uploads
+%%                 (katipo_stub_statem);
+%%   load          thousands of concurrent requests that end every way
+%%                 there is, and nothing left behind after;
+%%   coverage      last: the unit cases alone ran every line of
+%%                 katipo_stub.
 
 -export([all/0]).
+-export([groups/0]).
 -export([init_per_suite/1]).
 -export([end_per_suite/1]).
+-export([init_per_group/2]).
+-export([end_per_group/2]).
 -export([end_per_testcase/2]).
+-export([same_as_real_pool/1]).
+-export([state_machine/1]).
+-export([load/1]).
+-export([coverage/1]).
 -export([unknown_transfers_ignored/1]).
 
 -export([response/1]).
@@ -42,6 +61,15 @@
 -define(WAIT, 5000).
 
 all() ->
+    [{group, unit}, {group, differential}, {group, statem}, {group, load}, coverage].
+
+groups() ->
+    [{unit, [], unit()},
+     {differential, [], [same_as_real_pool]},
+     {statem, [], [state_machine]},
+     {load, [], [load]}].
+
+unit() ->
     [response, request_seen, defaults_applied, error_returned, async_response,
      head_has_no_body, streamed_response, stream_window, streamed_request_body,
      streamed_request_length, file_body, timeout, cancel, retried, overload,
@@ -54,11 +82,180 @@ init_per_suite(Config) ->
     Config.
 
 end_per_suite(Config) ->
+    _ = persistent_term:erase({?MODULE, unit_ran}),
     Config.
+
+init_per_group(differential, Config) ->
+    persistent_term:put({katipo_prop_SUITE, file_dir}, ?config(priv_dir, Config)),
+    [{diff, katipo_stub_diff:setup()} | Config];
+init_per_group(_Group, Config) ->
+    Config.
+
+end_per_group(differential, Config) ->
+    katipo_stub_diff:teardown(?config(diff, Config)),
+    persistent_term:erase({katipo_prop_SUITE, file_dir});
+end_per_group(unit, Config) ->
+    %% For coverage/1: whether every unit case ran, and passed.
+    Result = ?config(tc_group_result, Config),
+    Ran = lists:sort([Case || {?MODULE, Case} <- proplists:get_value(ok, Result, [])])
+        =:= lists:sort(unit()),
+    persistent_term:put({?MODULE, unit_ran}, Ran);
+end_per_group(_Group, _Config) ->
+    ok.
 
 end_per_testcase(TestCase, _Config) ->
     _ = katipo_pool:stop(TestCase),
     ok.
+
+same_as_real_pool(Config) ->
+    run(katipo_stub_diff:prop_same(?config(diff, Config)), 300).
+
+%% Thousands of requests from many callers at once, on a pool of four,
+%% ending every way a request can: answered, failed, streamed with a
+%% window, uploaded, cancelled, timed out, or failed by a Handler that
+%% exits. Each caller must get exactly one terminal message for
+%% each request not cancelled, and for one that was at most one, which
+%% beat the cancel (katipo:cancel/2), and nothing after;
+%% then the workers hold no requests, the stubs no transfers, and the node
+%% no processes it did not have before.
+load(_Config) ->
+    {ok, _} = katipo_pool:start(?FUNCTION_NAME, 4, [{stub, fun load_handler/1}]),
+    Workers = [wpool_pool:worker_name(?FUNCTION_NAME, I) || I <- lists:seq(1, 4)],
+    Before = erlang:system_info(process_count),
+    Self = self(),
+    Plans = load_plans(),
+    Callers = [spawn_monitor(fun() -> Self ! {done, self(), load_caller(?FUNCTION_NAME, P)} end)
+               || P <- Plans],
+    Results = [receive
+                   {done, Pid, Result} -> Result;
+                   {'DOWN', Mon, process, Pid, Reason} -> {caller_died, Reason}
+               after 120000 -> ct:fail(load_timed_out)
+               end || {Pid, Mon} <- Callers],
+    [] = [R || R <- Results, element(1, R) =/= ok],
+    Ended = lists:foldl(fun({ok, Counts}, Acc) ->
+                                maps:fold(fun(K, N, A) -> maps:update_with(K, fun(M) -> M + N end, N, A) end,
+                                          Acc, Counts)
+                        end, #{}, Results),
+    ct:pal("~p requests ended: ~p", [length(lists:append(Plans)), Ended]),
+    ok = katipo_test_util:until(
+           fun() ->
+                   lists:all(fun(W) ->
+                                     {Stub, Reqs} = katipo_test_util:worker_state(whereis(W)),
+                                     map_size(Reqs) =:= 0 andalso
+                                         process_info(Stub, [links, message_queue_len]) =:=
+                                         [{links, [whereis(W)]}, {message_queue_len, 0}]
+                             end, Workers)
+                       andalso erlang:system_info(process_count) =< Before
+           end).
+
+%% 50 callers of 95 requests each, kinds shuffled.
+load_plans() ->
+    rand:seed(exsss, {1, 2, 3}),
+    Kinds = [{ok, 25}, {slow, 15}, {error, 10}, {stream, 15}, {upload, 10},
+             {cancel, 10}, {timeout, 5}, {crash, 5}],
+    All = lists:append([lists:duplicate(N * 50, K) || {K, N} <- Kinds]),
+    Shuffled = [K || {_, K} <- lists:sort([{rand:uniform(), K} || K <- All])],
+    [lists:sublist(Shuffled, I * 95 + 1, 95) || I <- lists:seq(0, 49)].
+
+load_handler(#{headers := Headers}) ->
+    case proplists:get_value(<<"x-plan">>, Headers) of
+        <<"slow">> -> timer:sleep(rand:uniform(30)), #{status => 200, body => <<"slow">>};
+        <<"error">> -> {error, couldnt_connect};
+        <<"stream">> -> #{status => 200, body => [<<"a">>, <<"b">>, <<"c">>, <<"d">>, <<"e">>]};
+        <<"crash">> -> timer:sleep(rand:uniform(20)), exit(crash);
+        Block when Block =:= <<"cancel">>; Block =:= <<"timeout">> -> receive after infinity -> ok end;
+        _ -> #{status => 200, body => <<"ok">>}
+    end.
+
+%% Start every request at once, then answer what comes until each has
+%% ended, and wait a while for anything more.
+load_caller(Pool, Plan) ->
+    Started = [{K, load_start(Pool, K)} || K <- Plan],
+    Live = maps:from_list([{Ref, K} || {K, {ok, Ref}} <- Started, K =/= cancel]),
+    Cancelled = [Ref || {cancel, {ok, Ref}} <- Started],
+    [ok = katipo:cancel(Pool, Ref) || Ref <- Cancelled],
+    Refused = length([E || {_, {error, _} = E} <- Started]),
+    Counts = #{refused => Refused, cancelled => length(Cancelled)},
+    load_collect(Pool, Live, sets:from_list(Cancelled), Counts).
+
+
+load_start(Pool, K) ->
+    Opts = #{url => <<"http://example.com/">>, headers => [{<<"x-plan">>, atom_to_binary(K)}],
+             timeout_ms => case K of timeout -> 200; _ -> 30000 end},
+    katipo:async_req(Pool, case K of
+                               stream -> Opts#{stream => true, stream_window => 2};
+                               upload -> Opts#{method => put, body => {stream, #{}}};
+                               _ -> Opts
+                           end).
+
+%% Once every request not cancelled has ended, anything more within a
+%% while is a failure, but for a cancelled request's one message.
+load_collect(Pool, Live, Cancelled, Counts) when map_size(Live) =:= 0 ->
+    receive
+        {Tag, Ref, _} = Late when Tag =:= katipo_response; Tag =:= katipo_error ->
+            case sets:is_element(Ref, Cancelled) of
+                true -> load_collect(Pool, Live, sets:del_element(Ref, Cancelled),
+                                     maps:update_with(beat_cancel, fun(N) -> N + 1 end, 1, Counts));
+                false -> {late, Late}
+            end;
+        Late when element(1, Late) =:= katipo_chunk; element(1, Late) =:= katipo_done;
+                  element(1, Late) =:= katipo_headers; element(1, Late) =:= katipo_body_demand ->
+            {late, Late}
+    after 300 ->
+            {ok, Counts}
+    end;
+load_collect(Pool, Live, Cancelled, Counts) ->
+    receive
+        {katipo_body_demand, Ref} when is_map_key(Ref, Live) ->
+            ok = katipo:send_body(Pool, Ref, case rand:uniform(3) of 1 -> eof; _ -> <<"x">> end),
+            load_collect(Pool, Live, Cancelled, Counts);
+        {katipo_headers, Ref, _} when is_map_key(Ref, Live) ->
+            load_collect(Pool, Live, Cancelled, Counts);
+        {katipo_chunk, Ref, _} when is_map_key(Ref, Live) ->
+            ok = katipo:update_flow(Pool, Ref, 1),
+            load_collect(Pool, Live, Cancelled, Counts);
+        {Tag, Ref, Result} when (Tag =:= katipo_response orelse Tag =:= katipo_error orelse
+                                 Tag =:= katipo_done), is_map_key(Ref, Live) ->
+            Key = case Result of #{code := Code} -> Code; _ -> Tag end,
+            load_collect(Pool, maps:remove(Ref, Live), Cancelled,
+                         maps:update_with(Key, fun(N) -> N + 1 end, 1, Counts));
+        {Tag, Ref, _} when (Tag =:= katipo_response orelse Tag =:= katipo_error) ->
+            case sets:is_element(Ref, Cancelled) of
+                true -> load_collect(Pool, Live, sets:del_element(Ref, Cancelled),
+                                     maps:update_with(beat_cancel, fun(N) -> N + 1 end, 1, Counts));
+                false -> {unexpected, {Tag, Ref}}
+            end;
+        Other ->
+            {unexpected, Other}
+    after 60000 ->
+            {unended, maps:values(Live)}
+    end.
+
+%% Last, when katipo_stub is cover compiled (rebar3's cover_enabled): the
+%% unit cases ran every line of it. Skipped unless they all ran, as when
+%% this case is run on its own.
+coverage(_Config) ->
+    case {cover:is_compiled(katipo_stub), persistent_term:get({?MODULE, unit_ran}, false)} of
+        {false, _} ->
+            {skip, cover_not_running};
+        {_, false} ->
+            {skip, unit_cases_not_all_run};
+        {{file, _}, true} ->
+            {ok, Lines} = cover:analyse(katipo_stub, coverage, line),
+            case [L || {{_, L}, {0, _}} <- Lines, L > 0] of
+                [] -> ok;
+                Missed -> ct:fail({lines_not_run, Missed})
+            end
+    end.
+
+state_machine(_Config) ->
+    run(katipo_stub_statem:prop_requests(), 300).
+
+run(Prop, NumTests) ->
+    case proper:quickcheck(Prop, [{numtests, NumTests}, {to_file, user}, long_result]) of
+        true -> ok;
+        CounterExample -> ct:fail({property_failed, CounterExample})
+    end.
 
 response(_Config) ->
     stub(?FUNCTION_NAME, fun(_) ->
