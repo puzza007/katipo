@@ -2794,12 +2794,9 @@ kill_worker_port(PoolName) ->
     _ = os:cmd("kill -9 " ++ integer_to_list(OsPid)),
     Port.
 
-%% Reach into a size-1 pool's single worker and return its {Port, Reqs}. The
-%% outer tuple is wpool_process's state wrapping katipo_worker's #state{port, reqs}.
+%% A size-1 pool's single worker's {Port, Reqs}.
 worker_state(PoolName) ->
-    WorkerPid = whereis(wpool_pool:best_worker(PoolName)),
-    {state, _, _, {state, Port, Reqs, _Ids, _MaxInFlight, _Gen, _Defaults}, _} = sys:get_state(WorkerPid),
-    {Port, Reqs}.
+    katipo_test_util:worker_state(whereis(wpool_pool:best_worker(PoolName))).
 
 %% Minimal unix-socket HTTP/1.1 server for the unix_socket_path test: accept a
 %% connection, discard the request, reply 200 with a recognisable Server header.
