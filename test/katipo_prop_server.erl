@@ -11,10 +11,13 @@
 %%   echo          an empty 200, after recording the request as received,
 %%                 {Method, Headers, Body}, for received/1 to return (in the
 %%                 table rather than the response, so HEAD works too);
+%%   {echo, Bytes} Bytes sent verbatim, after recording the request as echo
+%%                 does;
 %%   {redirect, Status, NextKey}
 %%                 a bodyless redirect to NextKey's URL.
 %% Request headers are parsed from the raw bytes, not with {packet, http},
-%% so names and values arrive exactly as curl sent them. Not linked to its
+%% so names and values arrive exactly as curl sent them, and a chunked
+%% request body is de-chunked. Not linked to its
 %% starter, so it outlives init_per_suite's process; stop/1 ends it, its
 %% listen socket and its table.
 
@@ -58,10 +61,17 @@ url(Port, Key) ->
 
 accept(L) ->
     {ok, S} = gen_tcp:accept(L),
-    Pid = spawn(fun() -> receive go -> conn(S, <<>>) end end),
+    Pid = spawn(fun() -> receive go -> serve(S) end end),
     ok = gen_tcp:controlling_process(S, Pid),
     Pid ! go,
     accept(L).
+
+%% A client that goes away mid-request, as one whose upload fails does,
+%% ends the connection quietly.
+serve(S) ->
+    try conn(S, <<>>)
+    catch error:{badmatch, {error, _}} -> gen_tcp:close(S)
+    end.
 
 conn(S, Buf) ->
     case read_head(S, Buf) of
@@ -76,8 +86,14 @@ conn(S, Buf) ->
                     _ ->
                         ok
                 end,
-            Len = binary_to_integer(header(<<"content-length">>, Headers, <<"0">>)),
-            {Body, Rest2} = read_body(S, Rest, Len),
+            {Body, Rest2} =
+                case header(<<"transfer-encoding">>, Headers) of
+                    <<"chunked">> ->
+                        read_chunked(S, Rest, <<>>);
+                    _ ->
+                        Len = binary_to_integer(header(<<"content-length">>, Headers, <<"0">>)),
+                        read_body(S, Rest, Len)
+                end,
             case ets:take(?MODULE, Key) of
                 [{Key, {raw_close, Bytes}}] ->
                     ok = gen_tcp:send(S, Bytes),
@@ -96,8 +112,11 @@ respond({redirect, Status, Next}, _Key, _Method, _Headers, _Body) ->
     [<<"HTTP/1.1 ">>, integer_to_binary(Status), <<" Redirect\r\nlocation: /">>, Next,
      <<"\r\ncontent-length: 0\r\n\r\n">>];
 respond(echo, Key, Method, Headers, Body) ->
+    respond({echo, <<"HTTP/1.1 200 OK\r\ncontent-length: 0\r\n\r\n">>},
+            Key, Method, Headers, Body);
+respond({echo, Bytes}, Key, Method, Headers, Body) ->
     true = ets:insert(?MODULE, {{received, Key}, {Method, Headers, Body}}),
-    <<"HTTP/1.1 200 OK\r\ncontent-length: 0\r\n\r\n">>.
+    Bytes.
 
 read_head(S, Buf) ->
     case binary:split(Buf, <<"\r\n\r\n">>) of
@@ -109,6 +128,31 @@ read_head(S, Buf) ->
                 {error, _} -> closed
             end
     end.
+
+%% A chunked body, without extensions or trailers, which curl does not
+%% send.
+read_chunked(S, Buf, Acc) ->
+    case binary:split(Buf, <<"\r\n">>) of
+        [SizeLine, Rest] ->
+            case binary_to_integer(SizeLine, 16) of
+                0 ->
+                    <<"\r\n", Rest2/binary>> = more(S, Rest, 2),
+                    {Acc, Rest2};
+                Size ->
+                    <<Chunk:Size/binary, "\r\n", Rest2/binary>> = more(S, Rest, Size + 2),
+                    read_chunked(S, Rest2, <<Acc/binary, Chunk/binary>>)
+            end;
+        [_] ->
+            {ok, Data} = gen_tcp:recv(S, 0, 30000),
+            read_chunked(S, <<Buf/binary, Data/binary>>, Acc)
+    end.
+
+%% Buf with at least N bytes.
+more(_S, Buf, N) when byte_size(Buf) >= N ->
+    Buf;
+more(S, Buf, N) ->
+    {ok, Data} = gen_tcp:recv(S, 0, 30000),
+    more(S, <<Buf/binary, Data/binary>>, N).
 
 read_body(_S, Buf, Len) when byte_size(Buf) >= Len ->
     <<Body:Len/binary, Rest/binary>> = Buf,
